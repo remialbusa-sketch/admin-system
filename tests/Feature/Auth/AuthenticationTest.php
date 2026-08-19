@@ -62,9 +62,12 @@ class AuthenticationTest extends TestCase
 
         $response = $this->get('/dashboard');
 
+        // The dashboard now renders a custom Figma-based Livewire component
+        // with its own sidebar/top-nav (see App\Livewire\Dashboard), instead
+        // of the default Breeze `layout.navigation` Volt component.
         $response
             ->assertOk()
-            ->assertSeeVolt('layout.navigation');
+            ->assertSeeLivewire(\App\Livewire\Dashboard::class);
     }
 
     public function test_users_can_logout(): void

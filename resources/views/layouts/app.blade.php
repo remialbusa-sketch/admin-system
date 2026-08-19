@@ -5,32 +5,43 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="csrf-token" content="{{ csrf_token() }}">
 
-        <title>{{ config('app.name', 'Laravel') }}</title>
+        <title>{{ config('app.name', 'Admin System') }} - Account</title>
 
-        <!-- Fonts -->
         <link rel="preconnect" href="https://fonts.bunny.net">
-        <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
+        <link href="https://fonts.bunny.net/css?family=barlow:500,600,700|manrope:400,500,600,700&display=swap" rel="stylesheet">
 
-        <!-- Scripts -->
         @vite(['resources/css/app.css', 'resources/js/app.js'])
+        @livewireStyles
     </head>
-    <body class="font-sans antialiased">
-        <div class="min-h-screen bg-gray-100">
-            <livewire:layout.navigation />
+    <body>
+        <div
+            x-data="{ sidebarCollapsed: false, mobileSidebarOpen: false, mobileSearchOpen: false }"
+            x-init="
+                sidebarCollapsed = window.matchMedia('(min-width: 1024px)').matches && localStorage.getItem('admin-sidebar-collapsed') === 'true';
+                $watch('sidebarCollapsed', value => localStorage.setItem('admin-sidebar-collapsed', value));
+            "
+            x-on:keydown.escape.window="mobileSidebarOpen = false; mobileSearchOpen = false"
+            class="flex min-h-screen lg:h-screen"
+        >
+            <x-admin.sidebar />
 
-            <!-- Page Heading -->
-            @if (isset($header))
-                <header class="bg-white shadow">
-                    <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-                        {{ $header }}
+            <div class="flex min-w-0 min-h-0 flex-1 flex-col">
+                <x-admin.topbar :searchable="false" />
+
+                <main class="admin-scrollbar min-h-0 flex-1 overflow-y-auto">
+                    <div class="mx-auto w-full max-w-5xl p-5 sm:p-6 xl:p-8">
+                        @if (isset($header))
+                            <div class="mb-5 border-b border-base-300 pb-5">
+                                {{ $header }}
+                            </div>
+                        @endif
+                        {{ $slot }}
                     </div>
-                </header>
-            @endif
-
-            <!-- Page Content -->
-            <main>
-                {{ $slot }}
-            </main>
+                </main>
+            </div>
         </div>
+
+        @livewireScripts
+        @stack('scripts')
     </body>
 </html>
