@@ -1,8 +1,16 @@
 @php
-    $primaryItems = [
-        ['route' => 'dashboard', 'label' => 'Home', 'description' => 'Overview', 'icon' => 'o-home'],
-        ['route' => 'tsp-analytics', 'label' => 'TSP Analytics', 'description' => 'Personnel performance', 'icon' => 'o-chart-bar-square'],
-        ['route' => 'records', 'label' => 'Records table', 'description' => 'Imported records', 'icon' => 'o-table-cells'],
+    $dataItems = [
+        ['route' => 'installed-products', 'label' => 'Product Database', 'description' => 'Product database (PDB)', 'icon' => 'o-cube'],
+        ['route' => 'service-requests', 'label' => 'Service Requests', 'description' => 'From Executive Dashboard', 'icon' => 'o-inbox-stack'],
+        ['route' => 'technical-reports', 'label' => 'Technical Reports', 'description' => 'From Executive Dashboard', 'icon' => 'o-document-text'],
+        ['route' => 'history-reports', 'label' => 'History Reports', 'description' => 'MCBTSi TSMS (Responses)', 'icon' => 'o-archive-box'],
+        ['route' => 'personnel', 'label' => 'Technical Personnel', 'description' => 'Personnel list', 'icon' => 'o-user-group'],
+    ];
+
+    $analyticsItems = [
+        ['route' => 'dashboard', 'label' => 'Home', 'description' => 'Executive command view', 'icon' => 'o-home'],
+        ['route' => 'technical-service-analysis', 'label' => 'Technical Service Analysis', 'description' => 'Service & TSP analytics', 'icon' => 'o-chart-bar-square'],
+        ['route' => 'tsp-analytics', 'label' => 'TSP Analytics', 'description' => 'Personnel performance', 'icon' => 'o-users'],
     ];
 
     $utilityItems = [
@@ -54,29 +62,68 @@
         </div>
 
         <nav class="admin-scrollbar flex-1 overflow-y-auto px-3 py-5" aria-label="Primary navigation">
-            <p x-show="!sidebarCollapsed" class="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-base-content/40">Workspace</p>
+            <p x-show="!sidebarCollapsed" class="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-base-content/40">Analytics</p>
+                        <div class="space-y-1">
+                            @foreach ($analyticsItems as $item)
+                                @php $active = request()->routeIs($item['route']); @endphp
+                                <a
+                                    href="{{ route($item['route']) }}"
+                                    wire:navigate
+                                    @class([
+                                        'group flex h-10 items-center rounded-md text-sm font-semibold transition',
+                                        'bg-primary text-primary-content' => $active,
+                                        'text-base-content/65 hover:bg-base-200 hover:text-base-content' => ! $active,
+                                    ])
+                                    :class="sidebarCollapsed ? 'justify-center px-0' : 'gap-3 px-3'"
+                                    @if($active) aria-current="page" @endif
+                                    title="{{ $item['label'] }}"
+                                >
+                                    <x-mary-icon :name="$item['icon']" class="h-[18px] w-[18px] shrink-0" />
+                                    <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">{{ $item['label'] }}</span>
+                                    <span x-show="!sidebarCollapsed && @js($active)" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70"></span>
+                                </a>
+                            @endforeach
+                        </div>
 
-            <div class="space-y-1">
-                @foreach ($primaryItems as $item)
-                    @php $active = request()->routeIs($item['route']); @endphp
-                    <a
-                        href="{{ route($item['route']) }}"
-                        wire:navigate
-                        @class([
-                            'group flex h-10 items-center rounded-md text-sm font-semibold transition',
-                            'bg-primary text-primary-content' => $active,
-                            'text-base-content/65 hover:bg-base-200 hover:text-base-content' => ! $active,
-                        ])
-                        :class="sidebarCollapsed ? 'justify-center px-0' : 'gap-3 px-3'"
-                        @if($active) aria-current="page" @endif
-                        title="{{ $item['label'] }}"
-                    >
-                        <x-mary-icon :name="$item['icon']" class="h-[18px] w-[18px] shrink-0" />
-                        <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">{{ $item['label'] }}</span>
-                        <span x-show="!sidebarCollapsed && @js($active)" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70"></span>
-                    </a>
-                @endforeach
-            </div>
+                        <div class="my-6 border-t border-base-300"></div>
+
+                        <p x-show="!sidebarCollapsed" class="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-base-content/40">Tables</p>
+                        <div class="space-y-1">
+                            @foreach ($dataItems as $item)
+                                @php $active = request()->routeIs($item['route']); @endphp
+                                <a
+                                    href="{{ route($item['route']) }}"
+                                    wire:navigate
+                                    @class([
+                                        'group flex h-10 items-center rounded-md text-sm font-semibold transition',
+                                        'bg-primary text-primary-content' => $active,
+                                        'text-base-content/65 hover:bg-base-200 hover:text-base-content' => ! $active,
+                                    ])
+                                    :class="sidebarCollapsed ? 'justify-center px-0' : 'gap-3 px-3'"
+                                    @if($active) aria-current="page" @endif
+                                    title="{{ $item['label'] }}"
+                                >
+                                    <x-mary-icon :name="$item['icon']" class="h-[18px] w-[18px] shrink-0" />
+                                    <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">{{ $item['label'] }}</span>
+                                    <span x-show="!sidebarCollapsed && @js($active)" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70"></span>
+                                </a>
+                            @endforeach
+
+                            <a
+                                href="{{ route('tables') }}"
+                                wire:navigate
+                                @class([
+                                    'group flex h-10 items-center rounded-md text-sm font-semibold transition',
+                                    'bg-primary text-primary-content' => request()->routeIs('tables'),
+                                    'text-base-content/65 hover:bg-base-200 hover:text-base-content' => ! request()->routeIs('tables'),
+                                ])
+                                :class="sidebarCollapsed ? 'justify-center px-0' : 'gap-3 px-3'"
+                                title="Import table"
+                            >
+                                <x-mary-icon name="o-arrow-up-tray" class="h-[18px] w-[18px] shrink-0" />
+                                <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">Import table</span>
+                            </a>
+                        </div>
 
             <div class="my-6 border-t border-base-300"></div>
 

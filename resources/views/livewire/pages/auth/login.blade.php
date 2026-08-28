@@ -22,7 +22,7 @@ new #[Layout('layouts.guest')] class extends Component
 }; ?>
 
 <div>
-    <div class="mb-8">
+    <div class="mb-8 text-center">
         <p class="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">Secure access</p>
         <h1 class="mt-3 font-display text-3xl font-semibold tracking-tight text-base-content">Sign in to your workspace</h1>
         <p class="mt-2 text-sm leading-6 text-base-content/60">Use your administrator credentials to continue.</p>
@@ -48,7 +48,7 @@ new #[Layout('layouts.guest')] class extends Component
             <x-input-error :messages="$errors->get('form.password')" class="mt-1.5" />
         </div>
 
-        <label for="remember" class="flex items-center gap-2 text-sm text-base-content/60">
+        <label for="remember" class="flex items-center justify-center gap-2 text-sm text-base-content/60">
             <input wire:model="form.remember" id="remember" type="checkbox" class="rounded border-base-300 text-primary focus:ring-primary/30" name="remember">
             Remember me on this device
         </label>

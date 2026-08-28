@@ -26,13 +26,12 @@
             x-data="{
                 sidebarCollapsed: false,
                 mobileSidebarOpen: false,
-                mobileSearchOpen: false,
             }"
             x-init="
             sidebarCollapsed = window.matchMedia('(min-width: 1024px)').matches && localStorage.getItem('admin-sidebar-collapsed') === 'true';
                 $watch('sidebarCollapsed', value => localStorage.setItem('admin-sidebar-collapsed', value));
             "
-            x-on:keydown.escape.window="mobileSidebarOpen = false; mobileSearchOpen = false"
+            x-on:keydown.escape.window="mobileSidebarOpen = false"
             class="flex min-h-screen lg:h-screen"
         >
             <x-admin.sidebar />

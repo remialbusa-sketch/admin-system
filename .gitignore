@@ -26,3 +26,12 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+/test-results
+/db_accts.php
+/db_regions.php
+/tests/audit-shots.cjs
+/tests/cookiecheck.cjs
+/tests/full-tunnel.cjs
+/tests/livetest.cjs
+/tests/livetest2.cjs
+/tests/livetest3.cjs

@@ -1,0 +1,819 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\Account;
+use App\Models\HistoricalTsmsReport;
+use App\Models\ImportBatch;
+use App\Models\ImportFailure;
+use App\Models\Installation;
+use App\Models\ServiceRequest;
+use App\Models\TechnicalPersonnel;
+use App\Models\TechnicalReport;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Reader\IReader;
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
+use Throwable;
+
+class SourceWorkbookImportService
+{
+    public const PRODUCT_SOURCE = 'product_database';
+    public const EXECUTIVE_SOURCE = 'executive_dashboard';
+    public const HISTORICAL_SOURCE = 'historical_tsms';
+    public const PERSONNEL_SOURCE = 'personnel_list';
+
+    public function importProductDatabase(string $path, ?int $userId = null): ImportBatch
+    {
+        $batch = $this->startBatch(self::PRODUCT_SOURCE, basename($path), 'PDB Data', $path, $userId);
+        $reader = $this->reader($path);
+        $sheetName = $this->worksheetName($reader, $path, 'PDB Data');
+        if (! $sheetName) {
+            return $this->failBatch($batch, 'PDB Data sheet was not found.');
+        }
+
+        // The "PDB Data" sheet is the computed QUERY of the raw "PDB" sheet, but
+        // its QUERY only selects columns up to AG — it omits "PMS FREQUENCY" (AH)
+        // and "TSP IN-CHARGE" (AI). Those two live on the raw "PDB" sheet, whose
+        // header row is 8 and data starts at row 9. PDB row N maps to PDB Data
+        // row N-7. Load them once and merge by row number during the chunk loop.
+        $pdbExtra = $this->pdbExtraColumns($path);
+
+        $headers = $this->headersForSheet($reader, $path, $sheetName);
+        $this->prepareBatch($batch, $reader, $path, $sheetName);
+        $this->processChunks($reader, $path, $sheetName, $headers, function (array $data, int $rowNumber) use ($batch, $pdbExtra): void {
+                // PDB Data row 2 == PDB sheet row 9, so offset is +7.
+                $extra = $pdbExtra[$rowNumber + 7] ?? [];
+                $data['pms_frequency'] = $extra['pms_frequency'] ?? '';
+                $data['tsp_in_charge'] = $extra['tsp_in_charge'] ?? '';
+
+                $customerName = $this->value($data, 'customer_name');
+                $deviceDescription = $this->value($data, 'device_description');
+
+                if ($customerName === '' && $deviceDescription === '') {
+                    // Not a real product record - typically a leftover dragged-formula
+                    // row past the real data range (e.g. stray "#N/A" / "!" values with
+                    // no customer or device identified). Skip it rather than creating a
+                    // blank/ghost installation.
+                    return;
+                }
+
+                // Compute the stable source id / hash from the ORIGINAL row data
+                // (without the injected pms_frequency / tsp_in_charge extras) so
+                // re-imports match existing records instead of creating duplicates.
+                $baseData = $data;
+                unset($baseData['pms_frequency'], $baseData['tsp_in_charge']);
+                $sourceId = $this->sourceId($data['no'] ?? null, $baseData, 'product');
+                $hash = $this->rowHash($baseData);
+                $accountKey = $this->value($data, 'customer_name') ?: 'unknown-account-'.substr($hash, 0, 16);
+                $account = Account::updateOrCreate(
+                    ['source_system' => self::PRODUCT_SOURCE, 'source_record_id' => $accountKey],
+                    [
+                        'import_batch_id' => $batch->id,
+                        'source_hash' => hash('sha256', $accountKey.'|'.$this->value($data, 'customer_address').'|'.$this->value($data, 'branch')),
+                        'customer_name' => $this->value($data, 'customer_name'),
+                        'customer_address' => $this->value($data, 'customer_address'),
+                        'hospital_section' => $this->value($data, 'hospital_section'),
+                        'branch' => $this->value($data, 'branch'),
+                        'region' => $this->resolveRegion($data, ['branch', 'region']),
+                        'raw_data' => $data,
+                    ],
+                );
+
+                Installation::updateOrCreate(
+                    ['source_system' => self::PRODUCT_SOURCE, 'source_record_id' => $sourceId],
+                    [
+                        'account_id' => $account->id,
+                        'import_batch_id' => $batch->id,
+                        'source_hash' => $hash,
+                        'device_description' => $this->value($data, 'device_description'),
+                        'brand' => $this->value($data, 'brand'),
+                        'machine_type' => $this->value($data, 'machine_type'),
+                        'serial_number' => $this->value($data, 'serial_number'),
+                        'bu_no' => $this->value($data, 'bu_no'),
+                        'equipment_type' => $this->value($data, 'system_type'),
+                        'installation_date' => $this->date($this->value($data, 'installation_date')),
+                        'uninstallation_date' => $this->date($this->value($data, 'pulled_out_date')),
+                        'device_status' => $this->value($data, 'device_status'),
+                        'device_ownership' => $this->value($data, 'device_ownership'),
+                        'deal_type' => $this->value($data, 'deal_type'),
+                        'charge_to' => $this->value($data, 'charge_to'),
+                        'warranty_status' => $this->value($data, 'warranty_status'),
+                        'warranty_period_years' => $this->number($this->value($data, 'warranty_period')),
+                        'warranty_end_date' => $this->date($this->value($data, 'warranty_date_end')),
+                        'service_contract_status' => $this->value($data, 'service_contract_status'),
+                        'service_contract_amount' => $this->number($this->value($data, 'service_contract_amount')),
+                        'service_contract_start' => $this->date($this->value($data, 'service_contract_start')),
+                        'service_contract_end' => $this->date($this->value($data, 'service_contract_end')),
+                        'annual_bu_charge' => $this->number($this->value($data, 'annual_bu_charge')),
+                        'pms_frequency' => $this->nullableValue($data, 'pms_frequency'),
+                        'tsp_in_charge' => $this->nullableValue($data, 'tsp_in_charge'),
+                        'raw_data' => $data,
+                    ],
+                );
+            }, $batch);
+
+        return $this->completeBatch($batch);
+    }
+
+    public function importServiceRequests(string $path, ?int $userId = null): ImportBatch
+    {
+        $batch = $this->startBatch(self::EXECUTIVE_SOURCE, basename($path), 'Service Requests', $path, $userId);
+        $reader = $this->reader($path);
+        $sheetName = $this->worksheetName($reader, $path, 'Service Requests');
+        if (! $sheetName) {
+            return $this->failBatch($batch, 'Service Requests sheet was not found.');
+        }
+
+        $headers = $this->headersForSheet($reader, $path, $sheetName);
+        $this->prepareBatch($batch, $reader, $path, $sheetName);
+        $this->processChunks($reader, $path, $sheetName, $headers, function (array $data, int $rowNumber) use ($batch): void {
+                $requestId = $this->value($data, 'service_request_no') ?: $this->value($data, 'service_request');
+                $requestId = $requestId ?: 'row-'.($batch->processed_rows + $batch->failed_rows + 2);
+
+                ServiceRequest::updateOrCreate(
+                    ['source_system' => self::EXECUTIVE_SOURCE, 'source_record_id' => $requestId],
+                    [
+                        'import_batch_id' => $batch->id,
+                        'source_hash' => $this->rowHash($data),
+                        'source_updated_at' => $this->dateTime($this->value($data, 'date_created')),
+                        'service_request_number' => $this->value($data, 'service_request_no'),
+                        'service_request_code' => $this->value($data, 'service_request'),
+                        'customer_name' => $this->value($data, 'customer_name'),
+                        'ticket_status' => $this->value($data, 'ticket_status'),
+                                                'group_status' => $this->normalizeStatus($this->value($data, 'group')),
+                                                'branch' => $this->value($data, 'branch'),
+                        'tsp_assignment' => $this->value($data, 'tsp_assigned') ?: $this->value($data, 'reassigned_tsp'),
+                        'coordinator' => $this->value($data, 'coordinator'),
+                        'requesting_entity' => $this->value($data, 'requesting_entity'),
+                        'requestor_name' => $this->value($data, 'requestors_name'),
+                        'requestor_email' => $this->value($data, 'requestor_s_email'),
+                        'requestor_phone' => $this->value($data, 'phone_number'),
+                        'region' => $this->resolveRegion($data, ['branch', 'regions', 'assign_region']),
+                        'department' => $this->value($data, 'department'),
+                        'contract_type' => $this->value($data, 'contract_type'),
+                        'request_type' => $this->value($data, 'type_of_request'),
+                        'service_type' => $this->value($data, 'service_type'),
+                        'brand' => $this->value($data, 'brand'),
+                        'machine_type' => $this->value($data, 'machine_type'),
+                        'serial_number' => $this->value($data, 'serial_no'),
+                        'concerns' => $this->value($data, 'concerns'),
+                        'date_needed' => $this->date($this->value($data, 'date_needed')),
+                        'service_indicator' => $this->value($data, 'service_indicator'),
+                        'device_ownership' => $this->value($data, 'device_ownership'),
+                        'raw_data' => $data,
+                    ],
+                );
+            }, $batch);
+
+        return $this->completeBatch($batch);
+    }
+
+    public function importTechnicalReports(string $path, ?int $userId = null): ImportBatch
+    {
+        $batch = $this->startBatch(self::EXECUTIVE_SOURCE, basename($path), 'Technical Reports', $path, $userId);
+        $reader = $this->reader($path);
+        $sheetName = $this->worksheetName($reader, $path, 'Technical Reports');
+        if (! $sheetName) {
+            return $this->failBatch($batch, 'Technical Reports sheet was not found.');
+        }
+
+        $headers = $this->headersForSheet($reader, $path, $sheetName);
+        $this->prepareBatch($batch, $reader, $path, $sheetName);
+        $this->processChunks($reader, $path, $sheetName, $headers, function (array $data, int $rowNumber) use ($batch): void {
+                $reference = $this->value($data, 'reference_number');
+                if ($reference === '') {
+                    throw new \InvalidArgumentException('Reference Number is required.');
+                }
+
+                $requestNumber = $this->value($data, 'service_request_number');
+                $request = $requestNumber === '' ? null : ServiceRequest::where('source_system', self::EXECUTIVE_SOURCE)
+                    ->where(function ($query) use ($requestNumber): void {
+                        $query->where('service_request_number', $requestNumber)->orWhere('service_request_code', $requestNumber);
+                    })->first();
+
+                TechnicalReport::updateOrCreate(
+                    ['source_system' => self::EXECUTIVE_SOURCE, 'source_record_id' => $reference],
+                    [
+                        'service_request_id' => $request?->id,
+                        'import_batch_id' => $batch->id,
+                        'source_hash' => $this->rowHash($data),
+                        'reference_number' => $reference,
+                        'source_updated_at' => $this->dateTime($this->value($data, 'date_created')),
+                        'service_request_number' => $requestNumber,
+                        'report_name' => $this->value($data, 'name'),
+                        'ticket_status' => $this->value($data, 'ticket_status'),
+                                                'service_status' => $this->value($data, 'service_status'),
+                                                'group_status' => $this->normalizeStatus($this->value($data, 'service_status') ?: $this->value($data, 'ticket_status')),
+                                                'customer_name' => $this->value($data, 'customer_name_sr'),
+                        'service_started_at' => $this->dateTime($this->value($data, 'service_start_date_time')),
+                        'service_completed_at' => $this->dateTime($this->value($data, 'service_end_date_time')),
+                        'tsp_name' => $this->value($data, 'tsp_name') ?: $this->value($data, 'tsp'),
+                        'tsp_display_name' => $this->value($data, 'tsp') ?: $this->value($data, 'tsp_name'),
+                        'brand' => $this->value($data, 'brand'),
+                        'machine_type' => $this->value($data, 'machine_type'),
+                        'job_done' => $this->value($data, 'job_done'),
+                        'parts_replaced' => $this->value($data, 'parts_replaced'),
+                        'recommendation' => $this->value($data, 'recommendation'),
+                        'repair_time_hours' => $this->number($this->value($data, 'repair_time_hours')),
+                        'response_time_hours' => $this->number($this->value($data, 'response_time')),
+                        'report_url' => $this->value($data, 'report_copy_testing') ?: $this->value($data, 'files'),
+                        'raw_data' => $data,
+                    ],
+                );
+            }, $batch);
+
+        return $this->completeBatch($batch);
+    }
+
+    public function importHistoricalTsms(string $path, ?int $userId = null): ImportBatch
+    {
+        $batch = $this->startBatch(self::HISTORICAL_SOURCE, basename($path), 'MCBTSi TSMS', $path, $userId);
+        $reader = $this->reader($path);
+        $sheetName = $this->worksheetName($reader, $path, 'MCBTSi TSMS');
+        if (! $sheetName) {
+            return $this->failBatch($batch, 'MCBTSi TSMS sheet was not found.');
+        }
+
+        $headers = $this->headersForSheet($reader, $path, $sheetName);
+        $this->prepareBatch($batch, $reader, $path, $sheetName);
+        $this->processChunks($reader, $path, $sheetName, $headers, function (array $data, int $rowNumber) use ($batch): void {
+                $timestamp = $this->value($data, 'timestamp');
+                $sourceId = $timestamp !== '' ? $timestamp.'-row-'.$rowNumber : 'row-'.$rowNumber;
+
+                HistoricalTsmsReport::updateOrCreate(
+                    ['source_system' => self::HISTORICAL_SOURCE, 'source_record_id' => $sourceId],
+                    [
+                        'import_batch_id' => $batch->id,
+                        'source_hash' => $this->rowHash($data),
+                        'source_updated_at' => $this->dateTime($timestamp),
+                        'response_timestamp' => $this->dateTime($timestamp),
+                        'csr_number' => $this->value($data, 'csr'),
+                        'problem_or_complaint' => $this->value($data, 'problem_complaints'),
+                        'brand' => $this->value($data, 'brand'),
+                        'model' => $this->value($data, 'model'),
+                        'serial_number' => $this->value($data, 'serial_no'),
+                        'account_name' => $this->value($data, 'account_name'),
+                        'account_address' => $this->value($data, 'address'),
+                        'service_type' => $this->value($data, 'service_type'),
+                        'status' => $this->value($data, 'status'),
+                        'job_done' => $this->value($data, 'job_done'),
+                        'parts_replaced' => $this->value($data, 'parts_replaced'),
+                        'recommendation' => $this->value($data, 'recommendation_remarks'),
+                        'login_at' => $this->dateTime($this->value($data, 'log_in_date').' '.$this->value($data, 'login_time')),
+                        'service_at' => $this->dateTime($this->value($data, 'service_start_time')),
+                        'logout_at' => $this->dateTime($this->value($data, 'log_out_date').' '.$this->value($data, 'log_out_time')),
+                        'tsr_number' => $this->value($data, 'tsr'),
+                        'tsp_name' => $this->value($data, 'tsp_name'),
+                        'work_with_personnel' => $this->value($data, 'tsp_workwith'),
+                        'branch' => $this->value($data, 'branch'),
+                        'document_reference' => $this->value($data, 'document_reference_number') ?: $this->value($data, 'document_reference'),
+                        'raw_data' => $data,
+                    ],
+                );
+            }, $batch);
+
+        return $this->completeBatch($batch);
+    }
+
+    public function importPersonnel(string $path, ?int $userId = null): ImportBatch
+    {
+        $batch = $this->startBatch(self::PERSONNEL_SOURCE, basename($path), 'Personnel list', $path, $userId);
+
+        $reader = $this->reader($path);
+        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
+            return $this->failBatch($batch, 'Personnel import expects an .xlsx workbook with a fixed header layout.');
+        }
+
+        try {
+            $workbook = $reader->load($path);
+            $sheet = $workbook->getSheet(0);
+            $totalRows = (int) ($sheet->getHighestRow());
+            $dataStart = 6; // header is row 5, data begins row 6
+            $batch->update([
+                'total_rows' => max(0, $totalRows - ($dataStart - 1)),
+                'status' => 'processing',
+                'started_at' => now(),
+            ]);
+
+            for ($rowNumber = $dataStart; $rowNumber <= $totalRows; $rowNumber++) {
+                $name = trim((string) $sheet->getCell('C'.$rowNumber)->getValue());
+                if ($name === '') {
+                    continue;
+                }
+                $row = [
+                    'name' => $name,
+                    'position' => trim((string) $sheet->getCell('D'.$rowNumber)->getValue()),
+                    'branch' => trim((string) $sheet->getCell('E'.$rowNumber)->getValue()),
+                ];
+                $sourceId = 'personnel-'.substr($this->rowHash($row), 0, 24);
+                TechnicalPersonnel::updateOrCreate(
+                    ['source_system' => self::PERSONNEL_SOURCE, 'source_record_id' => $sourceId],
+                    [
+                        'import_batch_id' => $batch->id,
+                        'name' => $row['name'],
+                        'position' => $row['position'] ?: null,
+                        'branch' => $row['branch'] ?: null,
+                        'region' => $this->resolveRegion($row, ['branch']),
+                        'raw_data' => $row,
+                    ],
+                );
+                $batch->increment('processed_rows');
+            }
+
+            $workbook->disconnectWorksheets();
+            unset($sheet, $workbook);
+        } catch (Throwable $exception) {
+            $this->recordFailure($batch, $batch->total_rows, [], [], $exception);
+        }
+
+        return $this->completeBatch($batch);
+    }
+
+    /**
+     * Single region resolver for all import paths: try each candidate column in
+     * priority order and return the first canonical dashboard region, or null.
+     * Keeps call sites uniform so fallback behavior can't drift between imports.
+     *
+     * @param array<string, mixed> $data
+     * @param list<string> $keys column names to try, in priority order
+     */
+    private function resolveRegion(array $data, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            $candidate = $this->value($data, $key);
+            if ($candidate === '') {
+                continue;
+            }
+            $region = $this->regionForBranch($candidate);
+            if ($region !== null) {
+                return $region;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+         * Canonicalize a branch or region string into one of the 4 dashboard regions:
+         * ['NCR', 'North Luzon', 'Visayas', 'Mindanao'].
+         * Handles service-request branch codes (NLR1/CEB/CDO/...), descriptive branch
+         * names (Cebu, Ilo-Ilo, South Luzon) and raw region text ("Region III (Central Luzon)").
+         * Per source convention, South Luzon / SL is classified as NCR.
+         */
+        public function regionForBranch(?string $branch): ?string
+        {
+            $raw = preg_replace('/[^a-z0-9]/', '', strtolower($branch ?? ''));
+            if ($raw === '') {
+                return null;
+            }
+
+            // Descriptive region names that directly name a dashboard bucket.
+                        // Also detect a "Region <N>" prefix (Arabic or Roman) by capturing the leading numeral token.
+                                    $arabic = [
+                                        '1' => 'North Luzon', '2' => 'North Luzon', '3' => 'North Luzon',
+                                        '4' => 'NCR', '4a' => 'North Luzon', '4b' => 'North Luzon', '5' => 'NCR',
+                                        '6' => 'Visayas', '7' => 'Visayas', '8' => 'Visayas',
+                                        '9' => 'Mindanao', '10' => 'Mindanao', '11' => 'Mindanao', '12' => 'Mindanao', '13' => 'Mindanao',
+                                    ];
+                                    $romanNum = [
+                                        'i' => 1, 'ii' => 2, 'iii' => 3, 'iv' => 4, 'iva' => 4, 'ivb' => 4, 'v' => 5,
+                                        'vi' => 6, 'vii' => 7, 'viii' => 8, 'ix' => 9, 'x' => 10, 'xi' => 11, 'xii' => 12, 'xiii' => 13,
+                                    ];
+                                    if (preg_match('/^region(4a|4b|iva|ivb|[0-9]+|[ivxl]+)/', $raw, $m)) {
+                                        $n = $m[2] ?? $m[1];
+                                        if (array_key_exists($n, $arabic)) {
+                                            return $arabic[$n];
+                                        }
+                                        if (array_key_exists($n, $romanNum) && array_key_exists((string) $romanNum[$n], $arabic)) {
+                                                                                    return $arabic[(string) $romanNum[$n]];
+                                                                                }
+                                    }
+                                    if (in_array($raw, ['northluzon', 'car', 'caran', 'carb'], true)) {
+                return 'North Luzon';
+            }
+            if (in_array($raw, ['visayas', 'cebu', 'bacolod', 'iloilo', 'tacloban', 'region6', 'region7', 'region8',
+                'regionvi', 'regionvii', 'regionviii',
+            ], true)) {
+                return 'Visayas';
+            }
+            if (in_array($raw, ['mindanao', 'davao', 'cdo', 'zamboanga', 'region9', 'region10', 'region11', 'region12',
+                'region13', 'regionix', 'regionx', 'regionxi', 'regionxii', 'regionxiii', 'barmm', 'caraga',
+            ], true)) {
+                return 'Mindanao';
+            }
+            if (in_array($raw, [
+                'sl', 'southluzon', 'southernluzon', 'region4', 'region5', 'regioniv', 'regionv', 'region4a',
+                'calabarzon', 'bicol',
+            ], true)) {
+                return 'NCR';
+            }
+
+            // Branch codes seen in Service Requests.
+            if (in_array($raw, ['nlr1', 'nlr2', 'nlr3'], true)) {
+                return 'North Luzon';
+            }
+            if (in_array($raw, ['ceb', 'bac', 'ilo', 'tac'], true)) {
+                return 'Visayas';
+            }
+            if (in_array($raw, ['cdo', 'dav', 'zam'], true)) {
+                return 'Mindanao';
+            }
+
+            return $raw === 'ncr' ? 'NCR' : null;
+                    }
+
+                    /**
+                     * Map a raw status token to a single canonical value.
+                     * Canonical set: 'Completed', 'In-Progress', 'Open', 'Rejected', 'For Continuation', 'For Escalation', null.
+                     * Normalizes case, hyphen/space variants and strips multi-value noise.
+                     */
+                    public function normalizeStatus(?string $status): ?string
+                    {
+                        if ($status === null || trim($status) === '') {
+                            return null;
+                        }
+                        $tok = trim(mb_strtolower($status));
+                        if (str_contains($tok, ',')) {
+                            $tok = explode(',', $tok)[0];
+                        }
+                        $tok = trim(preg_replace('/\s+/', '-', $tok));
+                        return match ($tok) {
+                            'completed', 'resolved', 'closed', 'served', 'done' => 'Completed',
+                            'in-progress', 'in_progress', 'inprogress', 'pending', 'in-school' => 'In-Progress',
+                            'open', 'new', 'unassigned' => 'Open',
+                            'rejected', 'cancelled', 'canceled', 'void' => 'Rejected',
+                            'for-continuation', 'forcontinuation' => 'For Continuation',
+                            'for-escalation', 'forescalation', 'escalated' => 'For Escalation',
+                            default => null,
+                        };
+                    }
+
+    private function startBatch(string $sourceSystem, string $sourceName, string $sheet, string $path, ?int $userId): ImportBatch
+    {
+        return ImportBatch::create([
+            'source_system' => $sourceSystem,
+            'source_name' => $sourceName,
+            'source_sheet' => $sheet,
+            'source_path' => $path,
+            'status' => 'pending',
+            'metadata' => [
+                'target_table' => match ($sheet) {
+                    'Service Requests' => 'service_requests',
+                    'Technical Reports' => 'technical_reports',
+                    'PDB Data' => 'installations',
+                    'MCBTSi TSMS' => 'historical_tsms_reports',
+                    'Personnel list' => 'technical_personnel',
+                    default => null,
+                },
+                'import_mode' => 'upsert',
+                'raw_row_preserved' => true,
+                'source_file_sha256' => is_file($path) ? hash_file('sha256', $path) : null,
+            ],
+            'run_by' => $userId,
+        ]);
+    }
+
+    private function reader(string $path): IReader
+    {
+        $reader = IOFactory::createReaderForFile($path);
+        $reader->setReadDataOnly(true);
+        $reader->setReadEmptyCells(false);
+
+        return $reader;
+    }
+
+    /**
+     * Read the "PMS FREQUENCY" (AH) and "TSP IN-CHARGE" (AI) columns from the raw
+     * "PDB" sheet. These are NOT present in the "PDB Data" sheet (its QUERY stops
+     * at column AG). The PDB sheet header is row 8 and data starts at row 9, so
+     * the returned map is keyed by PDB row number.
+     *
+     * @return array<int, array{pms_frequency: string, tsp_in_charge: string}>
+     */
+    private function pdbExtraColumns(string $path): array
+    {
+        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
+            return [];
+        }
+
+        try {
+            $reader = $this->reader($path);
+            $reader->setLoadSheetsOnly(['PDB']);
+            $workbook = $reader->load($path);
+            $sheet = $workbook->getSheetByName('PDB');
+
+            if (! $sheet) {
+                return [];
+            }
+
+            $map = [];
+            $highestRow = $sheet->getHighestRow();
+
+            for ($row = 9; $row <= $highestRow; $row++) {
+                $pms = $sheet->getCell('AH'.$row)->getValue();
+                $tsp = $sheet->getCell('AI'.$row)->getValue();
+                $map[$row] = [
+                    'pms_frequency' => $this->value(['pms_frequency' => $pms], 'pms_frequency'),
+                    'tsp_in_charge' => $this->value(['tsp_in_charge' => $tsp], 'tsp_in_charge'),
+                ];
+            }
+
+            $workbook->disconnectWorksheets();
+            unset($sheet, $workbook);
+            gc_collect_cycles();
+
+            return $map;
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function worksheetName(IReader $reader, string $path, string $preferredName): ?string
+    {
+        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
+            return 'CSV';
+        }
+
+        $names = $reader->listWorksheetNames($path);
+
+        if (in_array($preferredName, $names, true)) {
+            return $preferredName;
+        }
+
+        return count($names) === 1 ? $names[0] : null;
+    }
+
+    private function headersForSheet(IReader $reader, string $path, string $sheetName): array
+    {
+        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
+            $handle = fopen($path, 'rb');
+            $headers = fgetcsv($handle) ?: [];
+            fclose($handle);
+
+            return $this->normalizeHeaders($headers);
+        }
+
+        $reader->setLoadSheetsOnly([$sheetName]);
+        $reader->setReadFilter(new ChunkReadFilter(1, 1));
+        $workbook = $reader->load($path);
+        $headers = $this->headers($workbook->getSheetByName($sheetName));
+        $workbook->disconnectWorksheets();
+        unset($workbook);
+
+        return $headers;
+    }
+
+    private function prepareBatch(ImportBatch $batch, IReader $reader, string $path, string $sheetName): void
+    {
+        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
+            $lines = 0;
+            $handle = fopen($path, 'rb');
+            while (fgetcsv($handle) !== false) {
+                $lines++;
+            }
+            fclose($handle);
+
+            $batch->update([
+                'total_rows' => max(0, $lines - 1),
+                'status' => 'processing',
+                'started_at' => now(),
+            ]);
+
+            return;
+        }
+
+        $info = collect($reader->listWorksheetInfo($path))->firstWhere('worksheetName', $sheetName);
+        $batch->update([
+            'total_rows' => max(0, ((int) ($info['totalRows'] ?? 1)) - 1),
+            'status' => 'processing',
+            'started_at' => now(),
+        ]);
+    }
+
+    private function processChunks(IReader $reader, string $path, string $sheetName, array $headers, callable $callback, ImportBatch $batch): void
+    {
+        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
+            $handle = fopen($path, 'rb');
+            fgetcsv($handle);
+            $rowNumber = 1;
+
+            while (($row = fgetcsv($handle)) !== false) {
+                $rowNumber++;
+                if (count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
+                    continue;
+                }
+
+                $this->runRow($batch, $rowNumber, $row, $callback, $headers);
+            }
+
+            fclose($handle);
+
+            return;
+        }
+
+        $totalRows = $batch->total_rows;
+        $chunkSize = 250;
+
+        for ($start = 2; $start <= $totalRows + 1; $start += $chunkSize) {
+            $end = min($start + $chunkSize - 1, $totalRows + 1);
+            $reader->setLoadSheetsOnly([$sheetName]);
+            $reader->setReadFilter(new ChunkReadFilter($start, $end));
+            $workbook = $reader->load($path);
+            $sheet = $workbook->getSheetByName($sheetName);
+
+            if ($sheet) {
+                try {
+                    foreach ($sheet->toArray(null, true, true, true) as $rowNumber => $row) {
+                        if ($rowNumber === 1 || count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
+                            continue;
+                        }
+
+                        $this->runRow($batch, $rowNumber, $row, $callback, $headers);
+                    }
+                } catch (Throwable $exception) {
+                    $this->recordFailure($batch, $start, [], $headers, $exception);
+                }
+            }
+
+            $workbook->disconnectWorksheets();
+            unset($sheet, $workbook);
+            gc_collect_cycles();
+        }
+    }
+
+    private function completeBatch(ImportBatch $batch): ImportBatch
+    {
+        $batch->update([
+            'status' => $batch->failed_rows > 0 ? 'completed_with_errors' : 'completed',
+            'completed_at' => now(),
+        ]);
+
+        return $batch->refresh();
+    }
+
+    private function failBatch(ImportBatch $batch, string $message): ImportBatch
+    {
+        $batch->update(['status' => 'failed', 'completed_at' => now()]);
+        $batch->failures()->create(['error_type' => 'configuration', 'error_message' => $message]);
+
+        return $batch->refresh();
+    }
+
+    private function runRow(ImportBatch $batch, int $rowNumber, array $row, callable $callback, array $headers): void
+    {
+        $data = $this->associate($headers, $row);
+
+        try {
+            retry(3, function () use ($callback, $data, $rowNumber): void {
+                DB::transaction(function () use ($callback, $data, $rowNumber): void {
+                    $callback($data, $rowNumber);
+                });
+            }, 100);
+            $batch->increment('processed_rows');
+        } catch (Throwable $exception) {
+            $this->recordFailure($batch, $rowNumber, $row, $headers, $exception);
+        }
+    }
+
+    private function recordFailure(ImportBatch $batch, int $rowNumber, array $row, array $headers, Throwable $exception): void
+    {
+        $data = $this->associate($headers, $row);
+        $batch->increment('failed_rows');
+        ImportFailure::create([
+            'import_batch_id' => $batch->id,
+            'row_number' => $rowNumber,
+            'source_record_id' => $this->value($data, 'service_request_no') ?: $this->value($data, 'reference_number'),
+            'error_type' => 'row',
+            'error_message' => Str::limit($exception->getMessage(), 1000),
+            'raw_data' => $data,
+        ]);
+    }
+
+    private function headers(Worksheet $sheet): array
+    {
+        return $this->normalizeHeaders($sheet->toArray(null, true, true, true)[1] ?? []);
+    }
+
+    private function associate(array $headers, array $row): array
+    {
+        $values = array_values($row);
+        $data = [];
+
+        foreach ($headers as $index => $header) {
+            if ($header === '') {
+                continue;
+            }
+            $data[$header] = $values[$index] ?? null;
+        }
+
+        return $data;
+    }
+
+    private function normalizeHeaders(array $headers): array
+    {
+        $used = [];
+        $normalized = [];
+
+        foreach ($headers as $header) {
+            $key = Str::of((string) $header)
+                ->lower()
+                ->replaceMatches('/[^a-z0-9]+/', '_')
+                ->trim('_')
+                ->toString();
+            $key = $key ?: 'column';
+            $base = $key;
+            $suffix = 2;
+            while (isset($used[$key])) {
+                $key = $base.'_'.$suffix++;
+            }
+            $used[$key] = true;
+            $normalized[] = $key;
+        }
+
+        return $normalized;
+    }
+
+    private function value(array $data, string $key): string
+    {
+        $value = $data[$key] ?? '';
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format('Y-m-d H:i:s');
+        }
+        if ($value === null || $value === '' || in_array(strtoupper(trim((string) $value)), ['N/A', 'NA', '-', '#N/A'], true)) {
+            return '';
+        }
+
+        return trim((string) $value);
+    }
+
+    /**
+     * Like value(), but returns null instead of '' — for manual-only fields
+     * (pms_frequency, tsp_in_charge) that must stay blank on auto-imported
+     * records so they are never mistaken for imported data.
+     */
+    private function nullableValue(array $data, string $key): ?string
+    {
+        $value = $this->value($data, $key);
+
+        return $value === '' ? null : $value;
+    }
+
+    private function number(string $value): ?float
+    {
+        if ($value === '') {
+            return null;
+        }
+
+        return is_numeric(str_replace(',', '', $value)) ? (float) str_replace(',', '', $value) : null;
+    }
+
+    private function date(?string $value): ?string
+    {
+        return $this->dateTime($value)?->toDateString();
+    }
+
+    private function dateTime(?string $value): ?Carbon
+    {
+        if ($value === null || trim($value) === '') {
+            return null;
+        }
+
+        $parts = preg_split('/\s+/', trim($value));
+        if (count($parts) >= 2 && is_numeric($parts[0]) && is_numeric($parts[1])) {
+            return $this->excelDateTime((float) $parts[0] + (float) $parts[1]);
+        }
+
+        if (is_numeric(trim($value)) && (float) $value > 20000) {
+            return $this->excelDateTime((float) $value);
+        }
+
+        try {
+            return Carbon::parse($value);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function excelDateTime(float $serial): Carbon
+    {
+        $days = (int) floor($serial);
+        $seconds = (int) round(($serial - $days) * 86400);
+
+        return Carbon::create(1899, 12, 30)->addDays($days)->addSeconds($seconds);
+    }
+
+    private function sourceId(mixed $value, array $data, string $prefix): string
+    {
+        $value = trim((string) ($value ?? ''));
+
+        return ($value !== '' ? $value.'-' : $prefix.'-').substr($this->rowHash($data), 0, 24);
+    }
+
+    private function rowHash(array $data): string
+    {
+        return hash('sha256', json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+}

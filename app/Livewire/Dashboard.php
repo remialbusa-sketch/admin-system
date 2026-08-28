@@ -2,20 +2,23 @@
 
 namespace App\Livewire;
 
+use App\Services\PresidentDashboardService;
 use Illuminate\Contracts\View\View;
 use Livewire\Component;
 
 class Dashboard extends Component
 {
-    /**
-     * Search term bound to the top navbar search box (bound in the shared layout).
-     */
-    public string $search = '';
+    public string $region = 'All regions';
 
-    public function render(): View
+    public function updatedRegion(): void
     {
-        return view('livewire.dashboard')
+        // Region drives every widget; recompute happens in render().
+    }
+
+    public function render(PresidentDashboardService $service): View
+    {
+        return view('livewire.dashboard', $service->summary($this->region === 'All regions' ? null : $this->region))
             ->layout('layouts.dashboard')
-            ->title('Dashboard');
+            ->title('Home');
     }
 }

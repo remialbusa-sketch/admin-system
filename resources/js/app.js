@@ -1,1 +1,1 @@
-//
+import './managed-table.js';

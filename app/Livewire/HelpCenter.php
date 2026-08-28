@@ -11,7 +11,22 @@ class HelpCenter extends Component
 
     public function render(): View
     {
-        return view('livewire.help-center')
+        $faqs = [
+            ['q' => 'How do I import a table?', 'a' => 'Open Tables, then use the Import table button on a managed table page. Upload the matching Excel/CSV; existing records update by their stable identifier.'],
+            ['q' => 'Which tables are available?', 'a' => 'Product Database (PDB), Service Requests, Technical Reports, and History Reports (MCBTSi TSMS). They are the single source for dashboards and visualization.'],
+            ['q' => 'Who can edit table rows?', 'a' => 'Only Superadmin can edit cell values inline. Presidents and managers see the tables read-only.'],
+            ['q' => 'Where can I review service analytics?', 'a' => 'Technical Service Analysis summarizes completed reports, TSP workload, and brand patterns. TSP Analytics covers personnel performance.'],
+        ];
+
+        $term = mb_strtolower(trim($this->search));
+        $filtered = $term === ''
+            ? $faqs
+            : array_values(array_filter(
+                $faqs,
+                fn (array $faq): bool => str_contains(mb_strtolower($faq['q'].' '.$faq['a']), $term),
+            ));
+
+        return view('livewire.help-center', ['faqs' => $filtered, 'faqTotal' => count($faqs)])
             ->layout('layouts.dashboard')
             ->title('Help Center');
     }
