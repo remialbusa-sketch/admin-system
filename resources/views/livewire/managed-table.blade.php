@@ -38,6 +38,16 @@
                 Clear column filters ({{ count($columnFilters) }})
             </button>
         @endif
+        @if ($archivedCount > 0 || $showArchived)
+            <button type="button" wire:click="toggleShowArchived" class="admin-secondary-button">
+                <x-mary-icon name="o-archive-box" class="h-4 w-4" />
+                @if ($showArchived)
+                    Back to active records
+                @else
+                    Archive box ({{ $archivedCount }})
+                @endif
+            </button>
+        @endif
         <button type="button" wire:click="resetColumnLayout" class="admin-secondary-button ml-auto">
             <x-mary-icon name="o-arrow-path" class="h-4 w-4" />
             Reset layout
@@ -65,7 +75,7 @@
         x-init="init($wire)"
     >
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-5 py-3 text-sm text-base-content/60">
-            <span>{{ $rows->total() }} records &middot; drag headers to reorder, drag edges to resize, right-click a header to freeze/hide &middot; tick rows to select for bulk actions</span>
+            <span>{{ $rows->total() }} records &middot; drag headers to reorder, drag edges to resize, right-click a header to freeze/hide &middot; tick rows to select &mdash; quick actions appear in the bar below, or open a row's &hellip; menu</span>
             <div class="flex flex-wrap items-center gap-2">
                 <label class="flex items-center gap-1.5 text-xs text-base-content/55">
                     Density
@@ -85,10 +95,6 @@
                         Save changes
                     </button>
                 @endif
-                <button type="button" data-bulk-delete class="admin-secondary-button admin-bulk hidden" x-on:click="deleteSelected()" x-show="selectedCount() > 0">
-                    <x-mary-icon name="o-trash" class="h-4 w-4" />
-                    Delete <span data-bulk-delete-count>0</span> selected
-                </button>
                 <span x-text="status" class="text-xs font-semibold uppercase tracking-[0.06em]"></span>
             </div>
         </div>
@@ -98,6 +104,53 @@
         <div wire:ignore class="spreadsheet-grid" data-managed-table-grid style="height: 640px;"></div>
 
         <div class="border-t border-base-300 px-5 py-3">{{ $rows->links() }}</div>
+
+        {{-- Monday.com-style floating action bar: appears whenever grid rows
+             are selected. The Alpine grid component owns the selection state
+             (Tabulator), so its buttons collect the selected ids client-side
+             and invoke the matching Livewire action. --}}
+        <div class="admin-selection-bar no-print"
+             x-cloak
+             x-show="selectedCount > 0"
+             x-transition:enter="transition ease-out duration-150"
+             x-transition:enter-start="opacity-0 translate-y-3"
+             x-transition:enter-end="opacity-100 translate-y-0"
+             role="toolbar"
+             aria-label="Selection actions">
+            <span class="admin-selection-count" x-text="selectedCount"></span>
+            <span class="admin-selection-label" x-text="selectedCount === 1 ? 'item selected' : 'items selected'"></span>
+
+            <span class="admin-selection-separator" aria-hidden="true"></span>
+
+            <div class="admin-selection-actions">
+                @if ($editable && ! $showArchived)
+                    <button type="button" x-on:click="duplicateSelected()" class="admin-selection-action" title="Duplicate selected rows" aria-label="Duplicate">
+                        <x-mary-icon name="o-square-2-stack" class="h-4 w-4" />
+                    </button>
+                @endif
+                <button type="button" x-on:click="exportSelectedRows()" class="admin-selection-action" title="Export selected rows to Excel" aria-label="Export">
+                    <x-mary-icon name="o-arrow-down-tray" class="h-4 w-4" />
+                </button>
+                @if ($editable)
+                    @if ($showArchived)
+                        <button type="button" x-on:click="restoreSelected()" class="admin-selection-action" title="Restore selected rows to the active listing" aria-label="Restore">
+                            <x-mary-icon name="o-arrow-uturn-right" class="h-4 w-4" />
+                        </button>
+                    @else
+                        <button type="button" x-on:click="archiveSelected()" class="admin-selection-action" title="Archive selected rows" aria-label="Archive">
+                            <x-mary-icon name="o-archive-box" class="h-4 w-4" />
+                        </button>
+                    @endif
+                    <button type="button" x-on:click="deleteSelected()" class="admin-selection-action admin-selection-action-danger" title="Delete selected rows" aria-label="Delete">
+                        <x-mary-icon name="o-trash" class="h-4 w-4" />
+                    </button>
+                @endif
+            </div>
+
+            <button type="button" x-on:click="clearSelection()" class="admin-selection-dismiss" title="Clear selection" aria-label="Dismiss">
+                <x-mary-icon name="o-x-mark" class="h-4 w-4" />
+            </button>
+        </div>
     </section>
 
     <x-admin.modal name="manage-columns" title="Manage columns" description="Add custom columns to this table just like adding a column in Excel. Toggle visibility/freeze here, or drag &amp; resize headers directly in the grid." size="lg">

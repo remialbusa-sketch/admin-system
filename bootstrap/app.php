@@ -14,9 +14,12 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Trust only the actual proxy when deployed behind one (ngrok, a load
-        // balancer). Trusting '*' lets clients spoof X-Forwarded-For and rotate
-        // IPs past the login rate limiter.
-        $middleware->trustProxies(at: env('TRUSTED_PROXIES') ?: []);
+        // balancer). The proxy list comes from config/trustedproxy.php, which
+        // reads TRUSTED_PROXIES after .env has loaded — this file is evaluated
+        // BEFORE .env, so env() here would always return empty.
+        // Trusting '*' on a public network lets clients spoof X-Forwarded-For
+        // and rotate IPs past the login rate limiter.
+        $middleware->trustProxies();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

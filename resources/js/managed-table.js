@@ -373,8 +373,9 @@ document.addEventListener('alpine:init', () => {
         wire: null,
         columnDefs: [],
         pendingChanges: [],
-        pendingDeletes: [],
         hasChanges: false,
+        selectedCount: 0,
+        showArchived: false,
         newRowId: null,
         densitySelect: null,
         _suppressRefresh: false,
@@ -439,6 +440,10 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
 
+            // Mirror the server's archive view so the row menu / action bar
+            // offer Restore instead of Archive when in the archive view.
+            this.showArchived = !!payload.meta?.showArchived;
+
             const gridEl = this.$root.querySelector('[data-managed-table-grid]');
 
             if (!gridEl) {
@@ -478,6 +483,8 @@ document.addEventListener('alpine:init', () => {
 
             this.table.replaceData(payload.rows);
             this.applyRemoteSort(payload.meta);
+            // Re-anchor checkbox visuals + count after data replacement.
+            this.updateSelectionUI();
             this.status = 'Ready';
         },
 
@@ -498,12 +505,12 @@ document.addEventListener('alpine:init', () => {
                 clipboardCopyRowRange: 'range',
                 clipboardPasteAction: 'update',
                 history: true,
-                // Row multi-select (used for bulk actions) with a checkbox column.
-                rowSelection: true,
+                // Row multi-select (used for bulk actions) with a frozen
+                // checkbox column (see the _select column definition).
+                // Note: `rowSelection` is not a Tabulator 6 option and was
+                // silently ignored; selection is driven by selectableRows*.
                 selectableRows: true,
-                selectableRowsHeader: true,
                 selectableRowsRangeMode: 'click',
-                // Let Tabulator use its default row-selection checkbox formatter.
                 // Open the cell editor on a single click (more intuitive than
                 // Tabulator's default double-click).
                 editTriggerEvent: 'click',
@@ -554,34 +561,245 @@ document.addEventListener('alpine:init', () => {
             this.table.redraw();
         },
 
-        // --- Multi-select / bulk actions ---------------------------------
+        // --- Row-selection checkbox formatters -----------------------------
+        //
+        // Tabulator's built-in `rowSelection` formatter misbehaves when
+        // selectableRowsRangeMode is "click": its click listener runs
+        // handleComplexRowClick (deselect everything, then re-select the
+        // clicked row) BEFORE the change event fires, and the change handler
+        // then swallows its toggle behind the "blocked" flag. Net effect: a
+        // plain click on the checkbox could select a row but never unselect
+        // it. These custom formatters let the checkbox own its toggle; the
+        // rest of the row keeps Tabulator's click / ctrl+click / shift+click
+        // selection behaviour.
+        rowSelectFormatter(cell) {
+            const row = cell.getRow();
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.setAttribute('aria-label', 'Select row');
+            checkbox.checked = !!row.isSelected();
+
+            // Stop the click from bubbling to the row's click handler, which
+            // would immediately re-run the "select this row" logic.
+            checkbox.addEventListener('mousedown', (e) => e.stopPropagation());
+            checkbox.addEventListener('click', (e) => e.stopPropagation());
+            checkbox.addEventListener('change', () => row.toggleSelect());
+
+            // Register with Tabulator's selectRow module so the box is kept
+            // in sync when the selection changes elsewhere (header select-all,
+            // ctrl/shift+click on the row, bulk delete, data refresh).
+            const table = typeof cell.getTable === 'function' ? cell.getTable() : null;
+            if (table && table.modules && table.modules.selectRow) {
+                table.modules.selectRow.registerRowSelectCheckbox(row, checkbox);
+            }
+
+            return checkbox;
+        },
+
+        headerSelectFormatter(cell) {
+            const table = typeof cell.getTable === 'function' ? cell.getTable() : null;
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.setAttribute('aria-label', 'Select all rows');
+
+            const sync = () => {
+                const total = (table && table.getRows ? table.getRows() : []).length;
+                const selected = (table && table.getSelectedRows ? table.getSelectedRows() : []).length;
+                checkbox.checked = total > 0 && selected === total;
+                checkbox.indeterminate = selected > 0 && selected < total;
+            };
+            sync();
+
+            checkbox.addEventListener('mousedown', (e) => e.stopPropagation());
+            checkbox.addEventListener('click', (e) => e.stopPropagation());
+            // Standard select-all semantics: a fully checked box clears, while
+            // an unchecked or partial (indeterminate) box selects every row.
+            checkbox.addEventListener('change', () => {
+                if (!table) {
+                    return;
+                }
+
+                const total = (table.getRows ? table.getRows() : []).length;
+                const selected = (table.getSelectedRows ? table.getSelectedRows() : []).length;
+
+                if (total > 0 && selected === total) {
+                    table.deselectRow();
+                } else {
+                    table.selectRow();
+                }
+            });
+
+            // Tabulator re-checks/re-indeterminates this element on every
+            // selection change, including after data refreshes.
+            if (table && table.modules && table.modules.selectRow) {
+                table.modules.selectRow.registerHeaderSelectCheckbox(checkbox);
+            }
+
+            return checkbox;
+        },
+
+        // --- Multi-select / selection actions ------------------------------
         updateSelectionUI() {
-            const btn = this.$root?.querySelector?.('[data-bulk-delete]');
-            if (!btn) {
+            this.syncSelectionCheckboxes();
+        },
+
+        /**
+         * Force every row checkbox (and the header select-all) to reflect the
+         * live selection. The Tabulator module normally keeps the boxes in
+         * sync via registerRowSelectCheckbox, but grid re-renders (Livewire
+         * morphs, column changes, data replacement) can recreate elements
+         * without re-firing selection events, leaving boxes that LOOK
+         * unchecked while the row is selected. This makes the visual state
+         * authoritative after every selection change and data refresh.
+         */
+        syncSelectionCheckboxes() {
+            if (!this.table) {
+                this.selectedCount = 0;
+
                 return;
             }
-            const n = this.selectedCount();
-            btn.classList.toggle('admin-bulk-visible', n > 0);
-            btn.querySelector('[data-bulk-delete-count]').textContent = n;
+
+            const rows = this.table.getRows();
+            let selected = 0;
+
+            rows.forEach((row) => {
+                const isSelected = typeof row.isSelected === 'function' ? row.isSelected() : false;
+
+                if (isSelected) {
+                    selected++;
+                }
+
+                const checkbox = row._row?.modules?.select?.checkboxEl;
+
+                if (checkbox) {
+                    checkbox.checked = isSelected;
+                }
+            });
+
+            const header = this.table.modules?.selectRow?.headerCheckboxElement;
+
+            if (header) {
+                header.checked = rows.length > 0 && selected === rows.length;
+                header.indeterminate = selected > 0 && selected < rows.length;
+            }
+
+            this.selectedCount = selected;
         },
-        selectedCount() {
-            return this.table ? this.table.getSelectedRows().length : 0;
+        getSelectedIds() {
+            return (this.table?.getSelectedRows() ?? [])
+                .map((row) => row.getData().id)
+                .filter((id) => id !== undefined && id !== null);
         },
-        deleteSelected() {
-            const rows = this.table?.getSelectedRows() ?? [];
-            const ids = rows.map((r) => r.getData().id).filter((id) => id !== undefined && id !== null);
+
+        /** Duplicate / archive / restore the given rows via Livewire. */
+        runRowAction(method, rows, successStatus) {
+            const ids = rows.map((row) => row.getData().id).filter((id) => id >= 0);
+
             if (ids.length === 0) {
                 return;
             }
-            const n = ids.length;
-            if (!window.confirm(`Delete ${n} selected record${n === 1 ? '' : 's'}? This cannot be undone.`)) {
-                return;
-            }
-            this.callWire('deleteSelected', ids).then(() => {
-                this.table?.deselectRow();
-                this.status = 'Deleted';
+
+            this.callWire(method, ids).then(() => {
+                // Optimistic local removal: archived/restored rows leave the
+                // current listing immediately; the next server refresh (the
+                // morph hook) reconciles the rest.
+                rows.forEach((row) => {
+                    if (method !== 'duplicateSelected') {
+                        this.table?.deleteRow(row);
+                    }
+                });
+                this.clearSelection();
+                this.status = successStatus;
             });
         },
+
+        duplicateSelected() {
+            const rows = this.table?.getSelectedRows() ?? [];
+
+            if (rows.length === 0) {
+                return;
+            }
+
+            this.runRowAction('duplicateSelected', rows, 'Duplicated');
+        },
+
+        archiveSelected() {
+            const rows = this.table?.getSelectedRows() ?? [];
+
+            if (rows.length === 0) {
+                return;
+            }
+
+            this.runRowAction('archiveSelected', rows, 'Archived');
+        },
+
+        restoreSelected() {
+            const rows = this.table?.getSelectedRows() ?? [];
+
+            if (rows.length === 0) {
+                return;
+            }
+
+            this.runRowAction('restoreSelected', rows, 'Restored');
+        },
+
+        exportSelectedRows() {
+            const ids = this.getSelectedIds().filter((id) => id >= 0);
+
+            if (ids.length === 0) {
+                return;
+            }
+
+            this.callWire('exportSelectedRows', ids);
+        },
+
+        deleteSelected() {
+            const rows = this.table?.getSelectedRows() ?? [];
+
+            if (rows.length === 0) {
+                return;
+            }
+
+            const realIds = this.getSelectedIds().filter((id) => id >= 0);
+            const unsaved = rows.length - realIds.length;
+            const target = realIds.length || rows.length;
+            const extra = unsaved > 0 ? ' (new unsaved rows are discarded)' : '';
+
+            if (!window.confirm(`Delete ${target} selected record${target === 1 ? '' : 's'}${extra}? This cannot be undone.`)) {
+                return;
+            }
+
+            const finish = () => {
+                rows.forEach((row) => this.table?.deleteRow(row));
+                this.clearSelection();
+                this.status = 'Deleted';
+            };
+
+            if (realIds.length === 0) {
+                finish();
+
+                return;
+            }
+
+            this.callWire('deleteSelected', realIds).then(finish);
+        },
+
+        // Single-row actions from the ellipsis context menu.
+        runSingleRowAction(method, row, successStatus) {
+            const rowId = row.getData().id;
+
+            if (rowId === undefined || rowId === null) {
+                return;
+            }
+
+            this.callWire(method, [rowId]).then(() => {
+                if (method !== 'duplicateSelected') {
+                    this.table?.deleteRow(row);
+                }
+                this.status = successStatus;
+            });
+        },
+
         deselectRow() {
             this.table?.deselectRow();
         },
@@ -643,16 +861,32 @@ document.addEventListener('alpine:init', () => {
             });
         },
         isFormattedCell(cell) {
-            return cell.getColumn()?.getField() === '_delete' || cell.getValue() === '' || !!this.columnDefs?.find((c) => c.key === cell.getColumn()?.getField())?.type &&
-                ['select', 'status', 'dropdown', 'checkbox'].includes(this.columnDefs.find((c) => c.key === cell.getColumn()?.getField())?.type);
+            const field = cell.getColumn()?.getField();
+
+            if (field === '_select') {
+                return true;
+            }
+
+            if (cell.getValue() === '') {
+                return true;
+            }
+
+            const type = this.columnDefs?.find((c) => c.key === field)?.type;
+
+            return ['select', 'status', 'dropdown', 'checkbox'].includes(type);
         },
 
         buildColumnDefs(columns) {
+            // Frozen multi-select column: ticking checkboxes drives the row
+            // selection that powers the floating action bar.
             const defs = [{
-                title: '▢',
+                // Custom checkbox formatters (see rowSelectFormatter above):
+                // the built-in 'rowSelection' formatter cannot unselect rows
+                // with a plain click while selectableRowsRangeMode is 'click'.
+                title: '',
                 field: '_select',
-                formatter: 'rowSelection',
-                titleFormatter: 'rowSelection',
+                formatter: (cell) => this.rowSelectFormatter(cell),
+                titleFormatter: (cell) => this.headerSelectFormatter(cell),
                 headerSort: false,
                 hozAlign: 'center',
                 width: 44,
@@ -718,35 +952,6 @@ document.addEventListener('alpine:init', () => {
 
             mapped.forEach((def) => defs.push(def));
 
-            // Append a delete action column for editors.
-            if (this.editable) {
-                defs.push({
-                    title: '',
-                    field: '_delete',
-                    width: 60,
-                    minWidth: 60,
-                    resizable: false,
-                    headerSort: false,
-                    frozen: true,
-                    formatter: (cell) => {
-                        const row = cell.getRow();
-                        const btn = document.createElement('button');
-                        btn.type = 'button';
-                        btn.className = 'grid-delete-btn';
-                        btn.title = 'Delete record';
-                        btn.setAttribute('aria-label', 'Delete record');
-                        btn.innerHTML = '✕';
-                        btn.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            if (window.confirm('Delete this record? This cannot be undone.')) {
-                                this.deleteRow(row);
-                            }
-                        });
-                        return btn;
-                    },
-                });
-            }
-
             return defs;
         },
 
@@ -803,32 +1008,6 @@ document.addEventListener('alpine:init', () => {
             // cell to start editing.
         },
 
-        deleteRow(row) {
-            if (!this.table || !row) {
-                return;
-            }
-
-            const rowId = row.getData().id;
-
-            // If it's a brand-new (unsaved) row, just remove it from the grid.
-            if (rowId < 0) {
-                this.table.deleteRow(row);
-                this.hasChanges = this.pendingChanges.length > 0 || this.table.getRows().some((r) => r.getData().id < 0);
-                if (!this.hasChanges) {
-                    this.status = 'Ready';
-                }
-                return;
-            }
-
-            // For an existing row, mark it for deletion and remove it from the
-            // grid. It will be deleted server-side when "Save changes" is clicked.
-            this.pendingDeletes.push(rowId);
-            this.pendingChanges = this.pendingChanges.filter((change) => change.rowId !== rowId);
-            this.table.deleteRow(row);
-            this.hasChanges = true;
-            this.status = 'Unsaved changes';
-        },
-
         async saveChanges() {
             if (!this.table || !this.hasChanges) {
                 return;
@@ -865,11 +1044,6 @@ document.addEventListener('alpine:init', () => {
                     );
                 }
 
-                // Add pending deletes.
-                for (const id of this.pendingDeletes) {
-                    changes.push({ type: 'delete', id });
-                }
-
                 // Send everything in ONE server call to avoid Livewire 3.8.5's
                 // request-batching bug. Pass the changes as a JSON string so
                 // Alpine's reactive proxies (which carry a __v_raw symbol) can't
@@ -879,7 +1053,6 @@ document.addEventListener('alpine:init', () => {
                 // After a successful save, refresh the grid from the server so
                 // the new rows get their real ids and deleted rows are gone.
                 this.pendingChanges = [];
-                this.pendingDeletes = [];
                 this.hasChanges = false;
                 this.newRowId = null;
                 this.status = 'Saved';

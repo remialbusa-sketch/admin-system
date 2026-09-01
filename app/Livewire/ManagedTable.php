@@ -15,6 +15,7 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
@@ -67,6 +68,9 @@ abstract class ManagedTable extends Component
 
     /** Excel-style per-column filter state, keyed by column key. */
     public array $columnFilters = [];
+
+    /** When true, the listing shows archived records instead of active ones. */
+    public bool $showArchived = false;
 
     public bool $showColumnManagerModal = false;
 
@@ -168,6 +172,163 @@ abstract class ManagedTable extends Component
     {
         $this->columnFilters = [];
         $this->resetPage();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Selection actions (floating action bar / row context menu)
+    |--------------------------------------------------------------------------
+    */
+
+    public function toggleShowArchived(): void
+    {
+        $this->showArchived = ! $this->showArchived;
+        $this->resetPage();
+    }
+
+    /**
+     * Whether the underlying table has the archived_at column (all managed
+     * tables do since the archive migration; the check keeps per-table
+     * subclasses and older installs safe).
+     */
+    protected function supportsArchive(): bool
+    {
+        $model = $this->model();
+
+        return Schema::hasColumn((new $model)->getTable(), 'archived_at');
+    }
+
+    /** Scope a query to the currently active (or archived) record set. */
+    protected function applyArchiveScope(Builder $query): Builder
+    {
+        if (! $this->supportsArchive()) {
+            return $query;
+        }
+
+        $table = $query->getModel()->getTable();
+
+        return $this->showArchived
+            ? $query->whereNotNull($table.'.archived_at')
+            : $query->whereNull($table.'.archived_at');
+    }
+
+    /**
+     * Duplicate the selected records (grid multi-select or row menu).
+     * Copies every column, regenerates the source identity so the copy is
+     * excluded from re-import matching, and copies custom column values.
+     *
+     * @param  array<int, int>  $ids
+     * @return array<int, int>  created record ids, in input order
+     */
+    public function duplicateSelected(array $ids): array
+    {
+        abort_unless($this->canEdit(), 403);
+
+        $ids = array_values(array_filter(array_map('intval', $ids)));
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $model = $this->model();
+        $created = [];
+
+        foreach ($model::query()->whereKey($ids)->get() as $record) {
+            // replicate() excludes the primary key; Eloquent stamps fresh
+            // created_at / updated_at on save.
+            $copy = $record->replicate();
+
+            // The source identity keys the upsert on re-import; a duplicate
+            // must never collide with (or be clobbered by) the original.
+            if (array_key_exists('source_record_id', $record->getAttributes()) && $record->source_record_id !== null) {
+                $copy->source_system = 'manual';
+                $copy->source_record_id = $record->source_record_id.'-copy-'.strtolower(Str::random(8));
+            }
+
+            $copy->archived_at = null;
+            $copy->save();
+
+            $customColumnIds = CustomTableColumn::query()
+                ->where('table_key', $this->tableKey())
+                ->pluck('id');
+
+            if ($customColumnIds->isNotEmpty()) {
+                $values = CustomTableColumnValue::query()
+                    ->whereIn('custom_column_id', $customColumnIds)
+                    ->where('row_id', $record->getKey())
+                    ->get();
+
+                foreach ($values as $value) {
+                    CustomTableColumnValue::query()->create([
+                        'custom_column_id' => $value->custom_column_id,
+                        'row_id' => $copy->getKey(),
+                        'value' => $value->value,
+                        'value_text' => $value->value_text,
+                        'value_number' => $value->value_number,
+                    ]);
+                }
+            }
+
+            $this->logEdit((int) $copy->getKey(), 'duplicated', null, $record->getKey(), $copy->getKey());
+            $created[] = (int) $copy->getKey();
+        }
+
+        return $created;
+    }
+
+    /**
+     * Archive the selected records (hidden from the default listing,
+     * restorable from the archive view).
+     *
+     * @param  array<int, int>  $ids
+     */
+    public function archiveSelected(array $ids): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        if (! $this->supportsArchive()) {
+            return;
+        }
+
+        $ids = array_values(array_filter(array_map('intval', $ids)));
+
+        if ($ids === []) {
+            return;
+        }
+
+        $model = $this->model();
+        $model::query()->whereKey($ids)->update(['archived_at' => now()]);
+
+        foreach ($ids as $id) {
+            $this->logEdit($id, 'archived');
+        }
+    }
+
+    /**
+     * Restore archived records back to the active listing.
+     *
+     * @param  array<int, int>  $ids
+     */
+    public function restoreSelected(array $ids): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        if (! $this->supportsArchive()) {
+            return;
+        }
+
+        $ids = array_values(array_filter(array_map('intval', $ids)));
+
+        if ($ids === []) {
+            return;
+        }
+
+        $model = $this->model();
+        $model::query()->whereKey($ids)->update(['archived_at' => null]);
+
+        foreach ($ids as $id) {
+            $this->logEdit($id, 'restored');
+        }
     }
 
     public function updateField(int $id, string $field, mixed $value): void
@@ -844,6 +1005,7 @@ abstract class ManagedTable extends Component
     {
         $columns = $this->allColumns();
         $query = $this->query();
+        $query = $this->applyArchiveScope($query);
         $query = $this->applyColumnFilters($query, $columns);
         $query = $this->applySort($query, $columns);
 
@@ -1034,6 +1196,24 @@ abstract class ManagedTable extends Component
 
     public function exportExcel(): mixed
     {
+        return $this->exportRows();
+    }
+
+    /**
+     * Export only the selected rows (from the grid selection toolbar or the
+     * per-row context menu) using the same columns/format as the full export.
+     *
+     * @param  array<int, int>  $ids
+     */
+    public function exportSelectedRows(array $ids): mixed
+    {
+        abort_unless($this->canExport(), 403);
+
+        return $this->exportRows(array_values(array_filter(array_map('intval', $ids))));
+    }
+
+    private function exportRows(array $ids = []): mixed
+    {
         abort_unless($this->canExport(), 403);
 
         $columns = collect($this->orderedColumns())
@@ -1042,8 +1222,13 @@ abstract class ManagedTable extends Component
             ->all();
 
         $query = $this->query();
+        $query = $this->applyArchiveScope($query);
         $query = $this->applyColumnFilters($query, $this->allColumns());
         $query = $this->applySort($query, $this->allColumns());
+
+        if ($ids !== []) {
+            $query->whereKey($ids);
+        }
 
         // Hydrate in bounded chunks — the old unbounded ->get() pulled every
         // matching row (raw_data casts included) into memory at once.
@@ -1071,9 +1256,11 @@ abstract class ManagedTable extends Component
 
         $headings = array_map(fn (array $column): string => $column['label'], $columns);
 
+        $suffix = $ids === [] ? '' : '-selection';
+
         return Excel::download(
             new ManagedTableExport($headings, $exportRows, $this->title()),
-            Str::slug($this->title()).'-'.now()->format('Y-m-d-His').'.xlsx',
+            Str::slug($this->title()).$suffix.'-'.now()->format('Y-m-d-His').'.xlsx',
         );
     }
 
@@ -1135,7 +1322,7 @@ abstract class ManagedTable extends Component
         $customValues = $this->loadCustomValues($records, $columns);
 
         $gridRows = $records->map(function ($record) use ($columns, $customValues): array {
-            $out = ['id' => $record->id];
+            $out = ['id' => $record->id, 'archived' => $record->archived_at !== null];
 
             foreach ($columns as $column) {
                 if ($column['custom'] ?? false) {
@@ -1171,6 +1358,7 @@ abstract class ManagedTable extends Component
                 'lastPage' => $rows->lastPage(),
                 'perPage' => $rows->perPage(),
                 'editable' => $this->canEdit(),
+                'showArchived' => $this->showArchived,
                 'sortField' => $this->sortField,
                 'sortDirection' => $this->sortDirection,
                 'columnFilters' => $this->columnFilters,
@@ -1208,6 +1396,10 @@ abstract class ManagedTable extends Component
             'rows' => $rows,
             'columns' => $columns,
             'editable' => $this->canEdit(),
+            'showArchived' => $this->showArchived,
+            'archivedCount' => $this->supportsArchive()
+                ? $this->model()::query()->whereNotNull('archived_at')->count()
+                : 0,
             'statuses' => $this->statusOptions(),
             'tableOptions' => $this->tableOptions,
             'importResult' => $this->importResult,

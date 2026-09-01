@@ -4,7 +4,8 @@
     "type": "module",
     "scripts": {
         "build": "vite build",
-        "dev": "vite"
+        "dev": "vite",
+        "share": "npm run build && node scripts/clear-hot-file.mjs"
     },
     "devDependencies": {
         "@tailwindcss/forms": "^0.5.2",

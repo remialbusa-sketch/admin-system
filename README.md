@@ -27,6 +27,25 @@ php artisan serve
 
 Login at `http://127.0.0.1:8000` with a seeded admin account.
 
+### Sharing with ngrok
+
+Dev-server asset URLs (`http://[::1]:5173/...` via `public/hot`) only resolve on
+the machine running `npm run dev` — through an ngrok tunnel every visitor's
+browser tries to load them from its own localhost and the frontend breaks.
+Share the **built** frontend instead:
+
+```bash
+npm run share    # vite build + removes public/hot
+ngrok http 8000
+```
+
+`.env` must also trust the local ngrok agent (`TRUSTED_PROXIES=127.0.0.1`),
+or Laravel generates `http://` asset URLs that https browsers block as mixed
+content. Hot reload is not available through the tunnel — restart `npm run dev`
+when you're back to local-only development. On the free plan, visitors see
+ngrok's one-time "Visit Site" warning page; clicking it sets a bypass cookie
+for the rest of the session.
+
 ## What's inside
 
 | Area | Route | Entry points |

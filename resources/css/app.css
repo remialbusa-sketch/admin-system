@@ -272,6 +272,16 @@
     background: var(--color-base-100) !important;
 }
 
+/* Selection column: the checkbox has to fit the fixed 44px column. The
+   default cell padding (0.9rem inline) leaves a ~13px content box, which
+   clipped the checkbox and painted a stray text-overflow ellipsis after it.
+   Give this non-text column tight padding and opt it out of ellipsis. */
+.spreadsheet-grid .tabulator-row .tabulator-cell.admin-select-col,
+.spreadsheet-grid .tabulator-col.admin-select-col .tabulator-col-title {
+    padding-inline: 0.4rem;
+    text-overflow: clip;
+}
+
 .grid-status-pill {
     display: inline-flex;
     border-radius: 999px;
@@ -295,13 +305,127 @@
     padding: 0 1px;
 }
 
-/* Bulk-action button: hidden until rows are selected. */
-.admin-bulk {
-    display: none;
+
+/* Grid checkboxes: the app form layer (Tailwind forms + the generic grid
+   input rule) strips the native checkbox look, which made checked rows
+   indistinguishable from unchecked ones. Restore a crisp native box with
+   the primary accent so the checked state is unmistakable. */
+.spreadsheet-grid .tabulator-cell.admin-select-col input[type="checkbox"],
+.spreadsheet-grid .tabulator-col.admin-select-col input[type="checkbox"] {
+    appearance: auto;
+    width: 1.05rem;
+    height: 1.05rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    accent-color: var(--color-primary);
+    cursor: pointer;
 }
 
-.admin-bulk.admin-bulk-visible {
+/* Multi-select column: no divider, it is row chrome not a data column. */
+.spreadsheet-grid .tabulator-row .tabulator-cell.admin-select-col,
+.spreadsheet-grid .tabulator-header .tabulator-col.admin-select-col {
+    border-right: 0;
+}
+
+/* Floating selection action bar (appears when grid rows are selected). */
+.admin-selection-bar {
+    position: fixed;
+    bottom: 1.25rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 900;
     display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.45rem 0.55rem 0.45rem 0.9rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: 999px;
+    background: var(--color-base-100);
+    color: var(--color-base-content);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+    max-width: min(94vw, 44rem);
+}
+
+.admin-selection-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.65rem;
+    height: 1.65rem;
+    padding-inline: 0.4rem;
+    border-radius: 999px;
+    background: var(--color-primary);
+    color: var(--color-primary-content);
+    font-size: 0.8125rem;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.admin-selection-label {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.admin-selection-separator {
+    width: 1px;
+    align-self: stretch;
+    background: var(--color-base-300);
+}
+
+.admin-selection-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+
+.admin-selection-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--color-base-content);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.admin-selection-action:hover {
+    background: color-mix(in oklab, var(--color-primary) 14%, transparent);
+    color: var(--color-primary);
+}
+
+.admin-selection-action-danger,
+.admin-selection-action-danger:hover {
+    color: var(--color-error);
+}
+
+.admin-selection-action-danger:hover {
+    background: color-mix(in oklab, var(--color-error) 14%, transparent);
+}
+
+.admin-selection-dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    margin-left: 0.15rem;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+    color: var(--color-base-content);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.admin-selection-dismiss:hover {
+    background: color-mix(in oklab, var(--color-base-content) 16%, transparent);
+    color: var(--color-base-content);
 }
 
 /* Selected row state. */
@@ -568,32 +692,10 @@
     background: color-mix(in oklab, var(--color-primary) 16%, transparent);
 }
 
-/* Delete action button in each grid row (editors only). */
-.grid-delete-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.75rem;
-    height: 1.75rem;
-    border: 1px solid color-mix(in oklab, var(--color-error) 40%, transparent);
-    border-radius: var(--radius-md);
-    background: color-mix(in oklab, var(--color-error) 10%, transparent);
-    color: var(--color-error);
-    font-size: 0.875rem;
-    line-height: 1;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
-}
-
-.grid-delete-btn:hover {
-    background: var(--color-error);
-    color: var(--color-error-content);
-}
 
 /* Touch targets: enlarge grid action buttons on mobile to >=44px (WCAG 2.5.5),
    keeping them dense on desktop to serve the "working surface" brief. */
 @media (max-width: 640px) {
-    .grid-delete-btn,
     .grid-list-editor-menu-btn,
     .grid-list-add-btn {
         width: 2.5rem;
@@ -648,7 +750,7 @@
     }
 }
 
-/* Print: the executive "board pack" view — sidebar/topbar chrome out,
+/* Print: the executive "board pack" view â€” sidebar/topbar chrome out,
    surfaces kept whole, light tokens regardless of the active theme. */
 @media print {
     @page {
@@ -700,7 +802,7 @@
     }
 }
 
-/* Home dashboard — installation trend: hover a month point and it glows and
+/* Home dashboard â€” installation trend: hover a month point and it glows and
    grows; the whole point area is a generous click target. */
 .install-trend a {
     cursor: pointer;
@@ -723,7 +825,7 @@
     r: 6px;
 }
 
-/* Categorical chart palette — eight visually distinct hues for multi-slice
+/* Categorical chart palette â€” eight visually distinct hues for multi-slice
    identity donuts (brands, etc.). Mid-lightness so they hold up in both
    light and dark themes. Semantic state colors (success/warning/error)
    remain reserved for status-type donuts. */
