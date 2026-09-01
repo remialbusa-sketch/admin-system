@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
@@ -1190,12 +1191,17 @@ abstract class ManagedTable extends Component
         try {
             $this->importStoredPath = $this->importFile->store('imports');
             $mappingService = app(ImportMappingService::class);
-            $this->importAnalysis = $mappingService->analyze(storage_path('app/'.$this->importStoredPath), $this->tableKey());
+            $this->importAnalysis = $mappingService->analyze($this->storedImportPath(), $this->tableKey());
             $this->applyImportPreview($this->importAnalysis['preview']);
             $this->importMapping = $mappingService->blankMapping($this->tableKey());
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            // Never swallow the reason: report it and surface a short hint,
+            // or a valid workbook mislabeled by the source system is
+            // indistinguishable from a corrupt one.
+            report($exception);
+
             $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
-            $this->addError('importFile', 'This file could not be read as an Excel or CSV workbook. Re-export it as .xlsx or .csv and try again.');
+            $this->addError('importFile', 'This file could not be read as an Excel or CSV workbook ('.Str::limit($exception->getMessage(), 140).'). Re-export it as .xlsx or .csv and try again.');
         }
     }
 
@@ -1313,7 +1319,7 @@ abstract class ManagedTable extends Component
 
         try {
             $batch = app(SourceWorkbookImportService::class)->importMapped(
-                storage_path('app/'.$this->importStoredPath),
+                $this->storedImportPath(),
                 $this->tableKey(),
                 $this->importSheet,
                 $mapping->all(),
@@ -1347,7 +1353,7 @@ abstract class ManagedTable extends Component
     {
         try {
             $this->applyImportPreview(app(ImportMappingService::class)->previewSheet(
-                storage_path('app/'.$this->importStoredPath),
+                $this->storedImportPath(),
                 $this->importSheet,
                 $headerRow,
                 $dataStart,
@@ -1363,6 +1369,17 @@ abstract class ManagedTable extends Component
         $this->importSheet = (string) ($preview['sheet'] ?? '');
         $this->importHeaderRow = (int) ($preview['headerRow'] ?? 1);
         $this->importDataStart = (int) ($preview['dataStart'] ?? 2);
+    }
+
+    /**
+     * Absolute path of the stored import workbook. The default disk's root
+     * is storage/app/private on the Laravel 11+ skeleton, so this must be
+     * resolved through the filesystem disk - storage_path('app/...') never
+     * matches where store() actually wrote the file.
+     */
+    private function storedImportPath(): string
+    {
+        return Storage::disk(config('filesystems.default'))->path((string) $this->importStoredPath);
     }
 
     public function exportExcel(): mixed
