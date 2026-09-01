@@ -1597,6 +1597,10 @@ abstract class ManagedTable extends Component
                 : 0,
             'statuses' => $this->statusOptions(),
             'importTargets' => $importTargets,
+            'serverUploadLimits' => [
+                'perFile' => ini_get('upload_max_filesize'),
+                'postBody' => ini_get('post_max_size'),
+            ],
             'importMappedCount' => collect($this->importMapping)->filter(fn ($letter): bool => trim((string) $letter) !== '')->count(),
             'importMissingRequired' => $importMissingRequired,
             'importResult' => $this->importResult,
