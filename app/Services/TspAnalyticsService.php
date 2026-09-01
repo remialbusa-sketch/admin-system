@@ -6,10 +6,14 @@ use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 
 class TspAnalyticsService
 {
     private const REGIONS = ['NCR', 'North Luzon', 'Visayas', 'Mindanao'];
+
+    /** Per-request memo for the TSP identity rollup. */
+    private ?array $tspIdentityCache = null;
 
     public function summary(string $region = 'All regions'): array
     {
@@ -91,12 +95,21 @@ class TspAnalyticsService
 
     public function details(?string $tspName = null, ?string $from = null, ?string $to = null, ?string $branch = null): array
     {
+        $identities = $this->tspIdentities();
+
         $query = TechnicalReport::query()
             ->whereNotNull('tsp_name')
             ->where('tsp_name', '<>', '');
 
         if ($tspName !== null && $tspName !== '' && $tspName !== 'All TSPs') {
-            $query->where('tsp_name', $tspName);
+            // The dropdown value is a normalized person identity; expand it to
+            // every raw workbook ID that belongs to that person so all of
+            // their records are counted together.
+            $ids = $identities['byKey'][mb_strtolower($tspName)]['ids'] ?? [$tspName];
+
+            $query->where(function ($q) use ($ids, $tspName): void {
+                $q->whereIn('tsp_name', $ids)->orWhere('tsp_name', $tspName);
+            });
         }
 
         if ($from !== null && $from !== '') {
@@ -116,7 +129,15 @@ class TspAnalyticsService
 
         $totalReports = (clone $query)->count();
         $completed = (clone $query)->where('service_status', 'Completed')->count();
-        $distinctTsp = (clone $query)->distinct()->count('tsp_name');
+
+        // Distinct TSPs counts normalized identities, not raw workbook IDs.
+        $distinctTsp = (clone $query)
+            ->distinct()
+            ->pluck('tsp_name')
+            ->map(fn ($id) => $identities['byId'][$id] ?? mb_strtolower((string) $id))
+            ->unique()
+            ->count();
+
         $avgRepair = (clone $query)->whereNotNull('repair_time_hours')->avg('repair_time_hours');
 
         $kpis = [
@@ -126,26 +147,44 @@ class TspAnalyticsService
             ['label' => 'Avg repair time', 'value' => round((float) $avgRepair, 2).'h', 'context' => 'per report', 'icon' => 'o-clock', 'tone' => 'warning'],
         ];
 
-        $top = (clone $query)
-            ->selectRaw("tsp_name, MAX(COALESCE(NULLIF(tsp_display_name, ''), tsp_name)) as display_name, COUNT(*) as reports, SUM(CASE WHEN service_status = ? THEN 1 ELSE 0 END) as completed, AVG(repair_time_hours) as avg_repair", ['Completed'])
+        // Per-TSP table merged by normalized identity so a person who appears
+        // under several workbook IDs shows once with their full totals.
+        $rows = (clone $query)
+            ->selectRaw('tsp_name, COUNT(*) as reports, SUM(CASE WHEN service_status = ? THEN 1 ELSE 0 END) as completed, SUM(repair_time_hours) as repair_sum, COUNT(repair_time_hours) as repair_n', ['Completed'])
             ->groupBy('tsp_name')
-            ->orderByDesc('reports')
-            ->limit(25)
-            ->get()
-            ->map(function ($row): array {
-                $reports = (int) $row->reports;
-                $completed = (int) $row->completed;
+            ->get();
+
+        $merged = collect();
+
+        foreach ($rows as $row) {
+            $key = $identities['byId'][$row->tsp_name] ?? mb_strtolower((string) $row->tsp_name);
+            $entry = $merged->get($key) ?? ['reports' => 0, 'completed' => 0, 'repair_sum' => 0.0, 'repair_n' => 0];
+
+            $entry['reports'] += (int) $row->reports;
+            $entry['completed'] += (int) $row->completed;
+            $entry['repair_sum'] += (float) $row->repair_sum;
+            $entry['repair_n'] += (int) $row->repair_n;
+
+            $merged->put($key, $entry);
+        }
+
+        $top = $merged
+            ->map(function (array $entry, string $key) use ($identities): array {
+                $reports = $entry['reports'];
+                $completed = $entry['completed'];
+                $avg = $entry['repair_n'] > 0 ? $entry['repair_sum'] / $entry['repair_n'] : 0.0;
 
                 return [
-                    // Real display name; the raw tsp_name is a workbook ID
-                    // (person-XXXX…) that means nothing to people.
-                    'tsp_name' => $row->display_name ?: $row->tsp_name,
+                    'tsp_name' => $identities['byKey'][$key]['label'] ?? $key,
                     'reports' => $reports,
                     'completed' => $completed,
                     'completion_rate' => $reports > 0 ? round(($completed / $reports) * 100, 1) : 0,
-                    'avg_repair' => round((float) $row->avg_repair, 2),
+                    'avg_repair' => round($avg, 2),
                 ];
             })
+            ->sortByDesc('reports')
+            ->take(25)
+            ->values()
             ->all();
 
         return [
@@ -168,14 +207,111 @@ class TspAnalyticsService
 
     public function tspOptions(): array
     {
-        // value = the raw tsp_name (workbook ID) used for filtering;
-        // label = the real display name so the dropdown reads like a roster.
-        return TechnicalReport::query()
-            ->whereNotNull('tsp_name')->where('tsp_name', '<>', '')
-            ->selectRaw("tsp_name, MAX(COALESCE(NULLIF(tsp_display_name, ''), tsp_name)) as label")
-            ->groupBy('tsp_name')
-            ->orderBy('label')
-            ->pluck('label', 'tsp_name')
+        // One option per normalized person identity (not per raw workbook
+        // ID): the same human under several person-XXXX IDs merges into a
+        // single entry, email-only display names become real names, and
+        // repeated comma segments collapse.
+        return collect($this->tspIdentities()['byKey'])
+            ->sortBy(fn (array $entry): string => $entry['label'], SORT_NATURAL | SORT_FLAG_CASE)
+            ->mapWithKeys(fn (array $entry): array => [$entry['label'] => $entry['label']])
             ->all();
+    }
+
+    /**
+     * Normalize a raw workbook TSP value into a human-readable label:
+     * trimmed whitespace, email-only values turned into names
+     * ("franco.dagondon@mcbtsi.com" becomes "Franco Dagondon"), and
+     * repeated comma-separated segments collapsed ("team-32875, team-32875").
+     */
+    public static function normalizeTspLabel(?string $raw): string
+    {
+        $value = trim((string) $raw);
+
+        if ($value === '') {
+            return '';
+        }
+
+        $value = trim((string) preg_replace('/\s+/u', ' ', $value));
+
+        $segments = [];
+
+        foreach (explode(',', $value) as $segment) {
+            $segment = trim($segment);
+
+            if ($segment === '') {
+                continue;
+            }
+
+            if (filter_var($segment, FILTER_VALIDATE_EMAIL)) {
+                $local = str_replace(['.', '_', '-'], ' ', Str::before($segment, '@'));
+                $segment = mb_convert_case(trim((string) preg_replace('/\s+/u', ' ', $local)), MB_CASE_TITLE, 'UTF-8');
+            }
+
+            $segments[] = $segment;
+        }
+
+        return implode(', ', array_values(array_unique($segments)));
+    }
+
+    /**
+     * Roll raw workbook TSP IDs up to person-level identities.
+     *
+     * tsp_name holds a person-XXXX/team-XXXX ID and tsp_display_name a
+     * free-text label; the same human appears under several IDs, some
+     * display values are raw emails, and some team IDs have none at all.
+     *
+     * Returns:
+     *   - byKey: normalized identity key => ["label" => string, "ids" => raw tsp_names]
+     *   - byId:  raw tsp_name => identity key
+     */
+    private function tspIdentities(): array
+    {
+        if (is_array($this->tspIdentityCache)) {
+            return $this->tspIdentityCache;
+        }
+
+        $variants = TechnicalReport::query()
+            ->whereNotNull('tsp_name')->where('tsp_name', '<>', '')
+            ->selectRaw("tsp_name, COALESCE(NULLIF(tsp_display_name, ''), tsp_name) as display, COUNT(*) as n")
+            ->groupBy('tsp_name', 'display')
+            ->get();
+
+        $bestById = [];
+
+        foreach ($variants as $row) {
+            $label = self::normalizeTspLabel($row->display);
+
+            if ($label === '') {
+                continue;
+            }
+
+            $key = mb_strtolower($label);
+            $bestById[$row->tsp_name][$key] = [
+                'n' => ($bestById[$row->tsp_name][$key]['n'] ?? 0) + (int) $row->n,
+                'label' => $label,
+            ];
+        }
+
+        $byKey = [];
+        $byId = [];
+
+        foreach ($bestById as $id => $keys) {
+            // The ID belongs to its most frequent normalized label, so a
+            // person-ID with a name in most rows (and NULL in a few) still
+            // resolves to the name, not the raw ID.
+            uasort($keys, fn (array $a, array $b): int => $b['n'] <=> $a['n']);
+            $idKey = (string) array_key_first($keys);
+            $byId[$id] = $idKey;
+
+            if (! isset($byKey[$idKey])) {
+                $byKey[$idKey] = ['label' => $keys[$idKey]['label'], 'ids' => []];
+            }
+
+            $byKey[$idKey]['ids'][] = $id;
+        }
+
+        ksort($byKey);
+
+        return $this->tspIdentityCache = ['byKey' => $byKey, 'byId' => $byId];
     }
 }

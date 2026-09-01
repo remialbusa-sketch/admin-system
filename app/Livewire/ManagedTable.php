@@ -10,6 +10,7 @@ use App\Models\RecordEditLog;
 use App\Models\TableColumnOption;
 use App\Models\TableColumnPreference;
 use App\Services\ColumnTypeRegistry;
+use App\Services\ImportMappingService;
 use App\Services\SourceWorkbookImportService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
@@ -24,11 +25,13 @@ use Livewire\Component;
 use Livewire\WithFileUploads;
 use Livewire\WithPagination;
 use Maatwebsite\Excel\Facades\Excel;
+use RuntimeException;
+use Throwable;
 
 abstract class ManagedTable extends Component
 {
-    use WithPagination;
     use WithFileUploads;
+    use WithPagination;
 
     /**
      * Column types that can be safely edited inline from the grid today.
@@ -47,19 +50,27 @@ abstract class ManagedTable extends Component
 
     public $importFile = null;
 
-    public ?string $importTable = null;
+    /** Stored relative path (storage/app/...) of the uploaded import workbook. */
+    public ?string $importStoredPath = null;
+
+    /** Workbook inspection: file type + sheet list. */
+    public array $importAnalysis = [];
+
+    /** Active sheet preview: header row, data start, columns, sample rows. */
+    public array $importPreview = [];
+
+    public string $importSheet = '';
+
+    public int $importHeaderRow = 1;
+
+    public int $importDataStart = 2;
+
+    /** Manual mapping: target field key => source column letter ('' = unmapped). */
+    public array $importMapping = [];
 
     public ?int $lastImportId = null;
 
     public array $importResult = [];
-
-    public array $tableOptions = [
-        'installed-products' => 'Product Database',
-        'service-requests' => 'Service Requests',
-        'technical-reports' => 'Technical Reports',
-        'history-reports' => 'History Reports',
-        'personnel' => 'Technical Personnel',
-        ];
 
     /** Excel-style server-side sort state. */
     public ?string $sortField = null;
@@ -125,7 +136,7 @@ abstract class ManagedTable extends Component
      * Stable identifier used to scope custom columns / layout preferences
      * to this table. Defaults to the current route name for backward
      * compatibility, but subclasses should override this with a fixed
-     * literal (matching their $tableOptions key) so it stays stable in
+     * literal (matching the table's import key, e.g. 'installed-products') so it stays stable in
      * contexts without a bound HTTP route (e.g. Livewire component tests).
      */
     public function tableKey(): string
@@ -218,7 +229,7 @@ abstract class ManagedTable extends Component
      * excluded from re-import matching, and copies custom column values.
      *
      * @param  array<int, int>  $ids
-     * @return array<int, int>  created record ids, in input order
+     * @return array<int, int> created record ids, in input order
      */
     public function duplicateSelected(array $ids): array
     {
@@ -1150,48 +1161,208 @@ abstract class ManagedTable extends Component
     |--------------------------------------------------------------------------
     */
 
-    public function startImport(): void
+    /*
+    |--------------------------------------------------------------------------
+    | Import wizard: upload -> manual column mapping -> official import
+    |--------------------------------------------------------------------------
+    |
+    | The upload is inspected and previewed first; the official import only
+    | ever runs from the mapping popup, with the user's hand-built mapping.
+    */
+
+    /** Step 1: a workbook was uploaded - inspect sheets and build the preview. */
+    public function updatedImportFile(): void
     {
         abort_unless($this->canEdit(), 403);
 
-        $this->validate([
-            'importFile' => 'required|file|mimes:csv,txt,xls,xlsx|max:10240',
-            'importTable' => ['required', Rule::in(array_keys($this->tableOptions))],
-        ]);
+        $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
 
-        if ($this->routeName() !== $this->importTable) {
-            $this->addError('importTable', 'Choose the table that matches the page you are importing into.');
+        if (! $this->importFile) {
+            return;
+        }
+
+        $this->validateOnly('importFile', ['importFile' => 'required|file|mimes:csv,txt,xls,xlsx|max:10240']);
+
+        if ($this->getErrorBag()->has('importFile')) {
+            return;
+        }
+
+        try {
+            $this->importStoredPath = $this->importFile->store('imports');
+            $mappingService = app(ImportMappingService::class);
+            $this->importAnalysis = $mappingService->analyze(storage_path('app/'.$this->importStoredPath), $this->tableKey());
+            $this->applyImportPreview($this->importAnalysis['preview']);
+            $this->importMapping = $mappingService->blankMapping($this->tableKey());
+        } catch (Throwable) {
+            $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
+            $this->addError('importFile', 'This file could not be read as an Excel or CSV workbook. Re-export it as .xlsx or .csv and try again.');
+        }
+    }
+
+    /** Step 1: another sheet was picked - re-detect and preview it. */
+    public function updatedImportSheet(): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        if (! $this->importStoredPath || $this->importSheet === '') {
+            return;
+        }
+
+        $this->refreshImportPreview(null, null);
+    }
+
+    /** Step 1: the header row moved - re-anchor the preview columns/samples. */
+    public function updatedImportHeaderRow($value): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        if (! $this->importStoredPath || $this->importSheet === '') {
+            return;
+        }
+
+        $this->refreshImportPreview((int) $value, null);
+    }
+
+    /** Step 1: the first data row moved - re-anchor the preview samples. */
+    public function updatedImportDataStart($value): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        if (! $this->importStoredPath || $this->importSheet === '') {
+            return;
+        }
+
+        $this->refreshImportPreview($this->importHeaderRow, (int) $value);
+    }
+
+    /** Step 2: open the mapping popup, pre-filling the last committed mapping. */
+    public function openImportMapping(): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        if (! $this->importStoredPath || ($this->importPreview['columns'] ?? []) === []) {
+            return;
+        }
+
+        $this->importMapping = app(ImportMappingService::class)
+            ->recallMapping($this->tableKey(), $this->importPreview['columns']);
+
+        $this->dispatch('open-modal', name: 'import-mapping');
+    }
+
+    /**
+     * Step 3: run the official import with the user's mapping. Validates the
+     * mapping (required identity fields, distinct in-range columns), records
+     * it on the batch, then hands workbook + mapping to the import service.
+     */
+    public function executeMappedImport(): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        if (! $this->importStoredPath) {
+            $this->addError('importFile', 'Choose a workbook first.');
 
             return;
         }
 
-        $path = $this->importFile->store('imports');
-        $fullPath = storage_path('app/'.$path);
+        $targets = ImportMappingService::TARGETS[$this->tableKey()] ?? null;
 
-        $importer = app(SourceWorkbookImportService::class);
-        $method = match ($this->importTable) {
-            'installed-products' => 'importProductDatabase',
-            'service-requests' => 'importServiceRequests',
-            'technical-reports' => 'importTechnicalReports',
-            'history-reports' => 'importHistoricalTsms',
-            'personnel' => 'importPersonnel',
-            default => null,
-        };
-
-        if ($method === null) {
-            $this->addError('importTable', 'Unsupported table.');
+        if ($targets === null) {
+            $this->addError('importMapping', 'This table does not support mapped imports.');
 
             return;
         }
 
-        $batch = $importer->{$method}($fullPath, auth()->id());
+        $mapping = collect($this->importMapping)
+            ->map(fn ($letter): string => strtoupper(trim((string) $letter)));
+
+        $missing = collect($targets['fields'])
+            ->filter(fn (array $field): bool => $field['required'] && ($mapping[$field['key']] ?? '') === '')
+            ->pluck('label');
+
+        if ($missing->isNotEmpty()) {
+            $this->addError('importMapping', 'Map the required field(s) first: '.$missing->implode(', ').'.');
+
+            return;
+        }
+
+        $used = $mapping->filter(fn (string $letter): bool => $letter !== '');
+
+        if ($used->isEmpty()) {
+            $this->addError('importMapping', 'Map at least one column before importing.');
+
+            return;
+        }
+
+        $duplicates = $used->duplicates();
+
+        if ($duplicates->isNotEmpty()) {
+            $this->addError('importMapping', 'Multiple fields map to column '.$duplicates->first().'. Each source column can be used once.');
+
+            return;
+        }
+
+        $validLetters = collect($this->importPreview['columns'] ?? [])->pluck('letter')->flip();
+        $invalid = $used->reject(fn (string $letter): bool => $validLetters->has($letter));
+
+        if ($invalid->isNotEmpty()) {
+            $this->addError('importMapping', 'Column '.$invalid->first().' does not exist on this sheet.');
+
+            return;
+        }
+
+        try {
+            $batch = app(SourceWorkbookImportService::class)->importMapped(
+                storage_path('app/'.$this->importStoredPath),
+                $this->tableKey(),
+                $this->importSheet,
+                $mapping->all(),
+                $this->importHeaderRow,
+                max($this->importHeaderRow + 1, $this->importDataStart),
+                auth()->id(),
+            );
+        } catch (InvalidArgumentException|RuntimeException $exception) {
+            $this->addError('importMapping', $exception->getMessage());
+
+            return;
+        }
+
+        app(ImportMappingService::class)->rememberMapping($this->tableKey(), $mapping->all());
+
         $this->lastImportId = $batch->id;
         $this->importResult = [
             'status' => $batch->status,
             'processed' => $batch->processed_rows,
             'failed' => $batch->failed_rows,
         ];
-        $this->reset(['importFile', 'importTable']);
+    }
+
+    /** Clear the whole wizard (file, preview, mapping, result). */
+    public function resetImportWizard(): void
+    {
+        $this->reset(['importFile', 'importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
+    }
+
+    private function refreshImportPreview(?int $headerRow, ?int $dataStart): void
+    {
+        try {
+            $this->applyImportPreview(app(ImportMappingService::class)->previewSheet(
+                storage_path('app/'.$this->importStoredPath),
+                $this->importSheet,
+                $headerRow,
+                $dataStart,
+            ));
+        } catch (Throwable) {
+            $this->addError('importSheet', 'That sheet could not be previewed.');
+        }
+    }
+
+    private function applyImportPreview(array $preview): void
+    {
+        $this->importPreview = $preview;
+        $this->importSheet = (string) ($preview['sheet'] ?? '');
+        $this->importHeaderRow = (int) ($preview['headerRow'] ?? 1);
+        $this->importDataStart = (int) ($preview['dataStart'] ?? 2);
     }
 
     public function exportExcel(): mixed
@@ -1266,6 +1437,7 @@ abstract class ManagedTable extends Component
 
     /**
      * Neutralize spreadsheet formula injection: values beginning with =, +, -,
+     *
      * @, tab or CR would be evaluated as formulas when the exported workbook is
      * opened in Excel. Prefix with an apostrophe so they render as text.
      */
@@ -1391,6 +1563,12 @@ abstract class ManagedTable extends Component
     {
         $rows = $this->rows();
         $columns = $this->orderedColumns();
+        $importTargets = ImportMappingService::TARGETS[$this->tableKey()] ?? null;
+        $importMissingRequired = collect($importTargets['fields'] ?? [])
+            ->filter(fn (array $field): bool => $field['required'] && trim((string) ($this->importMapping[$field['key']] ?? '')) === '')
+            ->pluck('label')
+            ->values()
+            ->all();
 
         return view('livewire.managed-table', [
             'rows' => $rows,
@@ -1401,7 +1579,9 @@ abstract class ManagedTable extends Component
                 ? $this->model()::query()->whereNotNull('archived_at')->count()
                 : 0,
             'statuses' => $this->statusOptions(),
-            'tableOptions' => $this->tableOptions,
+            'importTargets' => $importTargets,
+            'importMappedCount' => collect($this->importMapping)->filter(fn ($letter): bool => trim((string) $letter) !== '')->count(),
+            'importMissingRequired' => $importMissingRequired,
             'importResult' => $this->importResult,
             'title' => $this->title(),
             'description' => $this->description(),

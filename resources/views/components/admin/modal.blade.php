@@ -9,6 +9,7 @@
     $sizeClass = match ($size) {
         'sm' => 'max-w-md',
         'lg' => 'max-w-2xl',
+        'xl' => 'max-w-5xl',
         default => 'max-w-lg',
     };
 @endphp

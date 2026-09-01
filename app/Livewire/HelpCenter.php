@@ -12,7 +12,7 @@ class HelpCenter extends Component
     public function render(): View
     {
         $faqs = [
-            ['q' => 'How do I import a table?', 'a' => 'Open Tables, then use the Import table button on a managed table page. Upload the matching Excel/CSV; existing records update by their stable identifier.'],
+            ['q' => 'How do I import a table?', 'a' => 'Open the target table, click Import table, and upload the Excel/CSV. The wizard previews the sheet, then you hand-map each app field to a source column before the official import runs. Your mapping is remembered for the next import.'],
             ['q' => 'Which tables are available?', 'a' => 'Product Database (PDB), Service Requests, Technical Reports, History Reports (MCBTSi TSMS), and Technical Personnel. They are the single source for dashboards and visualization.'],
             ['q' => 'Who can edit table rows?', 'a' => 'Only Superadmin can edit cell values inline and run imports. Presidents and managers see the tables read-only.'],
             ['q' => 'How do I navigate the grid?', 'a' => 'Drag headers to reorder, drag edges to resize, right-click a header to freeze or hide it, and use the density selector (Condensed/Standard/Comfortable) above the grid. Column layouts are saved per account.'],

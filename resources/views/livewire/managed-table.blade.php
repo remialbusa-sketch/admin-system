@@ -234,35 +234,194 @@
         </div>
     </x-admin.modal>
 
-    <x-admin.modal name="import-table" title="Import table" description="Re-import the matching Excel/CSV into this managed table. Existing records are updated by stable identifiers.">
-        <form wire:submit="startImport" class="space-y-5">
-            <div>
-                <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Source table</label>
-                <select wire:model="importTable" class="admin-control w-full">
-                    <option value="">Select the table you are importing into...</option>
-                    @foreach ($tableOptions as $key => $label)
-                        <option value="{{ $key }}">{{ $label }}</option>
-                    @endforeach
-                </select>
-                <x-input-error :messages="$errors->get('importTable')" class="mt-1.5" />
+    {{-- Import wizard, step 1: upload + preview. Nothing is imported until
+         the user confirms a manual column mapping in the second popup.
+         Import is a Superadmin action, so the whole wizard (including the
+         field catalog below) only renders for editors. --}}
+    @if ($editable)
+    @php
+        $importStep = $importResult ? 3 : ($importPreview ? 2 : 1);
+    @endphp
+
+    <x-admin.modal name="import-table" title="Import table" description="Upload the Excel/CSV source, preview it, then map its columns to this table before the official import runs. Existing records are updated by stable identifiers." size="lg">
+        <div class="space-y-5">
+            <div class="flex items-center gap-2">
+                @foreach ([1 => 'Source file', 2 => 'Map columns', 3 => 'Import'] as $importStepIndex => $importStepLabel)
+                    <span class="flex items-center gap-2">
+                        <span class="flex h-6 w-6 items-center justify-center rounded-full border text-[11px] font-bold tabular-nums {{ $importStepIndex < $importStep ? 'border-primary bg-primary text-primary-content' : ($importStepIndex === $importStep ? 'border-primary text-primary' : 'border-base-300 text-base-content/40') }}">
+                            @if ($importStepIndex < $importStep)
+                                <x-mary-icon name="o-check" class="h-3.5 w-3.5" />
+                            @else
+                                {{ $importStepIndex }}
+                            @endif
+                        </span>
+                        <span class="text-[11px] font-bold uppercase tracking-[0.1em] {{ $importStepIndex === $importStep ? 'text-base-content' : 'text-base-content/45' }}">{{ $importStepLabel }}</span>
+                    </span>
+                    @if ($importStepIndex < 3)
+                        <span class="h-px w-5 bg-base-300" aria-hidden="true"></span>
+                    @endif
+                @endforeach
             </div>
+
             <div>
                 <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Excel / CSV file</label>
                 <input type="file" wire:model="importFile" class="admin-control w-full">
                 <x-input-error :messages="$errors->get('importFile')" class="mt-1.5" />
+                <span class="mt-1 block text-xs text-base-content/50" wire:loading wire:target="importFile">Analyzing workbook...</span>
             </div>
-            @if ($importResult)
-                <div class="rounded-md border border-success/30 bg-success/10 p-3 text-sm text-success">
-                    Import {{ $importResult['status'] }}: {{ $importResult['processed'] }} processed, {{ $importResult['failed'] }} failed.
+
+            @if ($importPreview)
+                @if (count($importAnalysis['sheets'] ?? []) > 1)
+                    <div class="max-w-xs">
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Sheet</label>
+                        <select wire:model.live="importSheet" class="admin-control w-full">
+                            @foreach ($importAnalysis['sheets'] as $importSheetOption)
+                                <option value="{{ $importSheetOption['name'] }}">{{ $importSheetOption['name'] }}</option>
+                            @endforeach
+                        </select>
+                        <x-input-error :messages="$errors->get('importSheet')" class="mt-1.5" />
+                    </div>
+                @endif
+
+                <div class="flex flex-wrap items-end gap-4">
+                    <div>
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Header row</label>
+                        <input type="number" min="1" wire:model.live.debounce.400ms="importHeaderRow" class="admin-control w-24 tabular-nums">
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">First data row</label>
+                        <input type="number" min="{{ $importHeaderRow + 1 }}" wire:model.live.debounce.400ms="importDataStart" class="admin-control w-24 tabular-nums">
+                    </div>
+                    <div class="ml-auto flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.08em]">
+                        <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums">{{ number_format($importPreview['totalRows']) }} data rows</span>
+                        <span class="rounded-full bg-base-200 px-3 py-1 text-base-content/60 tabular-nums">{{ $importPreview['totalColumns'] }} columns</span>
+                    </div>
                 </div>
+
+                <div class="overflow-x-auto rounded-md border border-base-300">
+                    <table class="min-w-full border-collapse text-left text-xs">
+                        <thead>
+                            <tr class="border-b border-base-300 bg-base-200/60">
+                                <th class="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-base-content/45">Row</th>
+                                @foreach (array_slice($importPreview['columns'], 0, 12) as $importPreviewColumn)
+                                    <th class="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-base-content/45">{{ $importPreviewColumn['letter'] }}</th>
+                                @endforeach
+                            </tr>
+                            <tr class="border-b border-base-300">
+                                <th class="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-primary">Header</th>
+                                @foreach (array_slice($importPreview['columns'], 0, 12) as $importPreviewColumn)
+                                    <th class="max-w-[150px] truncate px-3 py-2 font-semibold text-base-content" title="{{ $importPreviewColumn['label'] ?? '(untitled)' }}">{{ $importPreviewColumn['label'] ?? '(untitled)' }}</th>
+                                @endforeach
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-base-300">
+                            @forelse ($importPreview['sampleRows'] as $importSampleRow)
+                                <tr class="hover:bg-base-200/50">
+                                    <td class="px-3 py-1.5 tabular-nums text-base-content/40">{{ $importSampleRow['rowNumber'] }}</td>
+                                    @foreach (array_slice($importPreview['columns'], 0, 12) as $importPreviewColumn)
+                                        <td class="max-w-[150px] truncate px-3 py-1.5 text-base-content/80" title="{{ $importSampleRow['cells'][$importPreviewColumn['letter']] ?? '' }}">{{ $importSampleRow['cells'][$importPreviewColumn['letter']] ?? '' }}</td>
+                                    @endforeach
+                                </tr>
+                            @empty
+                                <tr><td colspan="13" class="px-3 py-4 text-center text-base-content/50">No data rows below the header - adjust the row numbers above.</td></tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+                <p class="text-xs text-base-content/50">Showing the first {{ min(12, $importPreview['totalColumns']) }} of {{ $importPreview['totalColumns'] }} columns and up to 4 sample rows.</p>
             @endif
+
             <div class="flex items-center justify-end gap-2 border-t border-base-300 pt-4">
                 <button type="button" x-on:click="$dispatch('close-modal', { name: 'import-table' })" class="admin-secondary-button">Close</button>
-                <button type="submit" class="admin-primary-button" wire:loading.attr="disabled">
-                    <span wire:loading.remove wire:target="startImport">Start import</span>
-                    <span wire:loading wire:target="startImport">Importing...</span>
+                <button type="button" wire:click="openImportMapping" x-on:click="$dispatch('close-modal', { name: 'import-table' })" @disabled(! $importPreview) class="admin-primary-button" wire:loading.attr="disabled" wire:target="importFile">
+                    <x-mary-icon name="o-table-cells" class="h-4 w-4" />
+                    Map columns
+                    <x-mary-icon name="o-arrow-right" class="h-4 w-4" />
                 </button>
             </div>
-        </form>
+        </div>
     </x-admin.modal>
+
+    {{-- Import wizard, step 2: the manual mapping popup. The user binds each
+         app field to a source column by hand; the official import only runs
+         from here. --}}
+    <x-admin.modal name="import-mapping" title="Map columns{{ isset($importTargets['label']) ? ' - '.$importTargets['label'] : '' }}" description="Bind each app field to a source column from {{ $importSheet ?: 'the file' }}. Only mapped columns are imported; existing records are updated by stable identifiers." size="xl">
+        <div class="space-y-4">
+            @if ($importResult)
+                <div class="rounded-md border p-3 text-sm {{ ($importResult['failed'] ?? 0) > 0 || $importResult['status'] === 'failed' ? 'border-error/30 bg-error/10 text-error' : 'border-success/30 bg-success/10 text-success' }}">
+                    <p class="font-semibold">Import {{ str_replace('_', ' ', $importResult['status']) }}.</p>
+                    <p class="mt-0.5 text-xs opacity-80">{{ number_format($importResult['processed']) }} processed, {{ number_format($importResult['failed']) }} failed &middot; batch #{{ $lastImportId }}</p>
+                </div>
+            @else
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-primary tabular-nums">{{ $importMappedCount }} / {{ count($importTargets['fields'] ?? []) }} fields mapped</span>
+                    @foreach ($importMissingRequired as $importMissingLabel)
+                        <span class="rounded-full bg-error/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-error">Required: {{ $importMissingLabel }}</span>
+                    @endforeach
+                </div>
+            @endif
+
+            <div class="max-h-[46vh] divide-y divide-base-300 overflow-y-auto rounded-md border border-base-300">
+                @foreach ($importTargets['fields'] ?? [] as $importField)
+                    @php
+                        $importMappedColumn = collect($importPreview['columns'] ?? [])->firstWhere('letter', $importMapping[$importField['key']] ?? '');
+                        $importMappedSamples = collect($importMappedColumn['samples'] ?? [])->filter()->take(2)->implode(' | ');
+                    @endphp
+                    <div class="grid grid-cols-1 items-center gap-2 px-4 py-2.5 sm:grid-cols-[minmax(0,200px)_minmax(0,1fr)_minmax(0,200px)] sm:gap-3 {{ $importField['required'] && ($importMapping[$importField['key']] ?? '') === '' ? 'bg-error/5' : '' }}">
+                        <div class="min-w-0">
+                            <p class="truncate text-sm font-semibold text-base-content">
+                                {{ $importField['label'] }}
+                                @if ($importField['required'])
+                                    <span class="ml-0.5 text-error" title="Required field">*</span>
+                                @endif
+                            </p>
+                            <p class="text-[11px] uppercase tracking-[0.06em] text-base-content/45">{{ $importField['kind'] }}</p>
+                        </div>
+                        <div class="min-w-0">
+                            <select wire:model.live="importMapping.{{ $importField['key'] }}" class="admin-control w-full font-mono text-xs" @disabled((bool) $importResult)>
+                                <option value="">-- not mapped --</option>
+                                @foreach ($importPreview['columns'] ?? [] as $importPreviewColumn)
+                                    <option value="{{ $importPreviewColumn['letter'] }}">{{ $importPreviewColumn['letter'] }} &middot; {{ $importPreviewColumn['label'] ?? '(untitled)' }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <p class="hidden truncate text-xs text-base-content/50 sm:block" title="{{ $importMappedSamples }}">
+                            @if ($importMappedSamples !== '')
+                                e.g. {{ $importMappedSamples }}
+                            @else
+                                --
+                            @endif
+                        </p>
+                    </div>
+                @endforeach
+            </div>
+
+            <x-input-error :messages="$errors->get('importMapping')" class="" />
+
+            <div class="flex items-center justify-between gap-2 border-t border-base-300 pt-4">
+                <div>
+                    @if ($importResult)
+                        <button type="button" wire:click="resetImportWizard" x-on:click="$dispatch('close-modal', { name: 'import-mapping' }); $dispatch('open-modal', { name: 'import-table' })" class="admin-secondary-button">
+                            <x-mary-icon name="o-arrow-path" class="h-4 w-4" />
+                            New import
+                        </button>
+                    @else
+                        <button type="button" x-on:click="$dispatch('close-modal', { name: 'import-mapping' }); $dispatch('open-modal', { name: 'import-table' })" class="admin-secondary-button">Back</button>
+                    @endif
+                </div>
+                <div class="flex items-center gap-2">
+                    <button type="button" x-on:click="$dispatch('close-modal', { name: 'import-mapping' }); $dispatch('close-modal', { name: 'import-table' })" class="admin-secondary-button">
+                        {{ $importResult ? 'Done' : 'Cancel' }}
+                    </button>
+                    @if (! $importResult)
+                        <button type="button" wire:click="executeMappedImport" class="admin-primary-button" wire:loading.attr="disabled" wire:target="executeMappedImport">
+                            <span wire:loading.remove wire:target="executeMappedImport">Start import ({{ number_format($importPreview['totalRows'] ?? 0) }} rows)</span>
+                            <span wire:loading wire:target="executeMappedImport">Importing...</span>
+                        </button>
+                    @endif
+                </div>
+            </div>
+        </div>
+    </x-admin.modal>
+    @endif
 </div>
