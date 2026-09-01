@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Exports\ManagedTableExport;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
+use App\Models\RecordEditLog;
 use App\Models\TableColumnOption;
 use App\Models\TableColumnPreference;
 use App\Services\ColumnTypeRegistry;
@@ -17,6 +18,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 use Livewire\WithPagination;
@@ -38,9 +40,9 @@ abstract class ManagedTable extends Component
 
     public string $search = '';
 
+    /** URL-bound (as ?status=…) so dashboard/status drill-downs can deep-link. */
+    #[Url(as: 'status')]
     public ?string $statusFilter = null;
-
-    public ?int $pmsFrequencyFilter = null;
 
     public $importFile = null;
 
@@ -85,6 +87,34 @@ abstract class ManagedTable extends Component
     public function canEdit(): bool
     {
         return auth()->user()?->role === UserRole::Superadmin;
+    }
+
+    /**
+     * Exports contain the full customer/personnel dataset, so they are gated
+     * to provisioned staff accounts (any role in the enum). This used to be
+     * the one completely ungated mutation — it now fails closed for any
+     * role-less account.
+     */
+    public function canExport(): bool
+    {
+        return auth()->user()?->role !== null;
+    }
+
+    /**
+     * Active drill-down filters applied from a dashboard deep-link
+     * (?status=…, ?brand=…). Subclasses override to surface them as
+     * removable chips above the grid.
+     *
+     * @return array<string, string>
+     */
+    public function drillDownFilters(): array
+    {
+        return [];
+    }
+
+    public function clearDrillDown(): void
+    {
+        //
     }
 
     /**
@@ -151,19 +181,24 @@ abstract class ManagedTable extends Component
 
         $model = $this->model();
         $record = $model::query()->findOrFail($id);
+        $old = $record->getAttribute($field);
 
         if (str_contains($field, '.')) {
             [$relationName, $relatedField] = explode('.', $field, 2);
             $related = $record->{$relationName};
 
             if ($related) {
+                $old = $related->getAttribute($relatedField);
                 $related->update([$relatedField => $resolvedValue]);
             }
+
+            $this->logEdit($record->getKey(), 'updated', $field, $old, $resolvedValue);
 
             return;
         }
 
         $record->update([$field => $resolvedValue]);
+        $this->logEdit($record->getKey(), 'updated', $field, $old, $resolvedValue);
     }
 
     /**
@@ -187,6 +222,12 @@ abstract class ManagedTable extends Component
             return;
         }
 
+        $existing = CustomTableColumnValue::query()
+            ->where('custom_column_id', $column->id)
+            ->where('row_id', $rowId)
+            ->first();
+        $old = $existing?->value;
+
         $shadow = $type->toShadowFields($validated);
 
         CustomTableColumnValue::query()->updateOrCreate(
@@ -196,6 +237,14 @@ abstract class ManagedTable extends Component
                 'value_text' => $shadow['value_text'] ?? $shadow['value_date'] ?? null,
                 'value_number' => $shadow['value_number'] ?? null,
             ],
+        );
+
+        $this->logEdit(
+            $rowId,
+            $existing ? 'updated' : 'created',
+            $column->name,
+            $old === null ? null : json_encode($old, JSON_UNESCAPED_UNICODE),
+            json_encode($validated, JSON_UNESCAPED_UNICODE),
         );
     }
 
@@ -263,6 +312,8 @@ abstract class ManagedTable extends Component
 
         $record = $model::query()->create($direct);
 
+        $this->logEdit($record->getKey(), 'created');
+
         return $record->getKey();
     }
 
@@ -275,6 +326,8 @@ abstract class ManagedTable extends Component
 
         $model = $this->model();
         $model::query()->findOrFail($id)->delete();
+
+        $this->logEdit($id, 'deleted');
     }
 
     /**
@@ -295,6 +348,28 @@ abstract class ManagedTable extends Component
 
         $model = $this->model();
         $model::query()->whereKey($ids)->delete();
+
+        foreach ($ids as $id) {
+            $this->logEdit($id, 'deleted');
+        }
+    }
+
+    /**
+     * Append one entry to the manual-edit audit trail (who changed which
+     * record, when). Import-driven changes are tracked by import batches;
+     * this covers human edits for accountability.
+     */
+    private function logEdit(int $rowId, string $action, ?string $field = null, mixed $old = null, mixed $new = null): void
+    {
+        RecordEditLog::create([
+            'user_id' => auth()->id(),
+            'table_key' => $this->tableKey(),
+            'row_id' => $rowId,
+            'action' => $action,
+            'field' => $field,
+            'old_value' => $old === null ? null : (string) $old,
+            'new_value' => $new === null ? null : (string) $new,
+        ]);
     }
 
     /**
@@ -959,6 +1034,8 @@ abstract class ManagedTable extends Component
 
     public function exportExcel(): mixed
     {
+        abort_unless($this->canExport(), 403);
+
         $columns = collect($this->orderedColumns())
             ->reject(fn (array $column): bool => $column['hidden'] ?? false)
             ->values()
@@ -967,9 +1044,31 @@ abstract class ManagedTable extends Component
         $query = $this->query();
         $query = $this->applyColumnFilters($query, $this->allColumns());
         $query = $this->applySort($query, $this->allColumns());
-        $records = $query->get();
 
-        $exportRows = $this->buildExportRows($records, $columns);
+        // Hydrate in bounded chunks — the old unbounded ->get() pulled every
+        // matching row (raw_data casts included) into memory at once.
+        $registry = app(ColumnTypeRegistry::class);
+        $exportRows = [];
+        $query->chunk(500, function (Collection $records) use (&$exportRows, $columns, $registry): void {
+            $customValues = $this->loadCustomValues($records, $columns);
+
+            foreach ($records as $record) {
+                $exportRows[] = array_map(function (array $column) use ($record, $customValues, $registry): string {
+                    if ($column['custom'] ?? false) {
+                        $value = $customValues->get($record->id)?->get($column['custom_id']);
+
+                        return $this->safeExportValue(
+                            $value?->value ? $registry->resolve($column['type'])->toDisplayString($value->value) : '',
+                        );
+                    }
+
+                    $raw = $this->normalizeCoreValue(data_get($record, $column['key']), $column['type']);
+
+                    return $raw === null ? '' : $this->safeExportValue((string) $raw);
+                }, $columns);
+            }
+        });
+
         $headings = array_map(fn (array $column): string => $column['label'], $columns);
 
         return Excel::download(
@@ -978,24 +1077,14 @@ abstract class ManagedTable extends Component
         );
     }
 
-    protected function buildExportRows(Collection $records, array $columns): array
+    /**
+     * Neutralize spreadsheet formula injection: values beginning with =, +, -,
+     * @, tab or CR would be evaluated as formulas when the exported workbook is
+     * opened in Excel. Prefix with an apostrophe so they render as text.
+     */
+    private function safeExportValue(string $value): string
     {
-        $customValues = $this->loadCustomValues($records, $columns);
-        $registry = app(ColumnTypeRegistry::class);
-
-        return $records->map(function ($record) use ($columns, $customValues, $registry): array {
-            return array_map(function (array $column) use ($record, $customValues, $registry): string {
-                if ($column['custom'] ?? false) {
-                    $value = $customValues->get($record->id)?->get($column['custom_id']);
-
-                    return $value?->value ? $registry->resolve($column['type'])->toDisplayString($value->value) : '';
-                }
-
-                $raw = $this->normalizeCoreValue(data_get($record, $column['key']), $column['type']);
-
-                return $raw === null ? '' : (string) $raw;
-            }, $columns);
-        })->all();
+        return preg_match('/^[=+\-@\t\r]/', $value) === 1 ? "'".$value : $value;
     }
 
     /**

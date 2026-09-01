@@ -5,8 +5,13 @@ use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
 Route::middleware('guest')->group(function () {
-    Volt::route('register', 'pages.auth.register')
-        ->name('register');
+    // Registration is disabled by default (config/features.php) — internal
+    // workspace, accounts are provisioned by a Superadmin. When re-enabled,
+    // new users still must verify their email (User implements MustVerifyEmail).
+    if (config('features.allow_registration')) {
+        Volt::route('register', 'pages.auth.register')
+            ->name('register');
+    }
 
     Volt::route('login', 'pages.auth.login')
         ->name('login');

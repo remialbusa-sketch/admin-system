@@ -2,8 +2,13 @@
 
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schedule;
 use App\Services\SourceWorkbookImportService;
 use Illuminate\Support\Str;
+
+// Weekly leadership digest — Monday 07:00. Requires a working mailer
+// (MAIL_MAILER=smtp in production; 'log' locally writes it to storage/logs).
+Schedule::command('app:send-exec-digest')->weeklyOn(1, '07:00');
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());

@@ -9,17 +9,14 @@ use Illuminate\Support\Carbon;
 
 class TspAnalyticsService
 {
-    private const BRANCH_TO_REGION = [
-        'NCR' => 'NCR',
-        'NLR1' => 'North Luzon', 'NLR2' => 'North Luzon', 'NLR3' => 'North Luzon', 'North Luzon' => 'North Luzon',
-        'CEB' => 'Visayas', 'BAC' => 'Visayas', 'ILO' => 'Visayas', 'TAC' => 'Visayas',
-        'DAV' => 'Mindanao', 'CDO' => 'Mindanao', 'ZAM' => 'Mindanao', 'SL' => 'Mindanao',
-    ];
-
     private const REGIONS = ['NCR', 'North Luzon', 'Visayas', 'Mindanao'];
 
     public function summary(string $region = 'All regions'): array
     {
+        // Counts come straight from the canonical columns the importer writes
+        // (personnel.region, service_requests.region + normalized group_status)
+        // instead of mapping branches in PHP with an exact-case lookup that
+        // silently dropped unknown branches into 'Other'.
         $activeTspByRegion = TechnicalPersonnel::query()
             ->where(function ($query): void {
                 $query->where('position', 'like', '%Service%')
@@ -27,19 +24,19 @@ class TspAnalyticsService
                     ->orWhere('position', 'like', '%TSP%');
             })
             ->whereNotNull('region')
-            ->get()
+            ->selectRaw('region, COUNT(*) as total')
             ->groupBy('region')
-            ->map(fn ($group) => $group->count())
+            ->pluck('total', 'region')
             ->all();
 
         $totalActive = (int) array_sum($activeTspByRegion);
 
         $openByRegion = ServiceRequest::query()
-            ->whereNotNull('branch')
-            ->whereIn('ticket_status', ['OPEN', 'In-Progress', 'For Continuation', 'For Escalation'])
-            ->get()
-            ->groupBy(fn ($row) => self::BRANCH_TO_REGION[trim((string) $row->branch)] ?? 'Other')
-            ->map(fn ($group) => $group->count())
+            ->whereNotNull('region')
+            ->whereIn('group_status', ['Open', 'In-Progress', 'For Continuation', 'For Escalation'])
+            ->selectRaw('region, COUNT(*) as total')
+            ->groupBy('region')
+            ->pluck('total', 'region')
             ->all();
 
         $regionalData = collect(self::REGIONS)->map(function (string $regionName) use ($activeTspByRegion, $openByRegion): array {
@@ -70,12 +67,10 @@ class TspAnalyticsService
                 ->whereNotNull('service_completed_at')
                 ->whereBetween('service_completed_at', [$start, $end])
                 ->count();
-            $sla = $completed > 0 ? min(100, round(($completed / max(1, $completed)) * 100)) : 0;
 
             return [
                 'label' => $start->format('M d'),
                 'resolved' => $completed,
-                'sla' => $sla,
             ];
         })->all();
 
@@ -132,7 +127,7 @@ class TspAnalyticsService
         ];
 
         $top = (clone $query)
-            ->selectRaw('tsp_name, COUNT(*) as reports, SUM(CASE WHEN service_status = ? THEN 1 ELSE 0 END) as completed, AVG(repair_time_hours) as avg_repair', ['Completed'])
+            ->selectRaw("tsp_name, MAX(COALESCE(NULLIF(tsp_display_name, ''), tsp_name)) as display_name, COUNT(*) as reports, SUM(CASE WHEN service_status = ? THEN 1 ELSE 0 END) as completed, AVG(repair_time_hours) as avg_repair", ['Completed'])
             ->groupBy('tsp_name')
             ->orderByDesc('reports')
             ->limit(25)
@@ -142,7 +137,9 @@ class TspAnalyticsService
                 $completed = (int) $row->completed;
 
                 return [
-                    'tsp_name' => $row->tsp_name,
+                    // Real display name; the raw tsp_name is a workbook ID
+                    // (person-XXXX…) that means nothing to people.
+                    'tsp_name' => $row->display_name ?: $row->tsp_name,
                     'reports' => $reports,
                     'completed' => $completed,
                     'completion_rate' => $reports > 0 ? round(($completed / $reports) * 100, 1) : 0,
@@ -171,12 +168,14 @@ class TspAnalyticsService
 
     public function tspOptions(): array
     {
+        // value = the raw tsp_name (workbook ID) used for filtering;
+        // label = the real display name so the dropdown reads like a roster.
         return TechnicalReport::query()
-            ->whereNotNull('tsp_name')
-            ->where('tsp_name', '<>', '')
-            ->distinct()
-            ->orderBy('tsp_name')
-            ->pluck('tsp_name')
+            ->whereNotNull('tsp_name')->where('tsp_name', '<>', '')
+            ->selectRaw("tsp_name, MAX(COALESCE(NULLIF(tsp_display_name, ''), tsp_name)) as label")
+            ->groupBy('tsp_name')
+            ->orderBy('label')
+            ->pluck('label', 'tsp_name')
             ->all();
     }
 }

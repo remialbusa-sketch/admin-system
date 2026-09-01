@@ -54,7 +54,34 @@
                     </div>
                 </div>
             @empty
-                <p class="py-6 text-center text-sm text-base-content/55">No imports yet.</p>
+                <x-admin.empty-state
+                    icon="o-arrow-up-tray"
+                    title="No imports yet"
+                    description="Import an Excel/CSV source into a managed table and it will be tracked here with a batch ID and row counts."
+                />
+            @endforelse
+        </div>
+    </section>
+
+    <section class="admin-surface p-5 sm:p-6">
+        <h2 class="text-base font-bold text-base-content">Recent manual edits</h2>
+        <p class="mt-1 text-xs text-base-content/55">Who changed which record by hand — import-driven updates are tracked under Recent imports.</p>
+        <div class="mt-4 divide-y divide-base-300">
+            @forelse ($recentEdits as $edit)
+                <div class="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                    <div class="min-w-0">
+                        <p class="truncate text-sm font-semibold text-base-content">
+                            {{ ucfirst($edit->action) }}{{ $edit->field ? ' · '.$edit->field : '' }}
+                            <span class="font-normal text-base-content/50">on {{ $edit->table_key }} #{{ $edit->row_id }}</span>
+                        </p>
+                        <p class="text-xs text-base-content/50">{{ $edit->user?->name ?? 'System' }} · {{ $edit->created_at->diffForHumans() }}</p>
+                    </div>
+                    <div class="hidden max-w-[28ch] truncate text-right text-xs text-base-content/45 sm:block" title="{{ $edit->old_value ?? '' }} → {{ $edit->new_value ?? '' }}">
+                        {{ Str::limit(($edit->old_value ?? '∅').' → '.($edit->new_value ?? '∅'), 40) }}
+                    </div>
+                </div>
+            @empty
+                <p class="py-3 text-sm text-base-content/45">No manual edits yet — only Superadmins can edit records.</p>
             @endforelse
         </div>
     </section>

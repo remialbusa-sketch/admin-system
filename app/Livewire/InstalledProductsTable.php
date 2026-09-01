@@ -6,10 +6,41 @@ use App\Models\Installation;
 use Illuminate\Contracts\View\View;
 use Illuminate\Validation\Rule;
 use Illuminate\Database\Eloquent\Builder;
+use Livewire\Attributes\Url;
 
 class InstalledProductsTable extends ManagedTable
 {
     public string $branchFilter = 'All branches';
+
+    /**
+     * Dashboard drill-down filters. Each is bound to a URL query parameter so
+     * the executive widgets deep-link straight to the source rows:
+     *   ?brand= / ?machine_type= / ?region= / ?customer= / ?warranty=
+     *   ?pms=missing / ?contract=1 / ?installed=YYYY-MM / ?status= (base class)
+     */
+    #[Url]
+    public ?string $brand = null;
+
+    #[Url(as: 'machine_type')]
+    public ?string $machineType = null;
+
+    #[Url]
+    public ?string $region = null;
+
+    #[Url]
+    public ?string $customer = null;
+
+    #[Url]
+    public ?string $warranty = null;
+
+    #[Url]
+    public ?string $pms = null;
+
+    #[Url]
+    public ?string $installed = null;
+
+    #[Url]
+    public ?string $contract = null;
 
     public function tableKey(): string
     {
@@ -18,7 +49,11 @@ class InstalledProductsTable extends ManagedTable
 
     public function mount(): void
     {
-        $this->statusFilter = 'All statuses';
+        // Deep-linked ?status=… is hydrated before mount — keep it; default
+        // to the sentinel only when no drill-down is present.
+        if ($this->statusFilter === null) {
+            $this->statusFilter = 'All statuses';
+        }
     }
 
     public function updatedBranchFilter(): void
@@ -63,7 +98,59 @@ class InstalledProductsTable extends ManagedTable
                 });
             })
             ->when($this->statusFilter !== 'All statuses' && $this->statusFilter !== null, fn ($query) => $query->where('device_status', $this->statusFilter))
-            ->when($this->branchFilter !== 'All branches', fn ($query) => $query->whereHas('account', fn ($query) => $query->where('branch', $this->branchFilter)));
+            ->when($this->branchFilter !== 'All branches', fn ($query) => $query->whereHas('account', fn ($query) => $query->where('branch', $this->branchFilter)))
+            // Dashboard drill-down filters (URL-bound).
+            ->when($this->brand !== null && $this->brand !== '', fn ($query) => $query->where('brand', 'like', '%'.$this->brand.'%'))
+            ->when($this->machineType !== null && $this->machineType !== '', fn ($query) => $query->where('machine_type', $this->machineType))
+            ->when($this->region !== null && $this->region !== '', fn ($query) => $query->whereHas('account', fn ($query) => $query->where('region', $this->region)))
+            ->when($this->customer !== null && $this->customer !== '', fn ($query) => $query->whereHas('account', fn ($query) => $query->where('customer_name', 'like', '%'.$this->customer.'%')))
+            ->when($this->warranty === 'covered', fn ($query) => $query->whereRaw("lower(trim(warranty_status)) = 'yes'"))
+            ->when($this->warranty === 'expiring_90d', fn ($query) => $query->whereNotNull('warranty_end_date')
+                ->whereDate('warranty_end_date', '>=', now()->toDateString())
+                ->whereDate('warranty_end_date', '<=', now()->addDays(90)->toDateString()))
+            ->when($this->warranty === 'expired', fn ($query) => $query->whereNotNull('warranty_end_date')
+                ->whereDate('warranty_end_date', '<', now()->toDateString()))
+            ->when($this->pms === 'missing', fn ($query) => $query->whereNull('pms_frequency'))
+            ->when($this->contract !== null && $this->contract !== '', fn ($query) => $query->whereRaw("lower(trim(service_contract_status)) in ('yes', 'renewal')"))
+            ->when($this->installed !== null && preg_match('/^\d{4}-\d{2}$/', $this->installed) === 1, function ($query): void {
+                [$year, $month] = explode('-', $this->installed);
+                $query->whereYear('installation_date', (int) $year)->whereMonth('installation_date', (int) $month);
+            });
+    }
+
+    /**
+     * Drill-down filters currently applied via URL, shown as chips above the
+     * grid so the operator can see (and clear) why the table is narrowed.
+     *
+     * @return array<string, string>
+     */
+    public function drillDownFilters(): array
+    {
+        return array_filter([
+            'Device status' => ($this->statusFilter !== null && $this->statusFilter !== 'All statuses') ? $this->statusFilter : null,
+            'Brand' => $this->brand,
+            'Machine type' => $this->machineType,
+            'Region' => $this->region,
+            'Customer' => $this->customer,
+            'Warranty' => $this->warranty,
+            'PMS' => $this->pms,
+            'Contract' => $this->contract,
+            'Installed month' => $this->installed,
+        ], fn ($value) => $value !== null && $value !== '');
+    }
+
+    public function clearDrillDown(): void
+    {
+        $this->statusFilter = 'All statuses';
+        $this->brand = null;
+        $this->machineType = null;
+        $this->region = null;
+        $this->customer = null;
+        $this->warranty = null;
+        $this->pms = null;
+        $this->contract = null;
+        $this->installed = null;
+        $this->resetPage();
     }
 
     public function model(): string

@@ -38,8 +38,10 @@ return [
             'database' => env('DB_DATABASE', database_path('database.sqlite')),
             'prefix' => '',
             'foreign_key_constraints' => env('DB_FOREIGN_KEYS', true),
-            'busy_timeout' => null,
-            'journal_mode' => null,
+            // WAL lets dashboard readers and import writers run concurrently
+            // instead of locking each other; busy_timeout absorbs brief locks.
+            'busy_timeout' => 5000,
+            'journal_mode' => 'WAL',
             'synchronous' => null,
             'transaction_mode' => 'DEFERRED',
         ],

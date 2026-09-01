@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\Account;
+use App\Models\CustomTableColumn;
+use App\Models\CustomTableColumnValue;
 use App\Models\HistoricalTsmsReport;
 use App\Models\ImportBatch;
 use App\Models\ImportFailure;
@@ -11,6 +13,7 @@ use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -65,8 +68,7 @@ class SourceWorkbookImportService
                 // re-imports match existing records instead of creating duplicates.
                 $baseData = $data;
                 unset($baseData['pms_frequency'], $baseData['tsp_in_charge']);
-                $sourceId = $this->sourceId($data['no'] ?? null, $baseData, 'product');
-                $hash = $this->rowHash($baseData);
+                $sourceId = $this->sourceId($data['no'] ?? null, $baseData, 'product');                $hash = $this->rowHash($baseData);
                 $accountKey = $this->value($data, 'customer_name') ?: 'unknown-account-'.substr($hash, 0, 16);
                 $account = Account::updateOrCreate(
                     ['source_system' => self::PRODUCT_SOURCE, 'source_record_id' => $accountKey],
@@ -115,6 +117,8 @@ class SourceWorkbookImportService
                 );
             }, $batch);
 
+        $this->dedupeProductRows($batch);
+
         return $this->completeBatch($batch);
     }
 
@@ -131,7 +135,9 @@ class SourceWorkbookImportService
         $this->prepareBatch($batch, $reader, $path, $sheetName);
         $this->processChunks($reader, $path, $sheetName, $headers, function (array $data, int $rowNumber) use ($batch): void {
                 $requestId = $this->value($data, 'service_request_no') ?: $this->value($data, 'service_request');
-                $requestId = $requestId ?: 'row-'.($batch->processed_rows + $batch->failed_rows + 2);
+                // The actual file row number is the stable fallback identity
+                // (counter-based ids drifted once counters were batched).
+                $requestId = $requestId ?: 'row-'.$rowNumber;
 
                 ServiceRequest::updateOrCreate(
                     ['source_system' => self::EXECUTIVE_SOURCE, 'source_record_id' => $requestId],
@@ -308,7 +314,10 @@ class SourceWorkbookImportService
                     'position' => trim((string) $sheet->getCell('D'.$rowNumber)->getValue()),
                     'branch' => trim((string) $sheet->getCell('E'.$rowNumber)->getValue()),
                 ];
-                $sourceId = 'personnel-'.substr($this->rowHash($row), 0, 24);
+                // Key personnel on their name (the stable natural identity) —
+                // the old whole-row hash minted a new row whenever position or
+                // branch changed, orphaning the previous version.
+                $sourceId = 'personnel-'.Str::slug($row['name']);
                 TechnicalPersonnel::updateOrCreate(
                     ['source_system' => self::PERSONNEL_SOURCE, 'source_record_id' => $sourceId],
                     [
@@ -595,52 +604,87 @@ class SourceWorkbookImportService
 
     private function processChunks(IReader $reader, string $path, string $sheetName, array $headers, callable $callback, ImportBatch $batch): void
     {
-        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
-            $handle = fopen($path, 'rb');
-            fgetcsv($handle);
-            $rowNumber = 1;
+        // Counters are flushed per chunk instead of per row (an 8k-row import
+        // used to issue one UPDATE per row just for bookkeeping).
+        $ok = 0;
+        $failed = 0;
+        $flush = function () use ($batch, &$ok, &$failed): void {
+            if ($ok > 0) {
+                $batch->increment('processed_rows', $ok);
+                $ok = 0;
+            }
+            if ($failed > 0) {
+                $batch->increment('failed_rows', $failed);
+                $failed = 0;
+            }
+        };
 
-            while (($row = fgetcsv($handle)) !== false) {
-                $rowNumber++;
-                if (count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
-                    continue;
+        // A structural failure (corrupt sheet, reader error) must leave the
+        // batch as 'failed', never stuck in 'processing' forever.
+        $failStructurally = function (Throwable $exception) use ($batch, $flush): never {
+            $flush();
+            $batch->update(['status' => 'failed', 'completed_at' => now()]);
+            $batch->failures()->create([
+                'error_type' => 'configuration',
+                'error_message' => Str::limit($exception->getMessage(), 1000),
+            ]);
+            $this->invalidateExecutiveCaches($batch);
+            throw $exception;
+        };
+
+        try {
+            if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'csv') {
+                $handle = fopen($path, 'rb');
+                fgetcsv($handle);
+                $rowNumber = 1;
+                $sinceFlush = 0;
+
+                while (($row = fgetcsv($handle)) !== false) {
+                    $rowNumber++;
+                    if (count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
+                        continue;
+                    }
+
+                    $this->runRow($batch, $rowNumber, $row, $callback, $headers) ? $ok++ : $failed++;
+                    if (++$sinceFlush >= 250) {
+                        $flush();
+                        $sinceFlush = 0;
+                    }
                 }
 
-                $this->runRow($batch, $rowNumber, $row, $callback, $headers);
+                fclose($handle);
+                $flush();
+
+                return;
             }
 
-            fclose($handle);
+            $totalRows = $batch->total_rows;
+            $chunkSize = 1000;
 
-            return;
-        }
+            for ($start = 2; $start <= $totalRows + 1; $start += $chunkSize) {
+                $end = min($start + $chunkSize - 1, $totalRows + 1);
+                $reader->setLoadSheetsOnly([$sheetName]);
+                $reader->setReadFilter(new ChunkReadFilter($start, $end));
+                $workbook = $reader->load($path);
+                $sheet = $workbook->getSheetByName($sheetName);
 
-        $totalRows = $batch->total_rows;
-        $chunkSize = 250;
-
-        for ($start = 2; $start <= $totalRows + 1; $start += $chunkSize) {
-            $end = min($start + $chunkSize - 1, $totalRows + 1);
-            $reader->setLoadSheetsOnly([$sheetName]);
-            $reader->setReadFilter(new ChunkReadFilter($start, $end));
-            $workbook = $reader->load($path);
-            $sheet = $workbook->getSheetByName($sheetName);
-
-            if ($sheet) {
-                try {
+                if ($sheet) {
                     foreach ($sheet->toArray(null, true, true, true) as $rowNumber => $row) {
                         if ($rowNumber === 1 || count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
                             continue;
                         }
 
-                        $this->runRow($batch, $rowNumber, $row, $callback, $headers);
+                        $this->runRow($batch, $rowNumber, $row, $callback, $headers) ? $ok++ : $failed++;
                     }
-                } catch (Throwable $exception) {
-                    $this->recordFailure($batch, $start, [], $headers, $exception);
                 }
-            }
 
-            $workbook->disconnectWorksheets();
-            unset($sheet, $workbook);
-            gc_collect_cycles();
+                $flush();
+                $workbook->disconnectWorksheets();
+                unset($sheet, $workbook);
+                gc_collect_cycles();
+            }
+        } catch (Throwable $exception) {
+            $failStructurally($exception);
         }
     }
 
@@ -650,6 +694,7 @@ class SourceWorkbookImportService
             'status' => $batch->failed_rows > 0 ? 'completed_with_errors' : 'completed',
             'completed_at' => now(),
         ]);
+        $this->invalidateExecutiveCaches($batch);
 
         return $batch->refresh();
     }
@@ -658,11 +703,115 @@ class SourceWorkbookImportService
     {
         $batch->update(['status' => 'failed', 'completed_at' => now()]);
         $batch->failures()->create(['error_type' => 'configuration', 'error_message' => $message]);
+        $this->invalidateExecutiveCaches($batch);
 
         return $batch->refresh();
     }
 
-    private function runRow(ImportBatch $batch, int $rowNumber, array $row, callable $callback, array $headers): void
+    /**
+     * The Home dashboard is a Product Database overview and Technical Service
+     * Analysis is a Technical Reports overview — both cached. Product imports
+     * drop the product keys; executive-dashboard imports (service requests +
+     * technical reports) drop the TSA keys.
+     */
+    private function invalidateExecutiveCaches(?ImportBatch $batch): void
+    {
+        if ($batch?->source_system === self::PRODUCT_SOURCE) {
+            $this->forgetProductSummaryCache();
+
+            return;
+        }
+
+        if ($batch?->source_system === self::EXECUTIVE_SOURCE) {
+            $this->forgetTsaSummaryCache();
+        }
+    }
+
+    private function forgetProductSummaryCache(): void
+    {
+        foreach ([...ProductDashboardService::REGIONS, 'all'] as $scope) {
+            foreach (ProductDashboardService::PERIODS as $months) {
+                Cache::forget('product:summary:'.$scope.':'.$months);
+            }
+        }
+    }
+
+    private function forgetTsaSummaryCache(): void
+    {
+        foreach (TechnicalServiceAnalysisService::PERIODS as $days) {
+            Cache::forget('tsa:summary:'.$days);
+        }
+    }
+
+    /**
+     * Historical PDB imports minted source ids from the whole-row hash, so any
+     * changed cell produced a NEW source_record_id while the old version stayed
+     * behind. The PDB Data sheet is a computed QUERY whose row numbers shift
+     * between exports, so the collapse key is the same BUSINESS identity the
+     * upsert now uses: (customer, serial number, device description). Within
+     * such a group the newest row wins; rows with a different account,
+     * description, or serial are distinct devices and are never touched. Fully
+     * blank identity rows are skipped as a safety guard.
+     */
+    public function dedupeProductRows(?ImportBatch $batch = null): int
+    {
+        $rows = Installation::query()
+            ->where('source_system', self::PRODUCT_SOURCE)
+            ->with('account:id,customer_name')
+            ->orderBy('id')
+            ->get(['id', 'account_id', 'serial_number', 'device_description']);
+
+        $groups = [];
+        foreach ($rows as $row) {
+            $customer = (string) $row->account?->customer_name;
+            $serial = trim((string) $row->serial_number);
+            $description = trim((string) $row->device_description);
+
+            if ($customer === '' && $serial === '' && $description === '') {
+                continue; // fully blank identity — never collapse
+            }
+
+            $groups[$customer.'|'.$serial.'|'.$description][] = $row->id;
+        }
+
+        $staleIds = [];
+        foreach ($groups as $ids) {
+            if (count($ids) > 1) {
+                array_push($staleIds, ...array_slice($ids, 0, -1)); // keep newest (max id)
+            }
+        }
+
+        if ($staleIds === []) {
+            return 0;
+        }
+
+        $customColumnIds = CustomTableColumn::query()
+            ->where('table_key', 'installed-products')
+            ->pluck('id');
+        CustomTableColumnValue::query()
+            ->whereIn('custom_column_id', $customColumnIds)
+            ->whereIn('row_id', $staleIds)
+            ->delete();
+
+        $removed = 0;
+        foreach (array_chunk($staleIds, 500) as $chunk) {
+            $removed += Installation::query()->whereIn('id', $chunk)->delete();
+        }
+
+        if ($batch !== null && $removed > 0) {
+            $batch->metadata = array_merge($batch->metadata ?? [], ['deduped_rows' => $removed]);
+            $batch->save();
+        }
+
+        if ($removed > 0) {
+            $this->forgetProductSummaryCache();
+        }
+
+        return $removed;
+    }
+
+    /** Run one row in its own transaction; @return bool true on success. */
+    private function runRow(ImportBatch $batch, int $rowNumber, array $row, callable $callback, array $headers): bool
     {
         $data = $this->associate($headers, $row);
 
@@ -672,16 +821,18 @@ class SourceWorkbookImportService
                     $callback($data, $rowNumber);
                 });
             }, 100);
-            $batch->increment('processed_rows');
+
+            return true;
         } catch (Throwable $exception) {
             $this->recordFailure($batch, $rowNumber, $row, $headers, $exception);
+
+            return false;
         }
     }
 
     private function recordFailure(ImportBatch $batch, int $rowNumber, array $row, array $headers, Throwable $exception): void
     {
         $data = $this->associate($headers, $row);
-        $batch->increment('failed_rows');
         ImportFailure::create([
             'import_batch_id' => $batch->id,
             'row_number' => $rowNumber,
@@ -805,11 +956,29 @@ class SourceWorkbookImportService
         return Carbon::create(1899, 12, 30)->addDays($days)->addSeconds($seconds);
     }
 
+    /**
+     * Stable source identity for workbook rows. The id hashes only the IDENTITY
+     * columns (customer, serial, device description) — never the whole row — so
+     * editing a mutable cell (status, warranty, dates…) re-imports as an UPDATE
+     * of the same record instead of minting a duplicate and orphaning the old
+     * row. Rows carrying a PDB "no" value include it for traceability.
+     */
     private function sourceId(mixed $value, array $data, string $prefix): string
     {
         $value = trim((string) ($value ?? ''));
 
-        return ($value !== '' ? $value.'-' : $prefix.'-').substr($this->rowHash($data), 0, 24);
+        return ($value !== '' ? $value.'-' : $prefix.'-').$this->identityHash($data);
+    }
+
+    private function identityHash(array $data): string
+    {
+        $identity = [
+            $this->value($data, 'customer_name'),
+            $this->value($data, 'serial_number'),
+            $this->value($data, 'device_description'),
+        ];
+
+        return substr(hash('sha256', implode('|', $identity)), 0, 24);
     }
 
     private function rowHash(array $data): string

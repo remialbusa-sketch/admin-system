@@ -4,3 +4,13 @@
 @source '../../../../resources/views/filament/**/*';
 @source '../../../../app/Livewire/**/*';
 @source '../../../../resources/views/livewire/**/*';
+
+/* Surface parity with the main app (resources/css/app.css daisyUI tokens):
+   simple layouts (login etc.) sit on base-200 instead of Filament's default. */
+.fi-body .fi-simple-layout {
+    background-color: #edf0f6;
+}
+
+.dark .fi-body .fi-simple-layout {
+    background-color: #0a121c;
+}

@@ -30,9 +30,9 @@
             @endforeach
         </select>
         <select wire:model.live="tspName" class="admin-control min-w-[180px]" aria-label="Filter by TSP">
-            <option>All TSPs</option>
-            @foreach ($tspOptions as $option)
-                <option>{{ $option }}</option>
+            <option value="All TSPs">All TSPs</option>
+            @foreach ($tspOptions as $tspValue => $tspLabel)
+                <option value="{{ $tspValue }}">{{ $tspLabel }}</option>
             @endforeach
         </select>
         <select wire:model.live="branch" class="admin-control min-w-[140px]" aria-label="Filter by branch">

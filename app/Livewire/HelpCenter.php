@@ -13,8 +13,10 @@ class HelpCenter extends Component
     {
         $faqs = [
             ['q' => 'How do I import a table?', 'a' => 'Open Tables, then use the Import table button on a managed table page. Upload the matching Excel/CSV; existing records update by their stable identifier.'],
-            ['q' => 'Which tables are available?', 'a' => 'Product Database (PDB), Service Requests, Technical Reports, and History Reports (MCBTSi TSMS). They are the single source for dashboards and visualization.'],
-            ['q' => 'Who can edit table rows?', 'a' => 'Only Superadmin can edit cell values inline. Presidents and managers see the tables read-only.'],
+            ['q' => 'Which tables are available?', 'a' => 'Product Database (PDB), Service Requests, Technical Reports, History Reports (MCBTSi TSMS), and Technical Personnel. They are the single source for dashboards and visualization.'],
+            ['q' => 'Who can edit table rows?', 'a' => 'Only Superadmin can edit cell values inline and run imports. Presidents and managers see the tables read-only.'],
+            ['q' => 'How do I navigate the grid?', 'a' => 'Drag headers to reorder, drag edges to resize, right-click a header to freeze or hide it, and use the density selector (Condensed/Standard/Comfortable) above the grid. Column layouts are saved per account.'],
+            ['q' => 'How current is the data?', 'a' => 'Every number comes from the imported source tables. The freshness chip in the header (and the sidebar footer) shows when the last import completed.'],
             ['q' => 'Where can I review service analytics?', 'a' => 'Technical Service Analysis summarizes completed reports, TSP workload, and brand patterns. TSP Analytics covers personnel performance.'],
         ];
 

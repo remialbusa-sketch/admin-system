@@ -49,7 +49,7 @@ class ManagedTableExport implements FromArray, ShouldAutoSize, WithHeadings, Wit
                 ],
                 'fill' => [
                     'fillType' => Fill::FILL_SOLID,
-                    'startColor' => ['rgb' => '315B8C'],
+                    'startColor' => ['rgb' => '1E59CD'],
                 ],
                 'alignment' => [
                     'horizontal' => Alignment::HORIZONTAL_LEFT,

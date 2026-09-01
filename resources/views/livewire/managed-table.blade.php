@@ -44,6 +44,18 @@
         </button>
     </x-admin.filter-bar>
 
+    @if (count($this->drillDownFilters()) > 0)
+        <div class="flex flex-wrap items-center gap-2" role="status" aria-label="Active drill-down filters from the dashboard">
+            <span class="text-[11px] font-bold uppercase tracking-[0.1em] text-primary">Drill-down from dashboard:</span>
+            @foreach ($this->drillDownFilters() as $drillLabel => $drillValue)
+                <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">{{ $drillLabel }}: {{ str_replace('_', ' ', $drillValue) }}</span>
+            @endforeach
+            <button type="button" wire:click="clearDrillDown" class="no-print inline-flex items-center gap-1 text-[11px] font-semibold text-base-content/50 underline-offset-2 hover:text-error hover:underline">
+                Clear all <x-mary-icon name="o-x-mark" class="h-3 w-3" />
+            </button>
+        </div>
+    @endif
+
     <section
         class="spreadsheet-shell admin-surface overflow-hidden"
         x-data="managedTableGrid({

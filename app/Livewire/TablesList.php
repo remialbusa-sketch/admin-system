@@ -6,6 +6,7 @@ use App\Models\HistoricalTsmsReport;
 use App\Models\TechnicalPersonnel;
 use App\Models\ImportBatch;
 use App\Models\Installation;
+use App\Models\RecordEditLog;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalReport;
 use Illuminate\Contracts\View\View;
@@ -59,8 +60,9 @@ class TablesList extends Component
         ];
 
         $imports = ImportBatch::query()->latest()->limit(10)->get();
+        $recentEdits = RecordEditLog::query()->with('user:id,name')->latest()->limit(12)->get();
 
-        return view('livewire.tables-list', compact('tables', 'imports'))
+        return view('livewire.tables-list', compact('tables', 'imports', 'recentEdits'))
             ->layout('layouts.dashboard')
             ->title('Tables');
     }

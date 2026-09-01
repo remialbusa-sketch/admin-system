@@ -11,6 +11,7 @@ use App\Livewire\TechnicalPersonnelTable;
 use App\Livewire\TechnicalReportTable;
 use App\Livewire\TechnicalServiceAnalysis;
 use App\Livewire\TspAnalytics;
+use App\Livewire\UserManagement;
 use Illuminate\Support\Facades\Route;
 
 Route::redirect('/', '/login');
@@ -31,6 +32,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::get('settings', Settings::class)->name('settings');
     Route::get('help-center', HelpCenter::class)->name('help-center');
+
+    Route::get('users', UserManagement::class)
+        ->name('users')
+        ->middleware('can:manageUsers');
 });
 
 Route::view('profile', 'profile')

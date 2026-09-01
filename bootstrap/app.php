@@ -1,6 +1,5 @@
 <?php
 
-use App\Enums\UserRole;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -14,10 +13,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->trustProxies(at: '*');
-        $middleware->alias([
-            'president.view' => \App\Http\Middleware\PresidentView::class,
-        ]);
+        // Trust only the actual proxy when deployed behind one (ngrok, a load
+        // balancer). Trusting '*' lets clients spoof X-Forwarded-For and rotate
+        // IPs past the login rate limiter.
+        $middleware->trustProxies(at: env('TRUSTED_PROXIES') ?: []);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
