@@ -410,6 +410,11 @@ class SourceWorkbookImportService
             default => throw new \InvalidArgumentException('Unsupported table for mapped import.'),
         };
 
+        // Big real-world workbooks (8k+ rows) can outlive the default 30s
+        // request window; row-level work runs inside retry() + transactions,
+        // so lifting the time limit per request is safe.
+        @set_time_limit(0);
+
         $headers = (new ImportMappingService)->buildHeaderMap($mapping);
 
         if ($headers === []) {
