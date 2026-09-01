@@ -1181,7 +1181,7 @@ abstract class ManagedTable extends Component
             return;
         }
 
-        $this->validateOnly('importFile', ['importFile' => 'required|file|mimes:csv,txt,xls,xlsx|max:61440']);
+        $this->validateOnly('importFile', ['importFile' => 'required|file|mimes:csv,txt,xls,xlsx|max:256000']);
 
         if ($this->getErrorBag()->has('importFile')) {
             return;

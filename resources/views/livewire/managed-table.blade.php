@@ -268,7 +268,7 @@
                 <input type="file" wire:model="importFile" class="admin-control w-full">
                 <x-input-error :messages="$errors->get('importFile')" class="mt-1.5" />
                 <span class="mt-1 block text-xs text-base-content/50" wire:loading wire:target="importFile">Analyzing workbook...</span>
-                <span class="mt-1 block text-xs text-base-content/50">Up to 60 MB (.xlsx / .xls / .csv). The file is only previewed here &mdash; nothing is imported until you confirm the column mapping.</span>
+                <span class="mt-1 block text-xs text-base-content/50">Up to 250 MB (.xlsx / .xls / .csv). The file is only previewed here &mdash; nothing is imported until you confirm the column mapping.</span>
             </div>
 
             @if ($importPreview)

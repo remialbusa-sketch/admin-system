@@ -9,7 +9,7 @@ return [
         // The import wizard accepts full Excel/CSV workbooks; the default
         // Livewire cap (12MB) is too tight for real PDB exports. Kept below
         // the PHP post_max_size / upload_max_filesize headroom (68M/64M).
-        'rules' => ['required', 'file', 'max:61440'],
+        'rules' => ['required', 'file', 'max:256000'],
         'disk' => 'local',
         'directory' => 'livewire-tmp',
         'middleware' => null,
