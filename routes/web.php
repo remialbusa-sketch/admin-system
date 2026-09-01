@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ImportStreamController;
 use App\Livewire\Dashboard;
 use App\Livewire\HelpCenter;
 use App\Livewire\HistoricalTsmsTable;
@@ -21,6 +22,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::redirect('president', 'dashboard')->name('president');
 
     Route::get('tables', TablesList::class)->name('tables');
+
+    Route::put('import/upload-stream', [ImportStreamController::class, 'store'])
+        ->name('import.upload-stream')
+        ->middleware('can:import');
     Route::get('installed-products', InstalledProductsTable::class)->name('installed-products');
     Route::get('service-requests', ServiceRequestTable::class)->name('service-requests');
     Route::get('technical-reports', TechnicalReportTable::class)->name('technical-reports');

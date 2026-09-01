@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Enums\UserRole;
+use App\Http\Controllers\ImportStreamController;
 use App\Exports\ManagedTableExport;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
@@ -23,7 +24,6 @@ use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 use Livewire\Attributes\Url;
 use Livewire\Component;
-use Livewire\WithFileUploads;
 use Livewire\WithPagination;
 use Maatwebsite\Excel\Facades\Excel;
 use RuntimeException;
@@ -31,7 +31,6 @@ use Throwable;
 
 abstract class ManagedTable extends Component
 {
-    use WithFileUploads;
     use WithPagination;
 
     /**
@@ -48,8 +47,6 @@ abstract class ManagedTable extends Component
     /** URL-bound (as ?status=…) so dashboard/status drill-downs can deep-link. */
     #[Url(as: 'status')]
     public ?string $statusFilter = null;
-
-    public $importFile = null;
 
     /** Stored relative path (storage/app/...) of the uploaded import workbook. */
     public ?string $importStoredPath = null;
@@ -1171,27 +1168,39 @@ abstract class ManagedTable extends Component
     | ever runs from the mapping popup, with the user's hand-built mapping.
     */
 
-    /** Step 1: a workbook was uploaded - inspect sheets and build the preview. */
-    public function updatedImportFile(): void
+    /**
+     * Step 1: a streamed upload finished. The chunks were already assembled
+     * on disk by ImportStreamController, so this only has to analyze the
+     * workbook and build the preview - no multipart limits involved.
+     */
+    public function analyzeStreamedImport(string $uploadId, string $originalName): void
     {
         abort_unless($this->canEdit(), 403);
 
-        $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 
-        if (! $this->importFile) {
+        if (! in_array($extension, ['xlsx', 'xls', 'csv', 'txt'], true)
+            || preg_match('/^[a-f0-9]{32}$/', $uploadId) !== 1) {
+            $this->addError('importFile', 'That file type is not supported. Use .xlsx, .xls or .csv.');
+
             return;
         }
 
-        $this->validateOnly('importFile', ['importFile' => 'required|file|mimes:csv,txt,xls,xlsx|max:256000']);
+        $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
 
-        if ($this->getErrorBag()->has('importFile')) {
+        $this->importStoredPath = ImportStreamController::storedPathFor($uploadId, $extension);
+        $fullPath = $this->storedImportPath();
+
+        if (! is_file($fullPath) || filesize($fullPath) === 0) {
+            $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
+            $this->addError('importFile', 'The streamed upload did not reach the server. Try again.');
+
             return;
         }
 
         try {
-            $this->importStoredPath = $this->importFile->store('imports');
             $mappingService = app(ImportMappingService::class);
-            $this->importAnalysis = $mappingService->analyze($this->storedImportPath(), $this->tableKey());
+            $this->importAnalysis = $mappingService->analyze($fullPath, $this->tableKey());
             $this->applyImportPreview($this->importAnalysis['preview']);
             $this->importMapping = $mappingService->blankMapping($this->tableKey());
         } catch (Throwable $exception) {
@@ -1346,7 +1355,7 @@ abstract class ManagedTable extends Component
     /** Clear the whole wizard (file, preview, mapping, result). */
     public function resetImportWizard(): void
     {
-        $this->reset(['importFile', 'importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
+        $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
     }
 
     private function refreshImportPreview(?int $headerRow, ?int $dataStart): void
@@ -1597,10 +1606,6 @@ abstract class ManagedTable extends Component
                 : 0,
             'statuses' => $this->statusOptions(),
             'importTargets' => $importTargets,
-            'serverUploadLimits' => [
-                'perFile' => ini_get('upload_max_filesize'),
-                'postBody' => ini_get('post_max_size'),
-            ],
             'importMappedCount' => collect($this->importMapping)->filter(fn ($letter): bool => trim((string) $letter) !== '')->count(),
             'importMissingRequired' => $importMissingRequired,
             'importResult' => $this->importResult,

@@ -1079,4 +1079,68 @@ document.addEventListener('alpine:init', () => {
             this.callWire('saveColumnLayout', layout);
         },
     }));
+
+    // Import wizard file uploader: streams the workbook to the server in
+    // small PUT chunks, so PHP's multipart upload limits (upload_max_filesize
+    // / post_max_size) never apply, on any machine with stock php.ini.
+    window.Alpine.data('importUploader', ({ url }) => ({
+        uploading: false,
+        progress: 0,
+        uploadError: '',
+
+        async uploadImportFile(file) {
+            this.uploadError = '';
+
+            if (!file) {
+                return;
+            }
+
+            const extension = (file.name.split('.').pop() || '').toLowerCase();
+            if (!['xlsx', 'xls', 'csv', 'txt'].includes(extension)) {
+                this.uploadError = 'Unsupported file type (.' + extension + '). Use .xlsx, .xls or .csv.';
+                return;
+            }
+
+            this.uploading = true;
+            this.progress = 0;
+
+            try {
+                const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                const bytes = new Uint8Array(16);
+                crypto.getRandomValues(bytes);
+                const uploadId = Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+                const chunkSize = 2 * 1024 * 1024;
+                let offset = 0;
+
+                while (offset < file.size) {
+                    const response = await fetch(url, {
+                        method: 'PUT',
+                        headers: {
+                            'X-CSRF-TOKEN': csrf,
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-File-Name': encodeURIComponent(file.name),
+                            'X-Upload-Id': uploadId,
+                            'X-File-Offset': String(offset),
+                            'Content-Type': 'application/octet-stream',
+                        },
+                        body: file.slice(offset, offset + chunkSize),
+                    });
+
+                    if (!response.ok) {
+                        const detail = (await response.text()).slice(0, 160);
+                        throw new Error(detail || 'Upload failed at byte ' + offset + '.');
+                    }
+
+                    offset = Math.min(offset + chunkSize, file.size);
+                    this.progress = Math.round((offset / file.size) * 100);
+                }
+
+                await this.$wire.analyzeStreamedImport(uploadId, file.name);
+            } catch (error) {
+                this.uploadError = error.message || 'The upload failed.';
+            } finally {
+                this.uploading = false;
+            }
+        },
+    }));
 });

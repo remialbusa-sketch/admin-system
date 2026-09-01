@@ -244,7 +244,7 @@
     @endphp
 
     <x-admin.modal name="import-table" title="Import table" description="Upload the Excel/CSV source, preview it, then map its columns to this table before the official import runs. Existing records are updated by stable identifiers." size="lg">
-        <div class="space-y-5">
+        <div class="space-y-5" x-data="importUploader({ url: @js(route('import.upload-stream')) })">
             <div class="flex items-center gap-2">
                 @foreach ([1 => 'Source file', 2 => 'Map columns', 3 => 'Import'] as $importStepIndex => $importStepLabel)
                     <span class="flex items-center gap-2">
@@ -265,11 +265,12 @@
 
             <div>
                 <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Excel / CSV file</label>
-                <input type="file" wire:model="importFile" class="admin-control w-full">
+                <input type="file" x-on:change="uploadImportFile($el.files[0])" x-bind:disabled="uploading" class="admin-control w-full">
+                <span class="mt-1 block text-xs font-semibold text-primary" x-show="uploading" x-cloak>Uploading... <span x-text="progress"></span>%</span>
+                <span class="mt-1 block text-xs text-error" x-show="uploadError" x-cloak x-text="uploadError"></span>
                 <x-input-error :messages="$errors->get('importFile')" class="mt-1.5" />
-                <span class="mt-1 block text-xs text-base-content/50" wire:loading wire:target="importFile">Analyzing workbook...</span>
-                <span class="mt-1 block text-xs text-base-content/50">Up to 250 MB (.xlsx / .xls / .csv). The file is only previewed here &mdash; nothing is imported until you confirm the column mapping.</span>
-                <span class="mt-1 block text-xs text-base-content/40">This server accepts {{ $serverUploadLimits['perFile'] }} per file &middot; {{ $serverUploadLimits['postBody'] }} per request. If your file is larger, launch with <code class="font-mono">serve.cmd</code> or raise php.ini here.</span>
+                <span class="mt-1 block text-xs text-base-content/50" wire:loading wire:target="analyzeStreamedImport">Analyzing workbook...</span>
+                <span class="mt-1 block text-xs text-base-content/50">The file streams in small chunks, so PHP's upload limits don't apply (512 MB cap) &mdash; and nothing is imported until you confirm the column mapping.</span>
             </div>
 
             @if ($importPreview)
@@ -335,7 +336,7 @@
 
             <div class="flex items-center justify-end gap-2 border-t border-base-300 pt-4">
                 <button type="button" x-on:click="$dispatch('close-modal', { name: 'import-table' })" class="admin-secondary-button">Close</button>
-                <button type="button" wire:click="openImportMapping" x-on:click="$dispatch('close-modal', { name: 'import-table' })" @disabled(! $importPreview) class="admin-primary-button" wire:loading.attr="disabled" wire:target="importFile">
+                <button type="button" wire:click="openImportMapping" x-on:click="$dispatch('close-modal', { name: 'import-table' })" @disabled(! $importPreview) x-bind:disabled="uploading" class="admin-primary-button" wire:loading.attr="disabled" wire:target="analyzeStreamedImport">
                     <x-mary-icon name="o-table-cells" class="h-4 w-4" />
                     Map columns
                     <x-mary-icon name="o-arrow-right" class="h-4 w-4" />
