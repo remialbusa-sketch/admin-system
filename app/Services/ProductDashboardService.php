@@ -59,8 +59,10 @@ class ProductDashboardService
             ->when($scopeRegion, fn ($q) => $q->where('region', $scopeRegion))
             ->count();
 
+        $today = now()->toDateString();
+        $in90d = now()->addDays(90)->toDateString();
         $warrantyEnds = (clone $base)->whereNotNull('warranty_end_date')
-            ->selectRaw("SUM(CASE WHEN warranty_end_date >= date('now') AND warranty_end_date <= date('now', '+90 days') THEN 1 ELSE 0 END) as expiring, SUM(CASE WHEN warranty_end_date < date('now') THEN 1 ELSE 0 END) as expired")
+            ->selectRaw('SUM(CASE WHEN warranty_end_date >= ? AND warranty_end_date <= ? THEN 1 ELSE 0 END) as expiring, SUM(CASE WHEN warranty_end_date < ? THEN 1 ELSE 0 END) as expired', [$today, $in90d, $today])
             ->first();
         $warrantyExpiring = (int) ($warrantyEnds->expiring ?? 0);
         $warrantyExpired = (int) ($warrantyEnds->expired ?? 0);
@@ -79,9 +81,11 @@ class ProductDashboardService
         // window-over-window comparison for the delta chip.
         $trendFrom = Carbon::today()->subMonths($months - 1)->startOfMonth();
         $installScope = fn () => (clone $base)->whereNotNull('installation_date');
+        // Portable month-key: SQLite's strftime / MySQL's DATE_FORMAT.
+        $monthExpr = config('database.default') === 'sqlite' ? "strftime('%Y-%m', installation_date)" : "DATE_FORMAT(installation_date, '%Y-%m')";
         $trendCounts = $installScope()
             ->where('installation_date', '>=', $trendFrom)
-            ->selectRaw("strftime('%Y-%m', installation_date) as ym, COUNT(*) as total")
+            ->selectRaw("{$monthExpr} as ym, COUNT(*) as total")
             ->groupBy('ym')
             ->pluck('total', 'ym');
 
@@ -279,7 +283,7 @@ class ProductDashboardService
             $dots[] = [round($x, 1), round($y, 1)];
         }
         $line = 'M '.implode(' L ', array_map(fn ($p) => "{$p[0]} {$p[1]}", $points));
-        $area = "M {$pad},".($h - $pad)." L ".implode(' L ', array_map(fn ($p) => "{$p[0]} {$p[1]}", $points))." L ".($w - $pad).",".($h - $pad)." Z";
+        $area = "M {$pad},".($h - $pad).' L '.implode(' L ', array_map(fn ($p) => "{$p[0]} {$p[1]}", $points)).' L '.($w - $pad).','.($h - $pad).' Z';
 
         return ['area' => $area, 'line' => $line, 'dots' => $dots];
     }

@@ -73,7 +73,7 @@ class SendExecutiveDigest extends Command
         $warrantyCovered = (int) $productScope()->whereRaw("lower(trim(warranty_status)) = 'yes'")->count();
 
         $warrantyOutlook = $productScope()->whereNotNull('warranty_end_date')
-            ->selectRaw("SUM(CASE WHEN warranty_end_date >= date('now') AND warranty_end_date <= date('now', '+90 days') THEN 1 ELSE 0 END) as expiring")
+            ->selectRaw('SUM(CASE WHEN warranty_end_date >= ? AND warranty_end_date <= ? THEN 1 ELSE 0 END) as expiring', [now()->toDateString(), now()->addDays(90)->toDateString()])
             ->first();
 
         $regions = collect(['NCR', 'North Luzon', 'Visayas', 'Mindanao'])
