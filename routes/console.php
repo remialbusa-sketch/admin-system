@@ -1,14 +1,25 @@
 <?php
 
+use App\Services\SourceWorkbookImportService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
-use App\Services\SourceWorkbookImportService;
 use Illuminate\Support\Str;
 
 // Weekly leadership digest — Monday 07:00. Requires a working mailer
 // (MAIL_MAILER=smtp in production; 'log' locally writes it to storage/logs).
 Schedule::command('app:send-exec-digest')->weeklyOn(1, '07:00');
+
+// monday.com live new-item pull. Two transports (see docs §A2/M-W):
+//   - 'delta'  (default): poll the board for new item ids every minute.
+//   - 'webhook': monday pushes create-item events to /webhooks/monday, so the
+//                polling delta scan is skipped (it would only duplicate quota).
+// Both honor MONDAY_SYNC_ENABLED (global kill-switch) + per-table toggles in DB.
+// withoutOverlapping guards against slow runs stacking.
+Schedule::command('monday:sync-all')
+    ->everyMinute()
+    ->withoutOverlapping(5)
+    ->when(fn () => config('monday.enabled', false) && config('monday.transport', 'delta') === 'delta');
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());

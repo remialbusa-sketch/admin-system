@@ -1,11 +1,10 @@
 @php
-    $dataItems = [
-        ['route' => 'installed-products', 'label' => 'Product Database', 'description' => 'Product database (PDB)', 'icon' => 'o-cube'],
-        ['route' => 'service-requests', 'label' => 'Service Requests', 'description' => 'From Executive Dashboard', 'icon' => 'o-inbox-stack'],
-        ['route' => 'technical-reports', 'label' => 'Technical Reports', 'description' => 'From Executive Dashboard', 'icon' => 'o-document-text'],
-        ['route' => 'history-reports', 'label' => 'History Reports', 'description' => 'MCBTSi TSMS (Responses)', 'icon' => 'o-archive-box'],
-        ['route' => 'personnel', 'label' => 'Technical Personnel', 'description' => 'Personnel list', 'icon' => 'o-user-group'],
-    ];
+    // The sidebar's "Tables" group shows ONLY the tables the current user has
+    // pinned on the /tables page (all tables live there). Unpinned tables are
+    // reached by opening "Import table" (the Tables page).
+    $dataItems = auth()->check()
+        ? app(\App\Support\TableCatalog::class)->navForKeys(\App\Models\TablePin::keysFor(auth()->id()))
+        : [];
 
     $analyticsItems = [
         ['route' => 'dashboard', 'label' => 'Home', 'description' => 'Executive command view', 'icon' => 'o-home'],
@@ -94,10 +93,10 @@
 
                         <p x-show="!sidebarCollapsed" class="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-base-content/40">Tables</p>
                         <div class="space-y-1">
-                            @foreach ($dataItems as $item)
+                            @forelse ($dataItems as $item)
                                 @php $active = request()->routeIs($item['route']); @endphp
                                 <a
-                                    href="{{ route($item['route']) }}"
+                                    href="{{ route($item['route'], $item['params'] ?? []) }}"
                                     wire:navigate
                                     @class([
                                         'group flex h-10 items-center rounded-md text-sm font-semibold transition',
@@ -112,7 +111,11 @@
                                     <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">{{ $item['label'] }}</span>
                                     <span x-show="!sidebarCollapsed && @js($active)" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70"></span>
                                 </a>
-                            @endforeach
+                            @empty
+                                <p x-show="!sidebarCollapsed" class="px-3 pt-1 text-xs leading-5 text-base-content/40">
+                                    No pinned tables yet — open a table below to pin it.
+                                </p>
+                            @endforelse
 
                             <a
                                 href="{{ route('tables') }}"
@@ -126,7 +129,7 @@
                                 title="Import table"
                             >
                                 <x-mary-icon name="o-arrow-up-tray" class="h-[18px] w-[18px] shrink-0" />
-                                <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">Import table</span>
+                                <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">All tables</span>
                             </a>
                         </div>
 

@@ -3,8 +3,8 @@
 namespace App\Livewire;
 
 use App\Enums\UserRole;
-use App\Http\Controllers\ImportStreamController;
 use App\Exports\ManagedTableExport;
+use App\Http\Controllers\ImportStreamController;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
 use App\Models\RecordEditLog;
@@ -404,8 +404,9 @@ abstract class ManagedTable extends Component
             ['custom_column_id' => $column->id, 'row_id' => $rowId],
             [
                 'value' => $validated,
-                'value_text' => $shadow['value_text'] ?? $shadow['value_date'] ?? null,
+                'value_text' => $shadow['value_text'] ?? null,
                 'value_number' => $shadow['value_number'] ?? null,
+                'value_date' => $shadow['value_date'] ?? null,
             ],
         );
 
@@ -1589,7 +1590,7 @@ abstract class ManagedTable extends Component
     {
         $rows = $this->rows();
         $columns = $this->orderedColumns();
-        $importTargets = ImportMappingService::TARGETS[$this->tableKey()] ?? null;
+        $importTargets = $this->importTargets();
         $importMissingRequired = collect($importTargets['fields'] ?? [])
             ->filter(fn (array $field): bool => $field['required'] && trim((string) ($this->importMapping[$field['key']] ?? '')) === '')
             ->pluck('label')
@@ -1621,6 +1622,16 @@ abstract class ManagedTable extends Component
     protected function statusOptions(): array
     {
         return [];
+    }
+
+    /**
+     * The mappable import columns for this table (drives the import-wizard
+     * mapping popup). Subclasses for dynamic/user-created tables override this
+     * to build targets from their custom columns.
+     */
+    protected function importTargets(): ?array
+    {
+        return ImportMappingService::TARGETS[$this->tableKey()] ?? null;
     }
 
     protected function title(): string

@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Controllers\ImportStreamController;
+use App\Http\Controllers\MondayWebhookController;
+use App\Livewire\Actions\Logout;
 use App\Livewire\Dashboard;
+use App\Livewire\DynamicTable;
 use App\Livewire\HelpCenter;
 use App\Livewire\HistoricalTsmsTable;
 use App\Livewire\InstalledProductsTable;
@@ -22,6 +25,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::redirect('president', 'dashboard')->name('president');
 
     Route::get('tables', TablesList::class)->name('tables');
+
+    // User-created (dynamic) tables: /tables/{key} renders a DynamicTable grid.
+    Route::get('tables/{table}', DynamicTable::class)->name('tables.show');
 
     Route::put('import/upload-stream', [ImportStreamController::class, 'store'])
         ->name('import.upload-stream')
@@ -47,7 +53,12 @@ Route::view('profile', 'profile')
     ->middleware(['auth'])
     ->name('profile');
 
-Route::post('logout', function (App\Livewire\Actions\Logout $logout) {
+// monday.com create-item webhook. Unauthenticated (monday has no shared secret
+// in the webhook payload); dedup on triggerUuid makes replays harmless, and
+// monday IP allow-listing is applied at the deployment/reverse-proxy layer (§B9).
+Route::post('webhooks/monday', MondayWebhookController::class)->name('webhooks.monday');
+
+Route::post('logout', function (Logout $logout) {
     $logout();
 
     return redirect('/');

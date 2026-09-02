@@ -34,7 +34,7 @@
             x-on:keydown.escape.window="mobileSidebarOpen = false"
             class="flex min-h-screen lg:h-screen"
         >
-            <x-admin.sidebar />
+            <livewire:sidebar />
 
             <div class="flex min-w-0 min-h-0 flex-1 flex-col">
                 <x-admin.topbar />

@@ -52,9 +52,11 @@ for the rest of the session.
 |---|---|---|
 | Dashboard | `/dashboard` — **Product Database overview** (installed base, warranty/contracts, fleet state, brands, machine mix, installation momentum; region + period scopes, print-ready; every widget drills into the filtered Product Database grid; `/president` redirects here) | `App\Livewire\Dashboard`, `App\Services\ProductDashboardService` |
 | Managed tables | `/tables`, `/installed-products`, `/service-requests`, `/technical-reports`, `/history-reports`, `/personnel` | `App\Livewire\*Table`, `App\Livewire\ManagedTable` |
+| **Dynamic tables** | `/tables` — **"New table"** lets a Superadmin name a table and define its columns while building it (14-type registry), to mirror a monday.com board; `tables/{key}` then renders a full grid (inline edit, add/retype columns, filters, import/export). The table page also has **"Connect monday.com board"** (auto-creates the board's columns) and a **live-pull toggle**. | `App\Livewire\DynamicTable`, `App\Services\DynamicTableImportService` |
 | Analytics | `/technical-service-analysis` — **Technical Reports overview** (completion trend, status mix donut, TSP workload, brand mix; every widget drills into the filtered Technical Reports grid; period selector 7D/30D/90D), `/tsp-analytics` | `App\Livewire\TechnicalServiceAnalysis`, `App\Services\TechnicalServiceAnalysisService`, `TspAnalyticsService` |
 | Administration | `/users` (Superadmin-only) | `App\Livewire\UserManagement` |
 | Import pipeline | (triggered via tables UI or `source:import` CLI) | `App\Services\SourceWorkbookImportService` — batch + per-row failure tracking, business-identity upsert + post-import dedupe |
+| monday.com pull | CLI + scheduler + webhook | `monday:inspect-board {id}`, `monday:sync {domain}` (`--dry-run`), `monday:sync-all` (every minute, toggle-gated); `POST /webhooks/monday` (create-item, `triggerUuid` dedup) → `MondaySyncItemJob`. See `docs/monday-integration-and-cpanel-deployment.md`. |
 | Maintenance | (CLI) | `php artisan app:dedupe-installations`, `php artisan app:send-exec-digest` (scheduled Mondays 07:00) |
 
 ### Access model
@@ -74,14 +76,15 @@ for the rest of the session.
 ## Testing
 
 ```bash
-php artisan test        # 95 tests, SQLite in-memory
+php artisan test        # 138 tests, SQLite in-memory
 ```
 
-Feature tests cover auth (incl. registration-disabled and non-mass-assignable roles), user management, imports (incl. the PDB manual-field rule and re-import dedupe), data normalization, every managed table, the edit audit trail, the executive digest, and the executive dashboard (periods, drill-down, region scoping).
+Feature tests cover auth (incl. registration-disabled and non-mass-assignable roles), user management, imports (incl. the PDB manual-field rule and re-import dedupe), data normalization, every managed table, the edit audit trail, the executive digest, the executive dashboard (periods, drill-down, region scoping), **user-created dynamic tables** (create/columns/rows/import/toggle), and **the monday.com integration** (client transport via `Http::fake`, inspect command, new-item delta scan, board connect + column auto-map, webhook challenge/dedup/job).
 
 ## Deployment notes
 
 - Set `APP_URL` correctly in `.env` (it drives asset URLs and verification links). Do not leave it pointing at a stale ngrok tunnel.
-- Production values: `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`, and a real SMTP mailer (verification/reset mail must actually send). See `.env.example`.
+- Production values: `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`, and a real SMTP mailer (verification/reset mail must actually send). See `.env.production.example`.
 - Set `TRUSTED_PROXIES` to your actual proxy IPs/CIDRs when behind ngrok or a load balancer — never `*` (it defeats login throttling).
-- `php artisan migrate` on deploy; `npm run build` for assets.
+- `php artisan migrate` on deploy; `npm run build` for assets (build locally/CI, ship `public/build` — no Node on the cPanel server).
+- cPanel: `scripts/deploy.sh` is the idempotent server-side deploy; `monday:sync-all` runs on a toggle-gated every-minute schedule, and the webhook path needs a queued worker via cron (`queue:work --stop-when-empty`). Full plan: `docs/monday-integration-and-cpanel-deployment.md`.

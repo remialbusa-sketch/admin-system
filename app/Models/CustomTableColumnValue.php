@@ -18,6 +18,7 @@ class CustomTableColumnValue extends Model
         'value',
         'value_text',
         'value_number',
+        'value_date',
     ];
 
     protected function casts(): array
@@ -25,6 +26,7 @@ class CustomTableColumnValue extends Model
         return [
             'value' => 'array',
             'value_number' => 'decimal:4',
+            'value_date' => 'date:Y-m-d',
         ];
     }
 
