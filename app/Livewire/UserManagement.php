@@ -5,8 +5,11 @@ namespace App\Livewire;
 use App\Enums\UserPermission;
 use App\Enums\UserRole;
 use App\Models\User;
+use App\Notifications\AccountCreatedNotification;
 use App\Services\ProductDashboardService;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -88,6 +91,35 @@ class UserManagement extends Component
                 : $validated['permission'],
             'region' => $validated['region'] !== '' ? $validated['region'] : null,
         ])->save();
+
+        // Internal workspace: the Superadmin's act of creating the account is
+        // the implicit trust — mark the email verified immediately so the new
+        // user is not blocked by the `verified` middleware on first sign-in.
+        // No "click the verify link" flow.
+        $user->forceFill(['email_verified_at' => now()])->save();
+
+        // Send the credentials handoff email. The notification is ShouldQueue,
+        // so a slow SMTP does not block this Livewire request. We catch any
+        // dispatch-time failure (driver down, misconfigured) so the account is
+        // still created and the Superadmin can share the password manually.
+        try {
+            Notification::send($user, new AccountCreatedNotification(
+                user: $user,
+                role: $user->role,
+                permission: $user->permission ?? UserPermission::Viewer,
+                region: $user->region,
+                plainPassword: $validated['password'],
+            ));
+
+            session()->flash('user-created-email', 'Credentials email queued for '.$user->email.'.');
+        } catch (\Throwable $exception) {
+            Log::warning('Account created but credentials email could not be queued.', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'error' => $exception->getMessage(),
+            ]);
+            session()->flash('user-created-email', 'Credentials email could not be queued — share the password with '.$user->email.' manually.');
+        }
 
         $this->reset('newUser');
         $this->newUser['role'] = 'regional_manager';

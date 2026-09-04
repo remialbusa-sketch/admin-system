@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — credentials handoff email on user creation
+- Superadmin-created accounts are now **marked verified immediately** (internal-workspace trust model) so the new user is not blocked by the `verified` middleware on first sign-in.
+- A new `AccountCreatedNotification` is **queued** to the new user with their name, role label, permission level, region (if any), and a one-time password the Superadmin hands out of band. Replaces the previous "account created, no email sent" gap that left admin-created users unable to verify.
+- The notification dispatch is wrapped in a try/catch and a flash banner, so an SMTP outage **never blocks the account from being created** — the Superadmin sees a clear "share the password manually" notice instead.
+- New regression coverage: `UserManagementTest` adds `test_created_account_is_marked_verified_immediately`, `test_created_account_dispatches_credentials_notification`, and `test_user_still_created_when_notification_dispatch_fails`.
+
 ### Added — operational roles + permission levels
 - **New roles**: Service Coordinator, Assistant Coordinator, Assistant added to `UserRole` (with a `users` migration widening the enum for portability beyond SQLite).
 - **Permission levels** (`UserPermission`: viewer / editor / admin) control what an account may do, separate from its job role:

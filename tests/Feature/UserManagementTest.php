@@ -6,7 +6,9 @@ use App\Enums\UserPermission;
 use App\Enums\UserRole;
 use App\Livewire\UserManagement;
 use App\Models\User;
+use App\Notifications\AccountCreatedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Notification;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -136,5 +138,79 @@ class UserManagementTest extends TestCase
         $this->actingAs(User::factory()->president()->create())
             ->get('/users')
             ->assertForbidden();
+    }
+
+    public function test_created_account_is_marked_verified_immediately(): void
+    {
+        // Internal workspace: a Superadmin-created account is trusted; the new
+        // user must be able to sign in without a verify-email round-trip.
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->set('newUser.name', 'Trusted New Hire')
+            ->set('newUser.email', 'newhire@example.com')
+            ->set('newUser.password', 'Sup3r-Secret!')
+            ->set('newUser.role', 'service_coordinator')
+            ->set('newUser.permission', 'editor')
+            ->call('createUser')
+            ->assertHasNoErrors();
+
+        $user = User::query()->where('email', 'newhire@example.com')->firstOrFail();
+        $this->assertNotNull($user->email_verified_at, 'admin-created accounts must be verified immediately so the user can sign in.');
+    }
+
+    public function test_created_account_dispatches_credentials_notification(): void
+    {
+        Notification::fake();
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->set('newUser.name', 'Notified Hire')
+            ->set('newUser.email', 'notified@example.com')
+            ->set('newUser.password', 'Sup3r-Secret!')
+            ->set('newUser.role', 'service_coordinator')
+            ->set('newUser.permission', 'editor')
+            ->set('newUser.region', 'Visayas')
+            ->call('createUser')
+            ->assertHasNoErrors();
+
+        $user = User::query()->where('email', 'notified@example.com')->firstOrFail();
+        $captured = null;
+
+        Notification::assertSentTo(
+            $user,
+            AccountCreatedNotification::class,
+            function (AccountCreatedNotification $notification) use (&$captured): bool {
+                $captured = $notification;
+
+                return true;
+            }
+        );
+
+        $this->assertNotNull($captured, 'the AccountCreatedNotification should have been dispatched.');
+        $this->assertSame(UserRole::ServiceCoordinator, $captured->role);
+        $this->assertSame(UserPermission::Editor, $captured->permission);
+        $this->assertSame('Visayas', $captured->region);
+        $this->assertSame('Sup3r-Secret!', $captured->plainPassword);
+    }
+
+    public function test_user_still_created_when_notification_dispatch_fails(): void
+    {
+        // SMTP down / mailer misconfigured must NOT prevent the account from
+        // being created. The Superadmin can hand the password out of band.
+        Notification::shouldReceive('send')->andThrow(new \RuntimeException('SMTP unreachable.'));
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->set('newUser.name', 'Mailer Down')
+            ->set('newUser.email', 'mailer-down@example.com')
+            ->set('newUser.password', 'Sup3r-Secret!')
+            ->set('newUser.role', 'assistant')
+            ->call('createUser')
+            ->assertHasNoErrors();
+
+        $user = User::query()->where('email', 'mailer-down@example.com')->firstOrFail();
+        $this->assertNotNull($user);
+        $this->assertNotNull($user->email_verified_at);
+        $this->assertSame(UserRole::Assistant, $user->role);
     }
 }

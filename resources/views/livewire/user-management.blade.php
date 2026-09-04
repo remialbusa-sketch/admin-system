@@ -10,10 +10,15 @@
             Account created for {{ session('user-created') }}.
         </div>
     @endif
+    @if (session('user-created-email'))
+        <div class="rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-sm text-info-content" role="status">
+            {{ session('user-created-email') }}
+        </div>
+    @endif
 
     <section class="admin-surface p-5 sm:p-6">
         <h2 class="text-base font-bold text-base-content">Create account</h2>
-        <p class="mt-1 text-xs text-base-content/55">Accounts are created verified. Pick the job role and how much this person may do.</p>
+        <p class="mt-1 text-xs text-base-content/55">Accounts are created verified. The new user gets a credentials email with their role, permission level, region and one-time password. Hand the password to them out of band.</p>
         <form wire:submit="createUser" class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
                 <label for="new-name" class="mb-1 block text-xs font-bold uppercase tracking-[0.1em] text-base-content/50">Name</label>

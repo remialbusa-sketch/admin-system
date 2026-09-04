@@ -76,7 +76,7 @@ for the rest of the session.
 ## Testing
 
 ```bash
-php artisan test        # 159 tests, SQLite in-memory
+php artisan test        # 163 tests, SQLite in-memory
 ```
 
 Feature tests cover auth (incl. registration-disabled and non-mass-assignable roles), user management, imports (incl. the PDB manual-field rule and re-import dedupe), data normalization, every managed table, the edit audit trail, the executive digest, the executive dashboard (periods, drill-down, region scoping), **user-created dynamic tables** (create/columns/rows/import/toggle), and **the monday.com integration** (client transport via `Http::fake`, inspect command, new-item delta scan, board connect + column auto-map, webhook challenge/dedup/job).
