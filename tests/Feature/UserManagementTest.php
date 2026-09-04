@@ -213,4 +213,82 @@ class UserManagementTest extends TestCase
         $this->assertNotNull($user->email_verified_at);
         $this->assertSame(UserRole::Assistant, $user->role);
     }
+
+    public function test_superadmin_can_resend_credentials_to_existing_user(): void
+    {
+        Notification::fake();
+
+        $target = User::factory()->regionalManager('NCR')->create([
+            'name' => 'Forgot Password',
+            'email' => 'forgot@example.com',
+        ]);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->call('resendCredentials', $target->id)
+            ->assertHasNoErrors();
+
+        Notification::assertSentTo(
+            $target,
+            AccountCreatedNotification::class,
+            function (AccountCreatedNotification $notification) use ($target): bool {
+                // Resend cannot recover the original hashed password; the email
+                // body adapts to point the user at the forgot-password flow.
+                return $notification->plainPassword === ''
+                    && $notification->role === $target->role
+                    && $notification->permission === ($target->permission ?? \App\Enums\UserPermission::Viewer);
+            }
+        );
+
+        $this->assertNotNull($target->refresh()->credentials_resent_at);
+    }
+
+    public function test_resend_is_throttled_to_once_every_five_minutes(): void
+    {
+        Notification::fake();
+
+        $target = User::factory()->regionalManager('NCR')->create([
+            'credentials_resent_at' => now(),
+        ]);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->call('resendCredentials', $target->id)
+            ->assertHasErrors(["resend-{$target->id}"]);
+
+        Notification::assertNothingSent();
+    }
+
+    public function test_resend_succeeds_after_throttle_window_passes(): void
+    {
+        Notification::fake();
+
+        $target = User::factory()->regionalManager('NCR')->create([
+            // Six minutes ago — past the 5-minute throttle window.
+            'credentials_resent_at' => now()->subMinutes(6),
+        ]);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->call('resendCredentials', $target->id)
+            ->assertHasNoErrors();
+
+        Notification::assertSentTo($target, AccountCreatedNotification::class);
+        $this->assertTrue($target->fresh()->credentials_resent_at->isAfter(now()->subSeconds(5)));
+    }
+
+    public function test_resend_keeps_user_intact_when_mailer_throws(): void
+    {
+        Notification::shouldReceive('send')->andThrow(new \RuntimeException('SMTP unreachable.'));
+
+        $target = User::factory()->regionalManager('NCR')->create();
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->call('resendCredentials', $target->id)
+            ->assertHasErrors(["resend-{$target->id}"]);
+
+        $target->refresh();
+        $this->assertNull($target->credentials_resent_at, 'credentials_resent_at must not be stamped when the mailer failed.');
+    }
 }

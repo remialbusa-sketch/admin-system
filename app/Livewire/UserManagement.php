@@ -177,6 +177,51 @@ class UserManagement extends Component
         $this->reset('editingId', 'editing');
     }
 
+    /**
+     * Resend the credentials handoff email to an existing user.
+     *
+     * The notification is dispatched with an empty plainPassword (we cannot
+     * recover the original hashed password) — the email tells the user to use
+     * the forgot-password flow if they need to set a new one. The send is
+     * throttled to once every 5 minutes per recipient so a misclick cannot
+     * flood someone's inbox, and a try/catch keeps an SMTP outage from
+     * throwing on the Livewire request.
+     */
+    public function resendCredentials(int $id): void
+    {
+        abort_unless(auth()->user()?->role === UserRole::Superadmin, 403);
+
+        $user = User::query()->findOrFail($id);
+
+        $last = $user->credentials_resent_at;
+
+        if ($last !== null && $last->copy()->addMinutes(5)->isFuture()) {
+            $this->addError("resend-{$user->id}", "Credentials email was already sent to {$user->email} {$last->diffForHumans()}. Try again in a few minutes.");
+
+            return;
+        }
+
+        try {
+            Notification::send($user, new AccountCreatedNotification(
+                user: $user,
+                role: $user->role,
+                permission: $user->permission ?? UserPermission::Viewer,
+                region: $user->region,
+                plainPassword: '',
+            ));
+
+            $user->forceFill(['credentials_resent_at' => now()])->save();
+            session()->flash('resent-credentials', "Credentials email re-queued for {$user->email}.");
+        } catch (\Throwable $exception) {
+            Log::warning('Credentials resend failed.', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'error' => $exception->getMessage(),
+            ]);
+            $this->addError("resend-{$user->id}", "Could not queue the credentials email to {$user->email} — check the mailer.");
+        }
+    }
+
     /** Regenerate a strong password without exposing it in component state. */
     public static function suggestedPassword(): string
     {

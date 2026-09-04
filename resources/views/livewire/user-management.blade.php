@@ -15,6 +15,11 @@
             {{ session('user-created-email') }}
         </div>
     @endif
+    @if (session('resent-credentials'))
+        <div class="rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-sm text-info-content" role="status">
+            {{ session('resent-credentials') }}
+        </div>
+    @endif
 
     <section class="admin-surface p-5 sm:p-6">
         <h2 class="text-base font-bold text-base-content">Create account</h2>
@@ -134,7 +139,18 @@
                                 </td>
                                 <td class="text-base-content/70">{{ $user->region ?? '—' }}</td>
                                 <td class="text-right">
-                                    <button type="button" wire:click="startEditing({{ $user->id }})" class="admin-secondary-button h-8 px-3 text-xs">Edit</button>
+                                    <div class="flex flex-col items-end gap-1">
+                                        <div class="flex items-center justify-end gap-2">
+                                            <button type="button" wire:click="resendCredentials({{ $user->id }})" class="admin-secondary-button h-8 px-3 text-xs">Resend credentials</button>
+                                            <button type="button" wire:click="startEditing({{ $user->id }})" class="admin-secondary-button h-8 px-3 text-xs">Edit</button>
+                                        </div>
+                                        @if ($user->credentials_resent_at)
+                                            <p class="text-[10px] text-base-content/50">Last sent {{ $user->credentials_resent_at->diffForHumans() }}</p>
+                                        @endif
+                                        @error("resend-{$user->id}")
+                                            <p class="text-[10px] text-error">{{ $message }}</p>
+                                        @enderror
+                                    </div>
                                 </td>
                             @endif
                         </tr>
