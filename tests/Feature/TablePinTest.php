@@ -9,6 +9,7 @@ use App\Models\TablePin;
 use App\Models\User;
 use App\Support\TableCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -75,6 +76,30 @@ class TablePinTest extends TestCase
 
         $this->assertCount(1, TablePin::keysFor($a->id));
         $this->assertCount(0, TablePin::keysFor($b->id));
+    }
+
+    public function test_missing_table_pins_migration_never_500s_pages(): void
+    {
+        // Regression: the sidebar reads TablePin::keysFor() on every page
+        // render, so a machine that pulled code without running the table_pins
+        // migration used to take down the whole app (e.g. the Users page
+        // right after saving an account). It must degrade to "no pins".
+        Schema::drop('table_pins');
+
+        $this->assertFalse(TablePin::available());
+        $this->assertSame([], TablePin::keysFor(1));
+
+        // The Users page (layout + sidebar included) still renders fine.
+        User::factory()->superadmin()->create();
+        $this->actingAs(User::query()->firstOrFail())
+            ->get('/users')
+            ->assertOk();
+
+        // Pinning attempts report a notice instead of throwing.
+        Livewire::actingAs(User::query()->firstOrFail())
+            ->test(TablesList::class)
+            ->call('togglePin', 'installed-products')
+            ->assertHasNoErrors();
     }
 
     public function test_pinned_dynamic_table_orders_and_resolves_in_sidebar(): void

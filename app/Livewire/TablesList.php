@@ -163,6 +163,15 @@ class TablesList extends Component
         }
 
         $userId = auth()->id();
+
+        // If the table_pins migration hasn't run yet, pinning degrades to a
+        // no-op with a notice instead of throwing (migrations may lag a deploy).
+        if (! TablePin::available()) {
+            session()->flash('pinsMessage', 'Pinning is unavailable until the table_pins migration has run.');
+
+            return;
+        }
+
         $existing = TablePin::query()->where('user_id', $userId)->where('table_key', $tableKey)->first();
 
         if ($existing) {
