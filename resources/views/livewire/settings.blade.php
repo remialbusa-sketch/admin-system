@@ -47,8 +47,9 @@
                 <p class="text-sm font-semibold text-base-content">Role &amp; access</p>
                 <p class="mt-1 text-xs leading-5 text-base-content/55">
                     You are signed in as <span class="font-semibold text-base-content">{{ auth()->user()?->name }}</span>
-                    ({{ auth()->user()?->role?->label() ?? 'No role' }}). Roles and regions are assigned by a Superadmin —
-                    only Superadmins can edit table records and run imports.
+                    ({{ auth()->user()?->role?->label() ?? 'No role' }} · {{ auth()->user()?->permission?->label() ?? 'No level' }}).
+                    Roles, regions and permission levels are assigned by a Superadmin. Your permission level decides whether you can
+                    (Viewer) read only, (Editor) also edit records, or (Admin) also import workbooks. Superadmins always have full access.
                 </p>
             </div>
         </div>

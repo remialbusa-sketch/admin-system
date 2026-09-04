@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — operational roles + permission levels
+- **New roles**: Service Coordinator, Assistant Coordinator, Assistant added to `UserRole` (with a `users` migration widening the enum for portability beyond SQLite).
+- **Permission levels** (`UserPermission`: viewer / editor / admin) control what an account may do, separate from its job role:
+  - **viewer** — read + export only (the default).
+  - **editor** — viewer + inline grid edits (create/update/delete records, custom columns). This finally lets coordinators maintain data safely.
+  - **admin** — editor + workbook imports and monday.com sync.
+  - **Superadmin** always has full access regardless of the assigned permission (the account form forces admin when the role is Superadmin).
+- The **Create account / edit** surfaces in `/users` gain a "Permission level" select (with descriptions); the accounts table shows a permission badge. Settings and Help Center explain the model.
+- Enforcement lives on the `User` model (`canEditRecords()` / `canImport()`), backing `ManagedTable`, the DynamicTable import + monday sync, and the `import` gate. The grid's "Import table" and monday controls show only for admin-level accounts.
+- New regression suite: `UserManagementTest` (roles/permissions in create & edit, superadmin-forced-admin, viewer default) and `PermissionLevelTest` (viewer denied edits, editor allowed, editor denied imports, admin allowed).
+
 ### Fixed — TSP names and donut color uniqueness
 - **TSP names showed workbook IDs** (`person-77787508`) instead of real names: every TSP surface now uses the source-grounded `tsp_display_name` mapping with ID fallback — the Technical Service Analysis workload widget, the TSP drill-down chip (resolves the display name for the raw filter value), the Technical Reports grid (adds a read-only "TSP Name" column next to the raw "TSP ID"), the TSP Analytics per-TSP performance table, and its filter dropdown (display-name labels, ID values).
 - **Donut colors**: brand donuts (Home + Technical Service Analysis) were reusing/cycling semantic UI tones — the TSA one was a single flat color. A dedicated 8-hue categorical palette (`--chart-1…8` in app.css, via `App\Support\ChartPalette`) now gives every segment of a categorical donut its own distinct color, consistent via the shared legend, with "Others" neutral. Status/fleet donuts keep their meaningful state colors (success/warning/error).

@@ -21,8 +21,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // Aligned with ManagedTable::canEdit() — only Superadmins maintain data.
-        Gate::define('import', fn ($user) => $user?->role === UserRole::Superadmin);
+        // Permission model: Superadmin (role) always has full access; other
+        // roles act at their assigned permission level (viewer/editor/admin).
+        Gate::define('import', fn ($user) => $user?->canImport() ?? false);
         Gate::define('manageUsers', fn ($user) => $user?->role === UserRole::Superadmin);
     }
 }

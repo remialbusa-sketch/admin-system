@@ -1,6 +1,6 @@
 <x-admin.page-header eyebrow="Table" title="{{ $title }}" description="{{ $description }}">
     <x-slot name="actions">
-        <x-admin.badge tone="primary">{{ $editable ? 'Superadmin editing enabled' : 'Read only' }}</x-admin.badge>
+        <x-admin.badge tone="primary">{{ $editable ? 'Editing enabled' : 'Read only' }}</x-admin.badge>
         <button type="button" wire:click="exportExcel" class="admin-secondary-button">
             <x-mary-icon name="o-arrow-down-tray" class="h-4 w-4" />
             Export
@@ -9,7 +9,7 @@
             <x-mary-icon name="o-view-columns" class="h-4 w-4" />
             Columns
         </button>
-        @if ($editable)
+        @if ($canImport)
             <button type="button" x-on:click="$dispatch('open-modal', { name: 'import-table' })" class="admin-primary-button">
                 <x-mary-icon name="o-arrow-up-tray" class="h-4 w-4" />
                 Import table

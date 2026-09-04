@@ -5,6 +5,7 @@ namespace App\Models;
 // Auth: MustVerifyEmail makes the 'verified' route middleware actually enforce
 // verification (without it, 'verified' silently passes every user). Filament's
 // contract gates the /admin panel to the roles below in every environment.
+use App\Enums\UserPermission;
 use App\Enums\UserRole;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
@@ -44,7 +45,24 @@ class User extends Authenticatable implements MustVerifyEmail, FilamentUser
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => UserRole::class,
+            'permission' => UserPermission::class,
         ];
+    }
+
+    /**
+     * May this account edit records in the managed tables (grid edits)?
+     * Superadmin always can; otherwise the permission level must be editor+.
+     */
+    public function canEditRecords(): bool
+    {
+        return $this->role === UserRole::Superadmin
+            || in_array($this->permission, [UserPermission::Editor, UserPermission::Admin], true);
+    }
+
+    /** May this account run workbook imports? Superadmin or admin level. */
+    public function canImport(): bool
+    {
+        return $this->role === UserRole::Superadmin || $this->permission === UserPermission::Admin;
     }
 
     public function importBatches(): HasMany

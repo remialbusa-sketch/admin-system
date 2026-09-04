@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Enums\UserPermission;
 use App\Enums\UserRole;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -32,6 +33,7 @@ class UserFactory extends Factory
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
             'role' => UserRole::RegionalManager->value,
+            'permission' => UserPermission::Viewer->value,
             'region' => fake()->randomElement(['NCR', 'North Luzon', 'Visayas', 'Mindanao']),
         ];
     }
@@ -48,6 +50,31 @@ class UserFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'role' => UserRole::Superadmin->value,
+            'permission' => UserPermission::Admin->value,
+            'region' => null,
+        ]);
+    }
+
+    public function serviceCoordinator(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => UserRole::ServiceCoordinator->value,
+            'region' => null,
+        ]);
+    }
+
+    public function assistantCoordinator(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => UserRole::AssistantCoordinator->value,
+            'region' => null,
+        ]);
+    }
+
+    public function assistant(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => UserRole::Assistant->value,
             'region' => null,
         ]);
     }

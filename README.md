@@ -54,7 +54,7 @@ for the rest of the session.
 | Managed tables | `/tables`, `/installed-products`, `/service-requests`, `/technical-reports`, `/history-reports`, `/personnel` | `App\Livewire\*Table`, `App\Livewire\ManagedTable` |
 | **Dynamic tables** | `/tables` — **"New table"** lets a Superadmin name a table and define its columns while building it (14-type registry), to mirror a monday.com board; `tables/{key}` then renders a full grid (inline edit, add/retype columns, filters, import/export). The table page also has **"Connect monday.com board"** (auto-creates the board's columns) and a **live-pull toggle**. | `App\Livewire\DynamicTable`, `App\Services\DynamicTableImportService` |
 | Analytics | `/technical-service-analysis` — **Technical Reports overview** (completion trend, status mix donut, TSP workload, brand mix; every widget drills into the filtered Technical Reports grid; period selector 7D/30D/90D), `/tsp-analytics` | `App\Livewire\TechnicalServiceAnalysis`, `App\Services\TechnicalServiceAnalysisService`, `TspAnalyticsService` |
-| Administration | `/users` (Superadmin-only) | `App\Livewire\UserManagement` |
+| Administration | `/users` (Superadmin-only) — create accounts, assign role + permission level + region, reset passwords | `App\Livewire\UserManagement` |
 | Import pipeline | (triggered via tables UI or `source:import` CLI) | `App\Services\SourceWorkbookImportService` — batch + per-row failure tracking, business-identity upsert + post-import dedupe |
 | monday.com pull | CLI + scheduler + webhook | `monday:inspect-board {id}`, `monday:sync {domain}` (`--dry-run`), `monday:sync-all` (every minute, toggle-gated); `POST /webhooks/monday` (create-item, `triggerUuid` dedup) → `MondaySyncItemJob`. See `docs/monday-integration-and-cpanel-deployment.md`. |
 | Maintenance | (CLI) | `php artisan app:dedupe-installations`, `php artisan app:send-exec-digest` (scheduled Mondays 07:00) |
@@ -62,7 +62,7 @@ for the rest of the session.
 ### Access model
 
 - Accounts are provisioned by a Superadmin; self-registration is disabled by default (`ALLOW_REGISTRATION`, see `config/features.php`) and email verification is enforced (`User` implements `MustVerifyEmail`).
-- Only **Superadmin** can edit records / run imports; every other role is read-only. Exports require a role (they fail closed for role-less accounts). The Filament `/admin` panel is limited to Superadmin/President via `User::canAccessPanel()`.
+- **Roles** (job title) and **permission levels** (what the person may do) are separate. Roles: President, VP Operations, National Manager, Regional Manager, Service Coordinator, Assistant Coordinator, Assistant. Permission levels: **viewer** (read + export only), **editor** (also edits records in the grid), **admin** (also runs imports / monday sync). **Superadmin** always has full access regardless of the assigned permission; the Filament `/admin` panel is limited to Superadmin/President via `User::canAccessPanel()`.
 
 ### Domain rules (do not break these)
 
@@ -76,7 +76,7 @@ for the rest of the session.
 ## Testing
 
 ```bash
-php artisan test        # 138 tests, SQLite in-memory
+php artisan test        # 159 tests, SQLite in-memory
 ```
 
 Feature tests cover auth (incl. registration-disabled and non-mass-assignable roles), user management, imports (incl. the PDB manual-field rule and re-import dedupe), data normalization, every managed table, the edit audit trail, the executive digest, the executive dashboard (periods, drill-down, region scoping), **user-created dynamic tables** (create/columns/rows/import/toggle), and **the monday.com integration** (client transport via `Http::fake`, inspect command, new-item delta scan, board connect + column auto-map, webhook challenge/dedup/job).

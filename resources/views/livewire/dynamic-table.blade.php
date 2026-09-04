@@ -39,7 +39,7 @@
                 </div>
             </div>
 
-            @if ($editable)
+            @if ($canImport)
                 <div class="flex flex-wrap items-center gap-2">
                     <button type="button" wire:click="openConnectBoard" class="admin-secondary-button">
                         <x-mary-icon name="o-link" class="h-4 w-4" />
@@ -70,7 +70,7 @@
         @if (session('mondayMessage'))
             <p class="mt-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary">{{ session('mondayMessage') }}</p>
         @endif
-        @if ($editable && ! $mondayBoardId)
+        @if ($canImport && ! $mondayBoardId)
             <p class="mt-3 text-xs text-base-content/50">Connect a monday.com board first, then turn on live pull. Column auto-mapping from the board's real columns arrives with the monday connect milestone.</p>
         @endif
     </section>

@@ -99,7 +99,13 @@ abstract class ManagedTable extends Component
 
     public function canEdit(): bool
     {
-        return auth()->user()?->role === UserRole::Superadmin;
+        return (bool) auth()->user()?->canEditRecords();
+    }
+
+    /** May this account run workbook imports? Superadmin or admin level. */
+    public function canImport(): bool
+    {
+        return (bool) auth()->user()?->canImport();
     }
 
     /**
@@ -1176,7 +1182,7 @@ abstract class ManagedTable extends Component
      */
     public function analyzeStreamedImport(string $uploadId, string $originalName): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 
@@ -1218,7 +1224,7 @@ abstract class ManagedTable extends Component
     /** Step 1: another sheet was picked - re-detect and preview it. */
     public function updatedImportSheet(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! $this->importStoredPath || $this->importSheet === '') {
             return;
@@ -1230,7 +1236,7 @@ abstract class ManagedTable extends Component
     /** Step 1: the header row moved - re-anchor the preview columns/samples. */
     public function updatedImportHeaderRow($value): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! $this->importStoredPath || $this->importSheet === '') {
             return;
@@ -1242,7 +1248,7 @@ abstract class ManagedTable extends Component
     /** Step 1: the first data row moved - re-anchor the preview samples. */
     public function updatedImportDataStart($value): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! $this->importStoredPath || $this->importSheet === '') {
             return;
@@ -1254,7 +1260,7 @@ abstract class ManagedTable extends Component
     /** Step 2: open the mapping popup, pre-filling the last committed mapping. */
     public function openImportMapping(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! $this->importStoredPath || ($this->importPreview['columns'] ?? []) === []) {
             return;
@@ -1273,7 +1279,7 @@ abstract class ManagedTable extends Component
      */
     public function executeMappedImport(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! $this->importStoredPath) {
             $this->addError('importFile', 'Choose a workbook first.');
@@ -1601,6 +1607,7 @@ abstract class ManagedTable extends Component
             'rows' => $rows,
             'columns' => $columns,
             'editable' => $this->canEdit(),
+            'canImport' => $this->canImport(),
             'showArchived' => $this->showArchived,
             'archivedCount' => $this->supportsArchive()
                 ? $this->model()::query()->whereNotNull('archived_at')->count()

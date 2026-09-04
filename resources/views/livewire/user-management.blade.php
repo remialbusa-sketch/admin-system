@@ -2,7 +2,7 @@
     <x-admin.page-header
         eyebrow="Administration"
         title="Users"
-        description="Provision accounts, assign roles and regions, and reset passwords. Only Superadmins can open this page."
+        description="Provision accounts, assign roles, permission levels and regions, and reset passwords. Only Superadmins can open this page."
     />
 
     @if (session('user-created'))
@@ -13,7 +13,7 @@
 
     <section class="admin-surface p-5 sm:p-6">
         <h2 class="text-base font-bold text-base-content">Create account</h2>
-        <p class="mt-1 text-xs text-base-content/55">New accounts are created with a verified email and the role you pick here.</p>
+        <p class="mt-1 text-xs text-base-content/55">Accounts are created verified. Pick the job role and how much this person may do.</p>
         <form wire:submit="createUser" class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
                 <label for="new-name" class="mb-1 block text-xs font-bold uppercase tracking-[0.1em] text-base-content/50">Name</label>
@@ -39,6 +39,14 @@
                 </select>
             </div>
             <div>
+                <label for="new-permission" class="mb-1 block text-xs font-bold uppercase tracking-[0.1em] text-base-content/50">Permission level</label>
+                <select id="new-permission" wire:model="newUser.permission" class="admin-control w-full">
+                    @foreach ($permissions as $permission)
+                        <option value="{{ $permission['value'] }}">{{ $permission['label'] }} — {{ $permission['description'] }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div>
                 <label for="new-region" class="mb-1 block text-xs font-bold uppercase tracking-[0.1em] text-base-content/50">Region (regional managers)</label>
                 <select id="new-region" wire:model="newUser.region" class="admin-control w-full">
                     <option value="">—</option>
@@ -59,7 +67,7 @@
     <section class="admin-surface overflow-hidden">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6">
             <h2 class="text-base font-bold text-base-content">Accounts</h2>
-            <p class="mt-1 text-xs text-base-content/55">Regional managers are automatically scoped to their region on the executive dashboard.</p>
+            <p class="mt-1 text-xs text-base-content/55">Regional managers are automatically scoped to their region on the executive dashboard. Permission level = what each account may do.</p>
         </div>
         <div class="admin-scrollbar overflow-x-auto">
             <table class="data-table w-full text-left">
@@ -68,6 +76,7 @@
                         <th>Name</th>
                         <th>Email</th>
                         <th>Role</th>
+                        <th>Permission</th>
                         <th>Region</th>
                         <th class="text-right">Actions</th>
                     </tr>
@@ -91,6 +100,13 @@
                                     </select>
                                 </td>
                                 <td>
+                                    <select wire:model="editing.permission" class="admin-control h-8 w-auto py-1 text-xs" aria-label="Permission for {{ $user->name }}">
+                                        @foreach ($permissions as $permission)
+                                            <option value="{{ $permission['value'] }}">{{ $permission['label'] }}</option>
+                                        @endforeach
+                                    </select>
+                                </td>
+                                <td>
                                     <select wire:model="editing.region" class="admin-control h-8 w-auto py-1 text-xs" aria-label="Region for {{ $user->name }}">
                                         <option value="">—</option>
                                         @foreach ($regions as $region)
@@ -108,6 +124,9 @@
                                 </td>
                             @else
                                 <td class="text-base-content/70">{{ $user->role->label() }}</td>
+                                <td>
+                                    <x-admin.badge :tone="$user->permission?->value === 'admin' ? 'primary' : ($user->permission?->value === 'editor' ? 'info' : 'neutral')">{{ $user->permission?->label() ?? '—' }}</x-admin.badge>
+                                </td>
                                 <td class="text-base-content/70">{{ $user->region ?? '—' }}</td>
                                 <td class="text-right">
                                     <button type="button" wire:click="startEditing({{ $user->id }})" class="admin-secondary-button h-8 px-3 text-xs">Edit</button>

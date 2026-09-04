@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Enums\UserPermission;
 use App\Enums\UserRole;
 use App\Models\User;
 use App\Services\ProductDashboardService;
@@ -12,9 +13,9 @@ use Illuminate\Validation\Rules\Password;
 use Livewire\Component;
 
 /**
- * Superadmin-only account administration: create accounts, assign roles and
- * regions, and reset passwords. Roles are applied with forceFill — they are
- * deliberately not mass-assignable anywhere else in the app.
+ * Superadmin-only account administration: create accounts, assign roles,
+ * regions and permission levels, and reset passwords. Roles and permissions
+ * are applied with forceFill — deliberately not mass-assignable elsewhere.
  */
 class UserManagement extends Component
 {
@@ -23,6 +24,7 @@ class UserManagement extends Component
         'email' => '',
         'password' => '',
         'role' => 'regional_manager',
+        'permission' => 'viewer',
         'region' => '',
     ];
 
@@ -30,6 +32,7 @@ class UserManagement extends Component
 
     public array $editing = [
         'role' => 'regional_manager',
+        'permission' => 'viewer',
         'region' => '',
         'password' => '',
     ];
@@ -47,6 +50,11 @@ class UserManagement extends Component
                 'value' => $role->value,
                 'label' => $role->label(),
             ])->all(),
+            'permissions' => collect(UserPermission::cases())->map(fn (UserPermission $permission) => [
+                'value' => $permission->value,
+                'label' => $permission->label(),
+                'description' => $permission->description(),
+            ])->all(),
             'regions' => ProductDashboardService::REGIONS,
         ])
             ->layout('layouts.dashboard')
@@ -62,6 +70,7 @@ class UserManagement extends Component
             'newUser.email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:'.User::class.',email'],
             'newUser.password' => ['required', 'string', Password::defaults()],
             'newUser.role' => ['required', Rule::in(array_column(UserRole::cases(), 'value'))],
+            'newUser.permission' => ['required', Rule::in(array_column(UserPermission::cases(), 'value'))],
             'newUser.region' => ['nullable', Rule::in([...ProductDashboardService::REGIONS, ''])],
         ])['newUser'];
 
@@ -72,11 +81,17 @@ class UserManagement extends Component
         ]);
         $user->forceFill([
             'role' => $validated['role'],
+            // Superadmin accounts are always admin-level; a role choice cannot
+            // be undermined by a low permission value.
+            'permission' => $validated['role'] === UserRole::Superadmin->value
+                ? UserPermission::Admin->value
+                : $validated['permission'],
             'region' => $validated['region'] !== '' ? $validated['region'] : null,
         ])->save();
 
         $this->reset('newUser');
         $this->newUser['role'] = 'regional_manager';
+        $this->newUser['permission'] = 'viewer';
         session()->flash('user-created', $user->name);
     }
 
@@ -88,6 +103,7 @@ class UserManagement extends Component
         $this->editingId = $user->id;
         $this->editing = [
             'role' => $user->role->value,
+            'permission' => $user->permission?->value ?? 'viewer',
             'region' => $user->region ?? '',
             'password' => '',
         ];
@@ -103,6 +119,7 @@ class UserManagement extends Component
 
         $validated = $this->validate([
             'editing.role' => ['required', Rule::in(array_column(UserRole::cases(), 'value'))],
+            'editing.permission' => ['required', Rule::in(array_column(UserPermission::cases(), 'value'))],
             'editing.region' => ['nullable', Rule::in([...ProductDashboardService::REGIONS, ''])],
             'editing.password' => ['nullable', 'string', Password::defaults()],
         ])['editing'];
@@ -110,6 +127,9 @@ class UserManagement extends Component
         $user = User::query()->findOrFail($this->editingId);
         $user->forceFill([
             'role' => $validated['role'],
+            'permission' => $validated['role'] === UserRole::Superadmin->value
+                ? UserPermission::Admin->value
+                : $validated['permission'],
             'region' => $validated['region'] !== '' ? $validated['region'] : null,
         ])->save();
 

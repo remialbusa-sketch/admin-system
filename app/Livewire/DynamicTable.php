@@ -194,7 +194,7 @@ class DynamicTable extends ManagedTable
 
     public function openImportMapping(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! $this->importStoredPath || ($this->importPreview['columns'] ?? []) === []) {
             return;
@@ -208,7 +208,7 @@ class DynamicTable extends ManagedTable
 
     public function executeMappedImport(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! $this->importStoredPath) {
             $this->addError('importMapping', 'Choose a workbook first.');
@@ -274,7 +274,7 @@ class DynamicTable extends ManagedTable
 
     public function toggleMondayPull(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         $setting = MondaySyncSetting::forDomain($this->dynamicKey);
         $setting->update(['enabled' => ! $setting->enabled]);
@@ -292,7 +292,7 @@ class DynamicTable extends ManagedTable
      */
     public function syncNow(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         if (! config('monday.enabled', false)) {
             session()->flash('mondayMessage', 'monday sync is disabled globally (MONDAY_SYNC_ENABLED=false). Enable it to pull new items.');
@@ -324,7 +324,7 @@ class DynamicTable extends ManagedTable
 
     public function openConnectBoard(): void
     {
-        abort_unless($this->canEdit(), 403);
+        abort_unless($this->canImport(), 403);
 
         $this->connectBoardId = (string) ($this->mondayBoardId ?? '');
         $this->showConnectBoardModal = true;
@@ -387,6 +387,7 @@ class DynamicTable extends ManagedTable
             'rows' => $rows,
             'columns' => $columns,
             'editable' => $this->canEdit(),
+            'canImport' => $this->canImport(),
             'showArchived' => $this->showArchived,
             'archivedCount' => $this->supportsArchive()
                 ? DynamicRow::query()->where('table_key', $this->dynamicKey)->whereNotNull('archived_at')->count()
