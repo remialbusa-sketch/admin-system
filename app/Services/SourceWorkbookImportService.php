@@ -667,6 +667,16 @@ class SourceWorkbookImportService
         try {
             $reader = $this->reader($path);
             $reader->setLoadSheetsOnly(['PDB']);
+            // Only the two needed columns: an unbounded full-sheet load of
+            // the raw PDB sheet (8k+ rows x every phantom column) is a
+            // guaranteed memory blow-up on shared hosting.
+            $reader->setReadFilter(new class implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter
+            {
+                public function readCell($column, $row, $worksheetName = ''): bool
+                {
+                    return $column === 'AH' || $column === 'AI';
+                }
+            });
             $workbook = $reader->load($path);
             $sheet = $workbook->getSheetByName('PDB');
 

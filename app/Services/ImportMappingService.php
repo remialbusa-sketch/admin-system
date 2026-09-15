@@ -476,6 +476,10 @@ class ImportMappingService
     {
         $reader = IOFactory::createReaderForFile($path);
         $reader->setReadDataOnly(true);
+        // Skip empty cells: system exports carry formatting (and the reader
+        // filter bounds) across thousands of phantom columns — instantiating
+        // their empty cells explodes memory during analysis.
+        $reader->setReadEmptyCells(false);
 
         return $reader;
     }
