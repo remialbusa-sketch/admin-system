@@ -20,6 +20,11 @@
             {{ session('resent-credentials') }}
         </div>
     @endif
+    @if (session('mark-verified'))
+        <div class="rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm font-semibold text-success" role="status">
+            {{ session('mark-verified') }}
+        </div>
+    @endif
 
     <section class="admin-surface p-5 sm:p-6">
         <h2 class="text-base font-bold text-base-content">Create account</h2>
@@ -97,7 +102,15 @@
                             <td class="font-semibold text-base-content">
                                 {{ $user->name }}
                                 @if ($user->email_verified_at === null)
-                                    <span class="ml-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-bold text-warning-content">unverified</span>
+                                    <span class="ml-1 inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-bold text-warning-content">
+                                        <span class="inline-block h-1.5 w-1.5 rounded-full bg-warning"></span>
+                                        unverified
+                                    </span>
+                                @else
+                                    <span class="ml-1 inline-flex items-center gap-1 rounded-full bg-success/12 px-2 py-0.5 text-[10px] font-bold text-success" title="Verified {{ $user->email_verified_at->diffForHumans() }}">
+                                        <span class="inline-block h-1.5 w-1.5 rounded-full bg-success"></span>
+                                        verified
+                                    </span>
                                 @endif
                             </td>
                             <td class="text-base-content/65">{{ $user->email }}</td>
@@ -141,6 +154,9 @@
                                 <td class="text-right">
                                     <div class="flex flex-col items-end gap-1">
                                         <div class="flex items-center justify-end gap-2">
+                                            @if ($user->email_verified_at === null)
+                                                <button type="button" wire:click="markVerified({{ $user->id }})" class="admin-secondary-button h-8 px-3 text-xs">Mark verified</button>
+                                            @endif
                                             <button type="button" wire:click="resendCredentials({{ $user->id }})" class="admin-secondary-button h-8 px-3 text-xs">Resend credentials</button>
                                             <button type="button" wire:click="startEditing({{ $user->id }})" class="admin-secondary-button h-8 px-3 text-xs">Edit</button>
                                         </div>

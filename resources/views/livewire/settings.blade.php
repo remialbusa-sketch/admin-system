@@ -54,4 +54,54 @@
             </div>
         </div>
     </section>
+
+    <section class="admin-surface divide-y divide-base-300">
+        <div class="p-5 sm:p-6">
+            <h2 class="text-base font-bold text-base-content">Mail delivery</h2>
+            <p class="mt-1 text-xs text-base-content/55">Where system emails (credentials, verify, digest) actually go. Misconfiguration here is silent — confirm the status before assuming an email was sent.</p>
+        </div>
+        <div class="p-5 sm:px-6">
+            @php
+                $mh = $mailHealth;
+                $status = $mh['sending']
+                    ? ['tone' => 'success', 'label' => 'Sending']
+                    : ($mh['configured'] ? ['tone' => 'info', 'label' => 'Not sending (intentional)'] : ['tone' => 'error', 'label' => 'Misconfigured']);
+            @endphp
+            <div class="flex flex-wrap items-center justify-between gap-4">
+                <div class="min-w-0 flex-1">
+                    <p class="text-sm font-semibold text-base-content">
+                        Driver
+                        <x-admin.badge :tone="$status['tone']">{{ $status['label'] }}</x-admin.badge>
+                    </p>
+                    <p class="mt-1 text-xs leading-5 text-base-content/55">
+                        <code class="font-mono text-base-content/80">{{ $mh['driver'] }}</code>
+                        @if ($mh['from']) — from <code class="font-mono text-base-content/80">{{ $mh['from'] }}</code>@endif
+                    </p>
+                    @if ($mh['reason'] !== null)
+                        <p class="mt-2 text-xs text-error">{{ $mh['reason'] }}</p>
+                    @endif
+                </div>
+            </div>
+
+            @if (auth()->user()?->role === \App\Enums\UserRole::Superadmin)
+                <form wire:submit="sendTestEmail" class="mt-5 flex flex-wrap items-end gap-3">
+                    <div class="min-w-0 flex-1">
+                        <label for="test-email" class="mb-1 block text-xs font-bold uppercase tracking-[0.1em] text-base-content/50">Send a test email to</label>
+                        <input id="test-email" type="email" wire:model="testEmailAddress" class="admin-control w-full" required>
+                        @error('testEmailAddress') <p class="mt-1 text-xs text-error">{{ $message }}</p> @enderror
+                    </div>
+                    <button type="submit" class="admin-primary-button" wire:loading.attr="disabled" wire:target="sendTestEmail">
+                        <span wire:loading.remove wire:target="sendTestEmail">Send test email</span>
+                        <span wire:loading wire:target="sendTestEmail">Sending…</span>
+                    </button>
+                </form>
+                @if (session('test-email'))
+                    <p class="mt-3 text-xs text-success">{{ session('test-email') }}</p>
+                @endif
+                @if (session('test-email-error'))
+                    <p class="mt-3 text-xs text-error">{{ session('test-email-error') }}</p>
+                @endif
+            @endif
+        </div>
+    </section>
 </div>

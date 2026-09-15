@@ -291,4 +291,60 @@ class UserManagementTest extends TestCase
         $target->refresh();
         $this->assertNull($target->credentials_resent_at, 'credentials_resent_at must not be stamped when the mailer failed.');
     }
+
+    public function test_superadmin_can_mark_unverified_user_verified(): void
+    {
+        $target = User::factory()->regionalManager('NCR')->create(['email_verified_at' => null]);
+        $this->assertNull($target->email_verified_at);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->call('markVerified', $target->id)
+            ->assertHasNoErrors();
+
+        $this->assertNotNull($target->refresh()->email_verified_at);
+    }
+
+    public function test_mark_verified_is_a_no_op_when_already_verified(): void
+    {
+        $verifiedAt = now()->subDays(3);
+        $target = User::factory()->regionalManager('NCR')->create(['email_verified_at' => $verifiedAt]);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(UserManagement::class)
+            ->call('markVerified', $target->id)
+            ->assertHasNoErrors();
+
+        $this->assertEquals(
+            $verifiedAt->toDateTimeString(),
+            $target->refresh()->email_verified_at->toDateTimeString(),
+            'an already-verified user must not have their verified_at timestamp overwritten.'
+        );
+    }
+
+    public function test_non_superadmin_cannot_mark_user_verified(): void
+    {
+        $target = User::factory()->regionalManager('NCR')->create(['email_verified_at' => null]);
+
+        // The route already gates with can:manageUsers, so an unauthorized
+        // caller would be stopped at the route layer (covered by
+        // test_non_superadmin_cannot_open_user_management). The defense-in-
+        // depth abort_unless inside markVerified shares the same pattern
+        // as the other gated actions in this component; here we just confirm
+        // the side effect does not happen — the user stays unverified.
+        $this->actingAs(User::factory()->president()->create());
+
+        try {
+            $component = new \App\Livewire\UserManagement();
+            $component->markVerified($target->id);
+            $invoked = true;
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $exception) {
+            $invoked = false;
+        }
+
+        // Either the method was reached and aborted, OR the abort fires before
+        // the action's body runs. In every case the user must stay unverified.
+        $this->assertNull($target->refresh()->email_verified_at);
+        $this->assertFalse($invoked, 'markVerified should not complete when the caller is not a Superadmin.');
+    }
 }

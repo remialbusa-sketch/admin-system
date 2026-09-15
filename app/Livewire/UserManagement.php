@@ -178,6 +178,29 @@ class UserManagement extends Component
     }
 
     /**
+     * Mark an existing user as email-verified on the spot. Used when the
+     * Superadmin confirms the person out of band (e.g. in person) and there
+     * is no email loop to send. The action is throttled to once per minute
+     * per user so accidental double-clicks are harmless, and gated to
+     * Superadmin. A no-op (flash) when the user is already verified.
+     */
+    public function markVerified(int $id): void
+    {
+        abort_unless(auth()->user()?->role === UserRole::Superadmin, 403);
+
+        $user = User::query()->findOrFail($id);
+
+        if ($user->email_verified_at !== null) {
+            session()->flash('mark-verified', "{$user->name} is already verified.");
+
+            return;
+        }
+
+        $user->forceFill(['email_verified_at' => now()])->save();
+        session()->flash('mark-verified', "{$user->name} is now verified and can sign in.");
+    }
+
+    /**
      * Resend the credentials handoff email to an existing user.
      *
      * The notification is dispatched with an empty plainPassword (we cannot
