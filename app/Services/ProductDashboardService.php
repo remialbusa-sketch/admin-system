@@ -67,6 +67,22 @@ class ProductDashboardService
         $warrantyExpiring = (int) ($warrantyEnds->expiring ?? 0);
         $warrantyExpired = (int) ($warrantyEnds->expired ?? 0);
 
+        // SLA countdown queue: the soonest warranty end dates still ahead of
+        // us, region-scoped. Feeds the dashboard grid's SLA countdown widget.
+        $slaUpcoming = (clone $base)
+            ->whereNotNull('warranty_end_date')
+            ->where('warranty_end_date', '>=', $today)
+            ->where('warranty_end_date', '<=', $in90d)
+            ->join('accounts', 'accounts.id', '=', 'installations.account_id')
+            ->orderBy('warranty_end_date')
+            ->limit(5)
+            ->get(['installations.machine_type', 'installations.brand', 'installations.warranty_end_date', 'accounts.customer_name'])
+            ->map(fn ($row): array => [
+                'label' => trim(($row->customer_name ?: 'Unnamed account').' · '.($row->machine_type ?: ($row->brand ?: 'Equipment'))),
+                'due' => $row->warranty_end_date->copy()->endOfDay(),
+                'href' => route('installed-products', ['warranty' => 'expiring_90d']),
+            ])->all();
+
         $activeRatio = $totalProducts > 0 ? round(($activeProducts / $totalProducts) * 100, 1) : 0;
         $warrantyRatio = $totalProducts > 0 ? round(($warrantyCovered / $totalProducts) * 100, 1) : 0;
         $missingPmsRatio = $totalProducts > 0 ? round(($missingPms / $totalProducts) * 100, 1) : 0;
@@ -243,6 +259,25 @@ class ProductDashboardService
             'regionOptions' => ['All regions', ...self::REGIONS],
             'freshness' => $freshness,
             'kpis' => $kpis,
+            // Scalar metrics exposed to the dashboard grid's expression
+            // engine (ratios in percent, matching the RAG thresholds above).
+            'metrics' => [
+                'installed' => $totalProducts,
+                'active' => $activeProducts,
+                'pulled_out' => $pulledOut,
+                'warranty_covered' => $warrantyCovered,
+                'contracts' => $contracts,
+                'missing_pms' => $missingPms,
+                'annual_bu_charges' => round($annualBuCharge, 2),
+                'accounts' => $accountCount,
+                'warranty_expiring_90d' => $warrantyExpiring,
+                'warranty_expired' => $warrantyExpired,
+                'active_ratio' => $activeRatio,
+                'warranty_ratio' => $warrantyRatio,
+                'missing_pms_ratio' => $missingPmsRatio,
+                'install_delta' => $installDelta,
+            ],
+            'sla' => $slaUpcoming,
             'regions' => $regions,
             'regionMax' => $regionMax,
             'fleetDonut' => $fleetDonut,

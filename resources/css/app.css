@@ -68,6 +68,12 @@
 @source "../**/*.blade.php";
 @source "../**/*.js";
 
+/* Dashboard grid layout engine: widget spans come from layout JSON, so the
+   span utilities are safelisted explicitly (they never appear literally in
+   source). Optional-variant brace covers plain + md: breakpoints. */
+@source inline("{,md:}col-span-{1..12}");
+@source inline("row-span-{1..6}");
+
 @theme {
     --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
     --font-display: "Barlow", ui-sans-serif, system-ui, sans-serif;
@@ -838,4 +844,105 @@
     --chart-6: oklch(60% 0.1 230);  /* steel cyan */
     --chart-7: oklch(62% 0.14 130); /* green-lime */
     --chart-8: oklch(63% 0.18 45);  /* orange */
+}
+
+/* Dashboard grid layout engine — edit mode affordances. Motion is
+   transform/opacity only; the editor is pointer-first on desktop. */
+.dashboard-widget {
+    min-width: 0;
+}
+
+[data-dashboard-grid][data-editing] .dashboard-widget {
+    outline: 1px dashed color-mix(in oklab, var(--color-primary) 40%, transparent);
+    outline-offset: 3px;
+}
+
+.dashboard-widget.is-dragging {
+    opacity: 0.35;
+    transform: scale(0.98);
+}
+
+.dashboard-widget.widget-drop-target {
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 55%, transparent);
+}
+
+.widget-drag-handle,
+.widget-remove,
+.widget-settings {
+    position: absolute;
+    top: 0.5rem;
+    z-index: 10;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--radius-field);
+    background: var(--color-base-100);
+    color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+    font-size: 0.7rem;
+    font-weight: 800;
+    line-height: 1;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.widget-drag-handle {
+    right: 4.1rem;
+    cursor: grab;
+}
+
+.widget-remove {
+    right: 2.3rem;
+    color: var(--color-error);
+    border-color: color-mix(in oklab, var(--color-error) 35%, transparent);
+    cursor: pointer;
+}
+
+.widget-settings {
+    right: 0.5rem;
+    cursor: pointer;
+}
+
+.widget-drag-handle:hover,
+.widget-remove:hover,
+.widget-settings:hover {
+    background: var(--color-base-200);
+    color: var(--color-base-content);
+}
+
+.widget-resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    width: 16px;
+    height: 16px;
+    cursor: ew-resize;
+    border-bottom-right-radius: var(--radius-box);
+    /* Grip texture: two diagonal notches, not a color gradient. */
+    background:
+        linear-gradient(135deg, transparent 0 46%, color-mix(in oklab, var(--color-primary) 65%, transparent) 46% 54%, transparent 54%),
+        linear-gradient(135deg, transparent 0 66%, color-mix(in oklab, var(--color-primary) 65%, transparent) 66% 74%, transparent 74%);
+}
+
+/* Expression tree editor canvas: dotted grid surface for the drag-drop
+   formula blocks. */
+.tree-canvas {
+    background-image: radial-gradient(
+        color-mix(in oklab, var(--color-base-content) 12%, transparent) 1px,
+        transparent 1px
+    );
+    background-size: 16px 16px;
+    touch-action: none;
+}
+
+.tree-node {
+    touch-action: none;
+    cursor: grab;
+}
+
+.tree-node:active {
+    cursor: grabbing;
+    z-index: 20;
 }

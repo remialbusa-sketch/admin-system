@@ -13,7 +13,21 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Dashboard grid layout engine: the expression engine and the widget
+        // registry are app-wide singletons; the registry is pre-loaded from
+        // config/dashboard.php so widgets can be added/removed in config.
+        $this->app->singleton(\App\Support\Dashboard\ExpressionEngine::class);
+        $this->app->singleton(\App\Support\Dashboard\GridLayoutNormalizer::class);
+        $this->app->singleton(\App\Support\Dashboard\WidgetRegistry::class, function ($app) {
+            $registry = new \App\Support\Dashboard\WidgetRegistry($app);
+
+            foreach (config('dashboard.widgets', []) as $type => $factory) {
+                $registry->register($type, $factory);
+            }
+
+            return $registry;
+        });
+        $this->app->singleton(\App\Support\Dashboard\DashboardLayoutEngine::class);
     }
 
     /**

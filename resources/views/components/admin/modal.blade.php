@@ -36,7 +36,7 @@
         x-transition:leave="transition duration-100 ease-in"
         x-transition:leave-start="translate-y-0 opacity-100"
         x-transition:leave-end="translate-y-2 opacity-0"
-        class="{{ $sizeClass }} relative w-full border border-base-300 bg-base-100"
+        class="{{ $sizeClass }} relative flex max-h-[calc(100dvh-2rem)] w-full flex-col border border-base-300 bg-base-100"
     >
         <div class="flex items-start justify-between gap-4 border-b border-base-300 px-5 py-4">
             <div>
@@ -49,7 +49,9 @@
                 <x-mary-icon name="o-x-mark" class="h-5 w-5" />
             </button>
         </div>
-        <div class="p-5">
+        {{-- min-h-0 lets the flex child shrink so long content scrolls
+            inside the dialog instead of overflowing the viewport. --}}
+        <div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
             {{ $slot }}
         </div>
     </div>

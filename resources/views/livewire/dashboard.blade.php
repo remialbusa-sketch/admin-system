@@ -74,6 +74,134 @@
         </div>
     </header>
 
+    {{-- Grid layout engine: registry-driven, expression-powered widget
+        grid, customizable per user. Sits between the header and the
+        hardcoded overview sections. --}}
+    <section aria-label="Operations grid">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <p class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
+                    <span class="inline-block h-px w-6 bg-primary/60"></span>
+                    Operations grid
+                </p>
+                <p class="mt-1 text-xs text-base-content/50">Layout-engine widgets — every value computed live from the imported installed base.</p>
+            </div>
+            <div class="no-print flex flex-wrap items-center gap-2">
+                @if ($customizing)
+                    <span class="hidden text-[11px] font-semibold text-base-content/45 sm:inline">Drag to reorder · corner to resize · gear to configure — saved on Done</span>
+                    @if ($allowAddWidgets)
+                        <button type="button" x-on:click="$dispatch('open-modal', { name: 'add-widget' })" class="admin-secondary-button">Add widget</button>
+                    @endif
+                    <button type="button" wire:click="resetLayout" wire:confirm="Reset this dashboard to the default layout? Unsaved changes are lost." class="admin-secondary-button">Reset layout</button>
+                    <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Cancel</button>
+                    <button type="button" data-grid-done class="admin-primary-button">Done</button>
+                @else
+                    <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Customize grid</button>
+                @endif
+            </div>
+        </div>
+        <x-dashboard.grid :widgets="$grid['widgets']" :editing="$customizing" />
+    </section>
+
+    {{-- Widget settings: opened per-widget from the gear button in edit
+        mode. Fields are driven by the factory's settings schema; expression
+        fields are syntax-validated before Apply. --}}
+    <x-admin.modal name="widget-settings" title="Widget settings" description="Configure this widget. Changes apply to the draft immediately and are saved when you click Done." size="lg">
+        <div class="space-y-4">
+            @if ($settingsError)
+                <p class="rounded-md bg-error/10 px-3 py-2 text-xs font-semibold text-error" role="alert">{{ $settingsError }}</p>
+            @endif
+            @if ($settingsApplied)
+                <p class="rounded-md bg-success/10 px-3 py-2 text-xs font-semibold text-success" role="status">
+                    Applied to the draft ✓ — {{ $settingsGraphCount }} formula canvas{{ $settingsGraphCount === 1 ? '' : 'es' }} received from the editor. Keep editing, or close and click Done to save.
+                </p>
+            @endif
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                @foreach ($settingsSchema as $field)
+                    @php $fieldKey = 'settingsProps.'.$field['key']; @endphp
+                    <div class="{{ ($field['type'] ?? '') === 'expression' ? 'sm:col-span-2' : '' }}">
+                        <label class="mb-1 block text-[11px] font-bold uppercase tracking-[0.1em] text-base-content/55" for="widget-field-{{ $field['key'] }}">
+                            {{ $field['label'] }} @if ($field['required'] ?? false)<span class="text-error" title="Required">*</span>@endif
+                        </label>
+                        @if (($field['type'] ?? '') === 'select')
+                            <select id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
+                                @foreach ($field['options'] ?? [] as $option)
+                                    <option value="{{ $option }}">{{ ucfirst($option) }}</option>
+                                @endforeach
+                            </select>
+                        @elseif (($field['type'] ?? '') === 'metric')
+                            <select id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
+                                @foreach (($field['options'] ?? array_keys($metricLabels)) as $option)
+                                    <option value="{{ $option }}">{{ $metricLabels[$option] ?? ucfirst($option) }}</option>
+                                @endforeach
+                            </select>
+                        @elseif (($field['type'] ?? '') === 'dataset')
+                            <select id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
+                                @foreach (($field['options'] ?? array_keys($datasetOptions)) as $option)
+                                    <option value="{{ $option }}">{{ $datasetOptions[$option] ?? ucfirst($option) }}</option>
+                                @endforeach
+                            </select>
+                        @elseif (($field['type'] ?? '') === 'boolean')
+                            <label class="flex cursor-pointer items-center gap-2 text-sm">
+                                <input type="checkbox" id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="toggle toggle-sm toggle-primary">
+                                <span class="text-base-content/70">{{ $field['toggle_label'] ?? 'Enabled' }}</span>
+                            </label>
+                        @elseif (($field['type'] ?? '') === 'number')
+                            <input type="number" id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full" placeholder="{{ $field['placeholder'] ?? '' }}">
+                        @elseif (($field['type'] ?? '') === 'expression' && ($field['visual'] ?? false))
+                            {{-- Drag-drop expression tree (no syntax typing). --}}
+                            <x-dashboard.expression-tree
+                                :field-key="$fieldKey"
+                                :expression="$settingsProps[$field['key']] ?? ''"
+                                :tree="$field['tree'] ?? null"
+                                :graph="$settingsProps[$field['key'].'_tree'] ?? null"
+                                :graph-key="$fieldKey.'_tree'"
+                                :metric-labels="$metricLabels"
+                                :metric-values="$metricValues"
+                                :widget-id="$settingsWidgetId"
+                                :open-count="$settingsOpenCount"
+                            />
+                        @elseif (($field['type'] ?? '') === 'expression')
+                            <textarea id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" rows="2" class="admin-control w-full font-mono text-xs" placeholder="{{ $field['placeholder'] ?? '' }}"></textarea>
+                        @else
+                            <input type="text" id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full" placeholder="{{ $field['placeholder'] ?? '' }}">
+                        @endif
+                        @if ($field['help'] ?? false)
+                            <p class="mt-1 text-[11px] leading-4 text-base-content/45">{{ $field['help'] }}</p>
+                        @endif
+                    </div>
+                @endforeach
+            </div>
+            {{-- Sticky action row: stays visible at the bottom of the
+                modal's scroll area on any screen size. Apply keeps the
+                modal open so the canvas blocks stay editable, and passes
+                the canvas graphs from the editors' in-memory registry —
+                they travel INSIDE this request, so nothing can be lost
+                to a late or superseded sync. --}}
+            @php $buildMark = substr(md5_file(public_path('build/manifest.json')), 0, 6) @endphp
+            <div class="sticky bottom-0 -mx-4 mt-2 flex items-center justify-end gap-2 border-t border-base-300 bg-base-100 px-4 py-3 sm:-mx-5 sm:px-5">
+                <span class="mr-auto text-[10px] font-mono text-base-content/25">build {{ $buildMark }}</span>
+                <button type="button" wire:click="cancelWidgetSettings" x-on:click="$dispatch('close-modal', { name: 'widget-settings' })" class="admin-secondary-button">Close</button>
+                <button type="button" x-on:click="$wire.applyWidgetSettings(window.__treeGraphs || {})" class="admin-primary-button">Apply</button>
+            </div>
+        </div>
+    </x-admin.modal>
+
+    {{-- Add widget: the widget registry, provided by WidgetRegistry::definitions().
+        Opt-in via config dashboard.allow_add_widgets. --}}
+    @if ($allowAddWidgets)
+        <x-admin.modal name="add-widget" title="Add widget" description="Pick a widget type — it lands at the end of the grid with default settings you can tune from its gear icon." size="lg">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                @foreach ($widgetDefinitions as $type => $definition)
+                    <button type="button" wire:click="addWidget('{{ $type }}')" class="group flex flex-col items-start gap-1 rounded-lg border border-base-300 bg-base-100 p-4 text-left transition duration-150 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/10">
+                        <span class="text-sm font-bold text-base-content transition-colors group-hover:text-primary">{{ $definition['title'] }}</span>
+                        <span class="text-xs leading-5 text-base-content/55">{{ $definition['description'] }}</span>
+                    </button>
+                @endforeach
+            </div>
+        </x-admin.modal>
+    @endif
+
     @php
         $headlineKeys = ['Installed products', 'Active products', 'Warranty covered', 'Service contracts', 'Annual BU charges'];
         $primary = collect($kpis)->filter(fn ($k) => in_array($k['label'], $headlineKeys))->values()->all();
