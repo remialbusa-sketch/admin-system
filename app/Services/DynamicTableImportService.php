@@ -29,6 +29,11 @@ class DynamicTableImportService
 {
     public function import(string $path, string $tableKey, string $sheet, array $mapping, int $headerRow, int $dataStart, ?int $userId = null): ImportBatch
     {
+        // Same shared-hosting guard as the managed-table imports: big
+        // workbooks die on the default memory_limit and surface as 503/500.
+        @set_time_limit(0);
+        @ini_set('memory_limit', '512M');
+
         $columns = CustomTableColumn::query()
             ->where('table_key', $tableKey)
             ->orderBy('position')

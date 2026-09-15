@@ -154,6 +154,14 @@ class ImportMappingService
      */
     public function analyze(string $path, string $tableKey): array
     {
+        // Loading the full workbook through PhpSpreadsheet is the single
+        // most memory-hungry step of the wizard — on shared hosting the
+        // default memory_limit (128M) kills PHP here with a fatal, which
+        // surfaces as a bare 500 on /livewire/update. Lift both limits per
+        // request, as far as the host allows (silently no-ops otherwise).
+        @set_time_limit(0);
+        @ini_set('memory_limit', '512M');
+
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
         if ($ext === 'csv') {
