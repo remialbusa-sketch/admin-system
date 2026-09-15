@@ -34,6 +34,8 @@ class SourceWorkbookImportService
 
     public function importProductDatabase(string $path, ?int $userId = null): ImportBatch
     {
+        $this->prepareForHeavyWork();
+
         $batch = $this->startBatch(self::PRODUCT_SOURCE, basename($path), 'PDB Data', $path, $userId);
         $reader = $this->reader($path);
         $sheetName = $this->worksheetName($reader, $path, 'PDB Data');
@@ -139,6 +141,8 @@ class SourceWorkbookImportService
 
     public function importServiceRequests(string $path, ?int $userId = null): ImportBatch
     {
+        $this->prepareForHeavyWork();
+
         $batch = $this->startBatch(self::EXECUTIVE_SOURCE, basename($path), 'Service Requests', $path, $userId);
         $reader = $this->reader($path);
         $sheetName = $this->worksheetName($reader, $path, 'Service Requests');
@@ -200,6 +204,8 @@ class SourceWorkbookImportService
 
     public function importTechnicalReports(string $path, ?int $userId = null): ImportBatch
     {
+        $this->prepareForHeavyWork();
+
         $batch = $this->startBatch(self::EXECUTIVE_SOURCE, basename($path), 'Technical Reports', $path, $userId);
         $reader = $this->reader($path);
         $sheetName = $this->worksheetName($reader, $path, 'Technical Reports');
@@ -263,6 +269,8 @@ class SourceWorkbookImportService
 
     public function importHistoricalTsms(string $path, ?int $userId = null): ImportBatch
     {
+        $this->prepareForHeavyWork();
+
         $batch = $this->startBatch(self::HISTORICAL_SOURCE, basename($path), 'MCBTSi TSMS', $path, $userId);
         $reader = $this->reader($path);
         $sheetName = $this->worksheetName($reader, $path, 'MCBTSi TSMS');
@@ -319,6 +327,8 @@ class SourceWorkbookImportService
 
     public function importPersonnel(string $path, ?int $userId = null): ImportBatch
     {
+        $this->prepareForHeavyWork();
+
         $batch = $this->startBatch(self::PERSONNEL_SOURCE, basename($path), 'Personnel list', $path, $userId);
 
         $reader = $this->reader($path);
@@ -392,6 +402,20 @@ class SourceWorkbookImportService
      *
      * @param  array<string, string>  $mapping  target key => column letter
      */
+    /**
+     * Heavy workbooks (8k+ rows) can outlive the default request limits on
+     * shared hosting: PHP dies mid-import (memory exhausted / execution
+     * timeout), the FPM worker crashes, and Apache answers 503 — the stock
+     * "maintenance downtime or capacity problems" page — for every request
+     * until the pool recovers. Lift both limits per request, as far as the
+     * host allows; on restrictive hosts ini_set silently no-ops.
+     */
+    private function prepareForHeavyWork(): void
+    {
+        @set_time_limit(0);
+        @ini_set('memory_limit', '512M');
+    }
+
     public function importMapped(
         string $path,
         string $tableKey,
@@ -413,7 +437,7 @@ class SourceWorkbookImportService
         // Big real-world workbooks (8k+ rows) can outlive the default 30s
         // request window; row-level work runs inside retry() + transactions,
         // so lifting the time limit per request is safe.
-        @set_time_limit(0);
+        $this->prepareForHeavyWork();
 
         $headers = (new ImportMappingService)->buildHeaderMap($mapping);
 
