@@ -1180,51 +1180,111 @@ abstract class ManagedTable extends Component
      * Step 1: a streamed upload finished. The chunks were already assembled
      * on disk by ImportStreamController, so this only has to analyze the
      * workbook and build the preview - no multipart limits involved.
+     *
+     * This entire method is wrapped so that ANY throwable (OOM, disk error,
+     * PHPSpreadsheet fatal, stale deployment) surfaces as a user-visible
+     * validation error instead of a bare 500 on /livewire/update. A bare 500
+     * on live prod gives the user no next step and hides the deployed-revision
+     * breadcrumb.
      */
     public function analyzeStreamedImport(string $uploadId, string $originalName): void
     {
-        abort_unless($this->canImport(), 403);
-
-        // Explicit breadcrumbs: an ERROR logged right after this marker means
-        // the running code IS the fixed code and the failure is new; a log
-        // with no marker at all means the server never reached this method
-        // (stale deployment).
-        Log::info('analyzeStreamedImport.enter', ['upload_id' => $uploadId]);
-
-        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-
-        if (! in_array($extension, ['xlsx', 'xls', 'csv', 'txt'], true)
-            || preg_match('/^[a-f0-9]{32}$/', $uploadId) !== 1) {
-            $this->addError('importFile', 'That file type is not supported. Use .xlsx, .xls or .csv.');
-
-            return;
-        }
-
-        $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
-
-        $this->importStoredPath = ImportStreamController::storedPathFor($uploadId, $extension);
-        $fullPath = $this->storedImportPath();
-
-        if (! is_file($fullPath) || filesize($fullPath) === 0) {
-            $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
-            $this->addError('importFile', 'The streamed upload did not reach the server. Try again.');
-
-            return;
-        }
-
         try {
-            $mappingService = app(ImportMappingService::class);
-            $this->importAnalysis = $mappingService->analyze($fullPath, $this->tableKey());
-            $this->applyImportPreview($this->importAnalysis['preview']);
-            $this->importMapping = $mappingService->blankMapping($this->tableKey());
+            abort_unless($this->canImport(), 403);
+
+            // Breadcrumbs: an ERROR logged right after this marker means
+            // the running code IS the fixed code and the failure is new; a log
+            // with no marker at all means the server never reached this method
+            // (stale deployment). Every early-return and the happy path also
+            // log so the next engineer can tell which branch the prod 5 MB
+            // failure took without needing APP_DEBUG=true.
+            $decodedName = urldecode($originalName);
+            Log::info('analyzeStreamedImport.enter', [
+                'upload_id' => $uploadId,
+                'original' => $originalName,
+                'decoded' => $decodedName,
+                'table' => $this->tableKey(),
+                'memory_limit' => ini_get('memory_limit'),
+                'max_execution_time' => (string) ini_get('max_execution_time'),
+            ]);
+
+            $extension = strtolower(pathinfo($decodedName, PATHINFO_EXTENSION));
+
+            if (! in_array($extension, ['xlsx', 'xls', 'csv', 'txt'], true)
+                || preg_match('/^[a-f0-9]{32}$/', $uploadId) !== 1) {
+                Log::warning('analyzeStreamedImport.rejected', ['upload_id' => $uploadId, 'extension' => $extension]);
+                $this->addError('importFile', 'That file type is not supported. Use .xlsx, .xls or .csv.');
+
+                return;
+            }
+
+            $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
+
+            $this->importStoredPath = ImportStreamController::storedPathFor($uploadId, $extension);
+            $fullPath = $this->storedImportPath();
+
+            Log::info('analyzeStreamedImport.storedPath', [
+                'upload_id' => $uploadId,
+                'relative' => $this->importStoredPath,
+                'absolute' => $fullPath,
+                'exists' => is_file($fullPath),
+                'bytes' => is_file($fullPath) ? filesize($fullPath) : null,
+            ]);
+
+            if (! is_file($fullPath) || filesize($fullPath) === 0) {
+                Log::warning('analyzeStreamedImport.missingFile', ['upload_id' => $uploadId, 'path' => $fullPath]);
+                $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
+                $this->addError('importFile', 'The streamed upload did not reach the server. Try again — the chunks may have been blocked by the web firewall (ModSecurity) or the disk is full.');
+
+                return;
+            }
+
+            // Lift per-request limits for the most memory-hungry step (PhpSpreadsheet).
+            // These may be no-ops on hosts that disable ini_set — logged above so
+            // the operator can see the effective limit.
+            @set_time_limit(0);
+            @ini_set('memory_limit', '512M');
+
+            try {
+                $mappingService = app(ImportMappingService::class);
+                $this->importAnalysis = $mappingService->analyze($fullPath, $this->tableKey());
+                $this->applyImportPreview($this->importAnalysis['preview']);
+                $this->importMapping = $mappingService->blankMapping($this->tableKey());
+                Log::info('analyzeStreamedImport.success', [
+                    'upload_id' => $uploadId,
+                    'sheet' => $this->importSheet,
+                    'rows' => $this->importPreview['totalRows'] ?? null,
+                    'cols' => $this->importPreview['totalColumns'] ?? null,
+                ]);
+            } catch (Throwable $exception) {
+                // Inner: workbook-level failure (read error, corrupt zip, etc.)
+                report($exception);
+                Log::error('analyzeStreamedImport.analyzeFailed', [
+                    'upload_id' => $uploadId,
+                    'error' => $exception->getMessage(),
+                    'file' => $fullPath,
+                ]);
+
+                $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
+                $this->addError('importFile', 'This file could not be read as an Excel or CSV workbook ('.Str::limit($exception->getMessage(), 180).'). Re-export it as .xlsx or .csv and try again.');
+            }
         } catch (Throwable $exception) {
-            // Never swallow the reason: report it and surface a short hint,
-            // or a valid workbook mislabeled by the source system is
-            // indistinguishable from a corrupt one.
+            // Outer: ANY other throwable (abort, storage, OOM Error, stale code).
+            // Never let it become a bare 500 on /livewire/update.
             report($exception);
+            Log::error('analyzeStreamedImport.outerFailed', [
+                'upload_id' => $uploadId ?? null,
+                'original' => $originalName ?? null,
+                'error' => $exception->getMessage(),
+            ]);
+
+            // If it's an auth abort we should not mask it as a validation error.
+            if ($exception instanceof \Symfony\Component\HttpKernel\Exception\HttpException) {
+                throw $exception;
+            }
 
             $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
-            $this->addError('importFile', 'This file could not be read as an Excel or CSV workbook ('.Str::limit($exception->getMessage(), 140).'). Re-export it as .xlsx or .csv and try again.');
+            $this->addError('importFile', 'The workbook could not be analyzed ('.Str::limit($exception->getMessage(), 180).'). If it is a large file, the server memory limit (currently '.ini_get('memory_limit').') may be too low — set it to 512M in the hosting control panel.');
         }
     }
 

@@ -1127,7 +1127,19 @@ document.addEventListener('alpine:init', () => {
                     });
 
                     if (!response.ok) {
-                        const detail = (await response.text()).slice(0, 160);
+                        let detail = await response.text();
+                        // PUT handler returns JSON {message: "..."} — surface that, not raw JSON.
+                        try {
+                            const parsed = JSON.parse(detail);
+                            if (parsed?.message) detail = parsed.message;
+                        } catch {
+                            // ModSecurity / WAF returns an HTML page for 403 — slice would
+                            // show "<!DOCTYPE..." which is useless in the UI.
+                            if (detail.trimStart().startsWith('<')) {
+                                detail = `Upload blocked by web firewall (HTTP ${response.status}). Ask the host to allow PUT ${url} or disable ModSecurity for that path.`;
+                            }
+                        }
+                        detail = detail.slice(0, 260);
                         throw new Error(detail || 'Upload failed at byte ' + offset + '.');
                     }
 
@@ -1135,9 +1147,38 @@ document.addEventListener('alpine:init', () => {
                     this.progress = Math.round((offset / file.size) * 100);
                 }
 
-                await this.$wire.analyzeStreamedImport(uploadId, file.name);
+                try {
+                    await this.$wire.analyzeStreamedImport(uploadId, file.name);
+                } catch (wireError) {
+                    // Livewire 3 rejects the promise with a js error that often
+                    // contains only "500: Internal Server Error" — try to pull a
+                    // more useful message from the server's validation errors or
+                    // console. The server now logs breadcrumbs and surfaces the
+                    // failure via addError('importFile', ...), but if the 500 was
+                    // not caught server-side we show a diagnostic hint instead of
+                    // a blank "upload failed".
+                    const raw = wireError?.message || String(wireError || '');
+                    const has500 = raw.includes('500') || raw.toLowerCase().includes('internal server error');
+                    if (has500) {
+                        this.uploadError = 'The server failed to analyze the workbook (HTTP 500). Check storage/logs/laravel.log for analyzeStreamedImport.enter — breadcrumbs were added in the deployed code to make this diagnosable. Common causes: memory_limit too low (set to 512M in MultiPHP INI Editor), or the assembled file is missing (disk full / ModSecurity chunk blocked).';
+                    } else {
+                        this.uploadError = raw || 'The workbook analysis failed.';
+                    }
+                    // Also surface any Livewire validation errors that the
+                    // server set via addError('importFile', ...) — they appear in
+                    // $wire.__livewire.errors in some Livewire versions.
+                    const livewireErrors = this.$wire?.__livewire?.errors || this.$wire?.$errors;
+                    const fileError = livewireErrors?.importFile?.[0] || livewireErrors?.['importFile']?.[0];
+                    if (fileError) {
+                        this.uploadError = fileError;
+                    }
+                }
             } catch (error) {
-                this.uploadError = error.message || 'The upload failed.';
+                // Network/PUT-level failure (fetch threw before reaching Livewire).
+                let msg = error?.message || 'The upload failed.';
+                // Prefer the JSON message from the PUT handler (e.g. ModSecurity block).
+                if (error?.cause?.message) msg = error.cause.message;
+                this.uploadError = msg;
             } finally {
                 this.uploading = false;
             }

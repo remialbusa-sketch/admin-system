@@ -22,17 +22,20 @@ class ImportStreamController extends Controller
 
     public function store(Request $request)
     {
-        $originalName = (string) $request->header('X-File-Name', '');
+        // X-File-Name is sent as encodeURIComponent(file.name) from Alpine,
+        // so decode it before extracting the extension (e.g. "My File.xlsx"
+        // arrives as "My%20File.xlsx").
+        $originalName = urldecode((string) $request->header('X-File-Name', ''));
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         $uploadId = (string) $request->header('X-Upload-Id', '');
         $offset = (int) $request->header('X-File-Offset', '-1');
 
         if (! in_array($extension, self::ALLOWED_EXTENSIONS, true)) {
-            return response()->json(['message' => 'Unsupported file type.'], 422);
+            return response()->json(['message' => 'Unsupported file type (.'.($extension ?: '?').'). Use .xlsx, .xls or .csv.'], 422);
         }
 
         if (preg_match('/^[a-f0-9]{32}$/', $uploadId) !== 1 || $offset < 0) {
-            return response()->json(['message' => 'Malformed upload request.'], 422);
+            return response()->json(['message' => 'Malformed upload request — refresh the page and try again.'], 422);
         }
 
         $relative = self::storedPathFor($uploadId, $extension);
@@ -56,7 +59,21 @@ class ImportStreamController extends Controller
         // getContent() over the streamed PUT body: works identically to
         // php://input in production (PUT bodies are exempt from
         // post_max_size) but is also readable from the test client.
+        // For a 5 MB file in 2 MB chunks this is 3× 2 MB in memory — well
+        // within the 512M limit; the previous code had no size/ratio logging
+        // so a 0-byte chunk was indistinguishable from a ModSecurity block.
         $body = $request->getContent();
+
+        if ($body === '' && (int) $request->header('Content-Length', '0') !== 0) {
+            \Illuminate\Support\Facades\Log::warning('import.upload-stream.emptyBodyWithContentLength', [
+                'upload_id' => $uploadId,
+                'offset' => $offset,
+                'content_length' => $request->header('Content-Length'),
+                'content_type' => $request->header('Content-Type'),
+            ]);
+
+            return response()->json(['message' => 'Empty upload chunk was received (the web firewall may have stripped the body).'], 422);
+        }
 
         if ($body === '') {
             return response()->json(['message' => 'Empty upload chunk.'], 422);
