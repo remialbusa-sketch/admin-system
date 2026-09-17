@@ -14,6 +14,10 @@
                 <x-mary-icon name="o-arrow-up-tray" class="h-4 w-4" />
                 Import table
             </button>
+            <a href="{{ route('tables.import', $tableKey ?? $this->tableKey()) }}" target="_blank" rel="noopener" class="admin-secondary-button" title="Open the lean import wizard in a new tab (recommended for large files)">
+                <x-mary-icon name="o-arrow-top-right-on-square" class="h-4 w-4" />
+                Import in new tab
+            </a>
         @endif
     </x-slot>
 </x-admin.page-header>

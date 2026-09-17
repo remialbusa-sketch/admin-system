@@ -10,6 +10,7 @@ use App\Livewire\HistoricalTsmsTable;
 use App\Livewire\InstalledProductsTable;
 use App\Livewire\ServiceRequestTable;
 use App\Livewire\Settings;
+use App\Livewire\TableImport;
 use App\Livewire\TablesList;
 use App\Livewire\TechnicalPersonnelTable;
 use App\Livewire\TechnicalReportTable;
@@ -32,6 +33,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::put('import/upload-stream', [ImportStreamController::class, 'store'])
         ->name('import.upload-stream')
         ->middleware('can:import');
+
+    // Dedicated lean import wizard (new tab) — avoids the grid's Livewire snapshot.
+    Route::get('tables/{table}/import', TableImport::class)
+        ->name('tables.import')
+        ->middleware('can:import');
+
     Route::get('installed-products', InstalledProductsTable::class)->name('installed-products');
     Route::get('service-requests', ServiceRequestTable::class)->name('service-requests');
     Route::get('technical-reports', TechnicalReportTable::class)->name('technical-reports');
