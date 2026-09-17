@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ClassicImportController;
 use App\Http\Controllers\ImportStreamController;
 use App\Http\Controllers\MondayWebhookController;
 use App\Livewire\Actions\Logout;
@@ -37,6 +38,17 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // Dedicated lean import wizard (new tab) — avoids the grid's Livewire snapshot.
     Route::get('tables/{table}/import', TableImport::class)
         ->name('tables.import')
+        ->middleware('can:import');
+
+    // Classic non-Livewire import (bypasses /livewire/update entirely).
+    Route::get('tables/{table}/import-classic', [ClassicImportController::class, 'show'])
+        ->name('tables.import.classic')
+        ->middleware('can:import');
+    Route::post('tables/{table}/import-classic/analyze', [ClassicImportController::class, 'analyze'])
+        ->name('tables.import.classic.analyze')
+        ->middleware('can:import');
+    Route::post('tables/{table}/import-classic/execute', [ClassicImportController::class, 'execute'])
+        ->name('tables.import.classic.execute')
         ->middleware('can:import');
 
     Route::get('installed-products', InstalledProductsTable::class)->name('installed-products');

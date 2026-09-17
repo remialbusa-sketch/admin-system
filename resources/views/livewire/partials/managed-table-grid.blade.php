@@ -14,9 +14,13 @@
                 <x-mary-icon name="o-arrow-up-tray" class="h-4 w-4" />
                 Import table
             </button>
-            <a href="{{ route('tables.import', $tableKey ?? $this->tableKey()) }}" target="_blank" rel="noopener" class="admin-secondary-button" title="Open the lean import wizard in a new tab (recommended for large files)">
+            <a href="{{ route('tables.import', $tableKey) }}" target="_blank" rel="noopener" class="admin-secondary-button" title="Open the lean Livewire import wizard in a new tab (next-best, still bypasses grid snapshot)">
                 <x-mary-icon name="o-arrow-top-right-on-square" class="h-4 w-4" />
                 Import in new tab
+            </a>
+            <a href="{{ route('tables.import.classic', $tableKey) }}" target="_blank" rel="noopener" class="admin-secondary-button border-warning/30 text-warning" title="Classic import — no Livewire. Use this if the other tabs still 500. Streams via PUT then analyzes via plain POST JSON.">
+                <x-mary-icon name="o-wrench-screwdriver" class="h-4 w-4" />
+                Import classic
             </a>
         @endif
     </x-slot>

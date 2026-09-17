@@ -1,6 +1,10 @@
 <div class="min-h-screen bg-base-200">
-    <x-admin.page-header eyebrow="Import" title="Import {{ $title }}" description="Workbook wizard runs in this lightweight tab so large files do not share the grid's Livewire snapshot. When the import finishes, return to the original tab.">
+    <x-admin.page-header eyebrow="Import" title="Import {{ $title }}" description="Workbook wizard runs in this lightweight tab so large files do not share the grid's Livewire snapshot. If this tab still 500s, use Import classic (no Livewire). When the import finishes, return to the original tab.">
         <x-slot name="actions">
+            <a href="{{ route('tables.import.classic', $tableKey) }}" target="_blank" class="admin-secondary-button border-warning/30 text-warning">
+                <x-mary-icon name="o-wrench-screwdriver" class="h-4 w-4" />
+                Import classic
+            </a>
             <a href="{{ $backUrl }}" class="admin-secondary-button">
                 <x-mary-icon name="o-arrow-left" class="h-4 w-4" />
                 Back to table
