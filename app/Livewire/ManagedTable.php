@@ -17,6 +17,7 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -1183,6 +1184,12 @@ abstract class ManagedTable extends Component
     public function analyzeStreamedImport(string $uploadId, string $originalName): void
     {
         abort_unless($this->canImport(), 403);
+
+        // Explicit breadcrumbs: an ERROR logged right after this marker means
+        // the running code IS the fixed code and the failure is new; a log
+        // with no marker at all means the server never reached this method
+        // (stale deployment).
+        Log::info('analyzeStreamedImport.enter', ['upload_id' => $uploadId]);
 
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 

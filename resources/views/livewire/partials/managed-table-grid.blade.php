@@ -270,6 +270,21 @@
             <x-input-error :messages="$errors->get('importFile')" class="mt-1.5" />
             <span class="mt-1 block text-xs text-base-content/50" wire:loading wire:target="analyzeStreamedImport">Analyzing workbook...</span>
             <span class="mt-1 block text-xs text-base-content/50">The file streams in small chunks, so PHP's upload limits don't apply (512 MB cap) &mdash; and nothing is imported until you confirm the column mapping.</span>
+            @php
+                // Deployed git short-SHA: shows which code this server runs, so
+                // "did the fix deploy?" is answerable at a glance in the page.
+                static $deployedRevision = null;
+                if ($deployedRevision === null) {
+                    $deployedRevision = 'unknown';
+                    // .git sits at the repo root, one level above public/.
+                    $gitRef = public_path('../.git/refs/heads/main');
+
+                    if (is_file($gitRef)) {
+                        $deployedRevision = substr(trim(file_get_contents($gitRef)), 0, 7);
+                    }
+                }
+            @endphp
+            <span class="mt-0.5 block text-[10px] font-mono text-base-content/25">deploy @{{ $deployedRevision }}</span>
         </div>
 
         @if ($importPreview)
