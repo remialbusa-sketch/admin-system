@@ -95,6 +95,77 @@ class ImportStreamController extends Controller
     }
 
     /**
+     * POST multipart chunk fallback for hosts that block PUT (ModSecurity).
+     * Accepts FormData { chunk: Blob, uploadId, offset, fileName }.
+     * Kept separate from the PUT store() so the PUT path stays untouched.
+     */
+    public function storeChunk(Request $request)
+    {
+        $uploadId = (string) $request->input('uploadId', '');
+        $offset = (int) $request->input('offset', -1);
+        $originalName = urldecode((string) $request->input('fileName', ''));
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+
+        if (! in_array($extension, self::ALLOWED_EXTENSIONS, true)) {
+            return response()->json(['message' => 'Unsupported file type (.'.($extension ?: '?').'). Use .xlsx, .xls or .csv.'], 422);
+        }
+
+        if (preg_match('/^[a-f0-9]{32}$/', $uploadId) !== 1 || $offset < 0) {
+            return response()->json(['message' => 'Malformed chunk upload — refresh and try again.'], 422);
+        }
+
+        $file = $request->file('chunk');
+
+        if (! $file || ! $file->isValid()) {
+            \Illuminate\Support\Facades\Log::warning('import.upload-chunk.noFile', [
+                'upload_id' => $uploadId,
+                'offset' => $offset,
+                'error' => $file?->getErrorMessage(),
+            ]);
+
+            return response()->json(['message' => 'Empty chunk was received (web firewall may have stripped the body).'], 422);
+        }
+
+        $relative = self::storedPathFor($uploadId, $extension);
+        $absolute = Storage::disk(config('filesystems.default'))->path($relative);
+        $directory = dirname($absolute);
+
+        if (! is_dir($directory)) {
+            mkdir($directory, 0775, true);
+        }
+
+        $currentSize = is_file($absolute) ? filesize($absolute) : 0;
+
+        if ($offset > 0 && $currentSize !== $offset) {
+            return response()->json(['message' => 'Chunk out of order - restart the upload.'], 409);
+        }
+
+        if ($currentSize + $file->getSize() > self::MAX_TOTAL_BYTES) {
+            return response()->json(['message' => 'File exceeds the 512 MB import cap.'], 413);
+        }
+
+        $body = file_get_contents($file->getRealPath());
+
+        if ($body === false || $body === '') {
+            return response()->json(['message' => 'Empty chunk.'], 422);
+        }
+
+        $target = fopen($absolute, $offset === 0 ? 'wb' : 'ab');
+
+        if ($target === false) {
+            return response()->json(['message' => 'Could not write the upload.'], 500);
+        }
+
+        fwrite($target, $body);
+        fclose($target);
+
+        return response()->json([
+            'stored' => $relative,
+            'size' => filesize($absolute),
+        ]);
+    }
+
+    /**
      * Where a streamed upload lands for a given upload id + extension. The
      * Livewire component rebuilds the same path to analyze the file, so this
      * is the single source of truth for the layout.

@@ -15,6 +15,7 @@
              analyzeUrl: @js(route('tables.import.classic.analyze', $tableKey)),
              executeUrl: @js(route('tables.import.classic.execute', $tableKey)),
              uploadUrl: @js(route('import.upload-stream')),
+             uploadChunkUrl: @js(route('import.upload-chunk')),
              targets: @js($targets)
          })"
          x-init="init()">
@@ -53,7 +54,7 @@
                     <input type="file" @change="onFile($el.files[0])" :disabled="uploading || analyzing" class="admin-control w-full" accept=".xlsx,.xls,.csv,.txt">
                     <span class="mt-1 block text-xs font-semibold text-primary" x-show="uploading" x-cloak>Uploading... <span x-text="progress"></span>%</span>
                     <span class="mt-1 block text-xs font-semibold text-primary" x-show="analyzing" x-cloak>Analyzing workbook...</span>
-                    <span class="mt-1 block text-xs text-base-content/50">The file streams in 2 MB chunks via <code class="font-mono">PUT /import/upload-stream</code> (bypasses PHP post limits, 512 MB cap) — then analysis runs in a plain <code class="font-mono">POST</code> (not <code class="font-mono">/livewire/update</code>).</span>
+                     <span class="mt-1 block text-xs text-base-content/50">The file streams in 1 MB chunks via <code class="font-mono">POST /import/upload-chunk</code> (multipart, firewall-safe; falls back to <code class="font-mono">PUT /import/upload-stream</code>) — then analysis runs in a plain <code class="font-mono">POST</code> (not <code class="font-mono">/livewire/update</code>).</span>
                 </div>
 
                 {{-- Preview --}}
@@ -157,7 +158,7 @@
 
     <script>
         document.addEventListener('alpine:init', () => {
-            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, uploadUrl, targets }) => ({
+            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, uploadUrl, uploadChunkUrl, targets }) => ({
                 tableKey, analyzeUrl, executeUrl, uploadUrl, targets,
                 backUrl: @js($backUrl),
                 step: 1,
@@ -201,25 +202,50 @@
                         crypto.getRandomValues(bytes);
                         const uploadId = Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join('');
                         this.uploadId = uploadId;
-                        const chunkSize = 2 * 1024 * 1024;
+                        // Primary: POST multipart chunk (1 MB, stays under cPanel's 2M post_max_size and avoids ModSecurity PUT blocking).
+                        const chunkSize = 1 * 1024 * 1024;
                         let offset = 0;
+                        let usePost = true;
                         while (offset < file.size) {
-                            const resp = await fetch(uploadUrl, {
-                                method: 'PUT',
-                                headers: {
-                                    'X-CSRF-TOKEN': csrf,
-                                    'X-Requested-With': 'XMLHttpRequest',
-                                    'X-File-Name': encodeURIComponent(file.name),
-                                    'X-Upload-Id': uploadId,
-                                    'X-File-Offset': String(offset),
-                                    'Content-Type': 'application/octet-stream',
-                                },
-                                body: file.slice(offset, offset + chunkSize),
-                            });
+                            const slice = file.slice(offset, offset + chunkSize);
+                            let resp;
+                            if (usePost) {
+                                const form = new FormData();
+                                form.append('chunk', slice, file.name);
+                                form.append('uploadId', uploadId);
+                                form.append('offset', String(offset));
+                                form.append('fileName', file.name);
+                                resp = await fetch(uploadChunkUrl, {
+                                    method: 'POST',
+                                    headers: {
+                                        'X-CSRF-TOKEN': csrf,
+                                        'X-Requested-With': 'XMLHttpRequest',
+                                    },
+                                    body: form,
+                                });
+                                // If POST endpoint not deployed (404) or returns 405, fall back to PUT for remaining chunks.
+                                if (resp.status === 404 || resp.status === 405) {
+                                    usePost = false;
+                                }
+                            }
+                            if (!usePost) {
+                                resp = await fetch(uploadUrl, {
+                                    method: 'PUT',
+                                    headers: {
+                                        'X-CSRF-TOKEN': csrf,
+                                        'X-Requested-With': 'XMLHttpRequest',
+                                        'X-File-Name': encodeURIComponent(file.name),
+                                        'X-Upload-Id': uploadId,
+                                        'X-File-Offset': String(offset),
+                                        'Content-Type': 'application/octet-stream',
+                                    },
+                                    body: slice,
+                                });
+                            }
                             if (!resp.ok) {
                                 let detail = await resp.text();
-                                try { const p = JSON.parse(detail); if (p?.message) detail = p.message; } catch { if (detail.trimStart().startsWith('<')) detail = `Upload blocked by web firewall (HTTP ${resp.status}). Ask host to allow PUT ${uploadUrl}.`; }
-                                throw new Error(detail.slice(0,260) || 'Upload failed at byte ' + offset + '.');
+                                try { const p = JSON.parse(detail); if (p?.message) detail = p.message; } catch { if (detail.trimStart().startsWith('<')) detail = `Upload blocked by web firewall (HTTP ${resp.status}). Tried ${usePost ? 'POST' : 'PUT'} ${usePost ? uploadChunkUrl : uploadUrl} — ask host to allow it or share this HTML snippet.`; }
+                                throw new Error(detail.slice(0,320) || 'Upload failed at byte ' + offset + '.');
                             }
                             offset = Math.min(offset + chunkSize, file.size);
                             this.progress = Math.round(offset / file.size * 100);

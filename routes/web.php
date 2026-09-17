@@ -34,6 +34,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::put('import/upload-stream', [ImportStreamController::class, 'store'])
         ->name('import.upload-stream')
         ->middleware('can:import');
+    Route::post('import/upload-chunk', [ImportStreamController::class, 'storeChunk'])
+        ->name('import.upload-chunk')
+        ->middleware('can:import');
 
     // Dedicated lean import wizard (new tab) — avoids the grid's Livewire snapshot.
     Route::get('tables/{table}/import', TableImport::class)
