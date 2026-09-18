@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\DynamicTable;
 use App\Services\ImportMappingService;
 use App\Services\SourceWorkbookImportService;
+use App\Support\ImportFatalCapture;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -57,6 +58,10 @@ class ClassicImportController extends Controller
     public function analyze(Request $request, string $table)
     {
         abort_unless($request->user()?->canImport(), 403);
+
+        // OOM fatals are uncatchable — this turns the bare 500 into a JSON
+        // message plus a marker file the admin can read.
+        ImportFatalCapture::register('classic.analyze:'.$table, emitJson: true);
 
         $request->validate([
             'uploadId' => ['required', 'string', 'regex:/^[a-f0-9]{32}$/'],
@@ -141,6 +146,9 @@ class ClassicImportController extends Controller
     public function execute(Request $request, string $table)
     {
         abort_unless($request->user()?->canImport(), 403);
+
+        // A full import can also OOM (formula ranges, big chunks) — same guard.
+        ImportFatalCapture::register('classic.execute:'.$table, emitJson: true);
 
         $request->validate([
             'uploadId' => ['required', 'string', 'regex:/^[a-f0-9]{32}$/'],

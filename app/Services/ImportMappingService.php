@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Reader\IReader;
@@ -161,6 +162,20 @@ class ImportMappingService
         // request, as far as the host allows (silently no-ops otherwise).
         @set_time_limit(0);
         @ini_set('memory_limit', '512M');
+
+        // The raise above is a silent no-op when the host locks memory_limit
+        // (.user.ini = PHP_INI_PERDIR / FPM php_admin_value) — log the
+        // EFFECTIVE limit so a fatal that follows is explainable, and warn
+        // when the workbook may not fit (the uncatchable OOM behind the
+        // persistent live 500).
+        $effectiveLimit = ini_get('memory_limit');
+        if ($this->memoryLimitBytes($effectiveLimit) < 256 * 1024 * 1024) {
+            Log::warning('import.analyze.memoryLimitLocked', [
+                'effective_limit' => $effectiveLimit,
+                'required_hint' => '256M+',
+                'file' => basename($path),
+            ]);
+        }
 
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
@@ -417,7 +432,20 @@ class ImportMappingService
             throw new \RuntimeException('Sheet could not be read.');
         }
 
-        $rows = $sheet->toArray(null, true, true, true);
+        // calculateFormulas MUST stay false: PhpSpreadsheet's calculation
+        // engine enumerates every cell reference in a formula's range, and a
+        // full-column formula (e.g. SUM(A:A) = 1,048,576 refs) allocates
+        // ~33 MB in one go — the uncatchable OOM that surfaced as a bare 500
+        // on POST /livewire/update on hosts where memory_limit is locked
+        // below 512M. We only need the workbook's cached values for preview.
+        // calculateFormulas MUST stay false: PhpSpreadsheet's calculation
+        // engine enumerates every cell reference in a formula's range. Google
+        // Sheets exports (e.g. =IFERROR(__xludf.DUMMYFUNCTION("QUERY(PDB!B8:AI14342…)…"))
+        // carry bounded ranges that allocate 30-90 MB in a single array — the
+        // uncatchable OOM that surfaced as a bare 500 on POST /livewire/update
+        // on hosts where memory_limit is locked below 512M. We only need the
+        // workbook's cached values for preview.
+        $rows = $sheet->toArray(null, false, true, true);
         $workbook->disconnectWorksheets();
         unset($sheet, $workbook);
 
@@ -482,5 +510,26 @@ class ImportMappingService
         $reader->setReadEmptyCells(false);
 
         return $reader;
+    }
+
+    /**
+     * Parse a php.ini shorthand memory value (128M, 1G, -1, bytes) to bytes.
+     */
+    private function memoryLimitBytes(string|false $value): int
+    {
+        if ($value === false || $value === '' || $value === '-1') {
+            return PHP_INT_MAX;
+        }
+
+        $value = trim((string) $value);
+        $unit = strtolower(substr($value, -1));
+        $number = (int) $value;
+
+        return match ($unit) {
+            'g' => $number * 1024 * 1024 * 1024,
+            'm' => $number * 1024 * 1024,
+            'k' => $number * 1024,
+            default => $number,
+        };
     }
 }

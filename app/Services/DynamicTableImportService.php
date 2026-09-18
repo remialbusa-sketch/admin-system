@@ -109,7 +109,9 @@ class DynamicTableImportService
                 if ($worksheet) {
                     $rowNumber = $dataStart - 1;
                     $sinceFlush = 0;
-                    foreach ($worksheet->toArray(null, true, true, true) as $row) {
+                    // calculateFormulas=false: import cached values; recalculating
+                    // can enumerate huge formula ranges and OOM the worker.
+                    foreach ($worksheet->toArray(null, false, true, true) as $row) {
                         $rowNumber++;
                         if (count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
                             continue;

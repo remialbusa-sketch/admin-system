@@ -3,14 +3,17 @@
 namespace App\Livewire;
 
 use App\Http\Controllers\ImportStreamController;
+use App\Models\DynamicTable;
 use App\Services\ImportMappingService;
 use App\Services\SourceWorkbookImportService;
+use App\Support\ImportFatalCapture;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Livewire\Component;
 use RuntimeException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 
 /**
@@ -61,7 +64,7 @@ class TableImport extends Component
         $this->tableKey = $table;
 
         $targets = ImportMappingService::TARGETS[$this->tableKey] ?? null;
-        $isDynamic = \App\Models\DynamicTable::query()->where('key', $this->tableKey)->exists();
+        $isDynamic = DynamicTable::query()->where('key', $this->tableKey)->exists();
 
         if ($targets === null && ! $isDynamic) {
             abort(404, 'Import is not supported for this table.');
@@ -87,6 +90,10 @@ class TableImport extends Component
      */
     public function analyzeStreamedImport(string $uploadId, string $originalName): void
     {
+        // An OOM fatal cannot be caught — capture it so the next attempt
+        // leaves a readable marker (storage/app/private/imports/last-fatal.json).
+        ImportFatalCapture::register('table-import.analyze:'.$this->tableKey);
+
         try {
             abort_unless($this->canImport(), 403);
 
@@ -169,7 +176,7 @@ class TableImport extends Component
                 'via' => 'TableImport',
             ]);
 
-            if ($exception instanceof \Symfony\Component\HttpKernel\Exception\HttpException) {
+            if ($exception instanceof HttpException) {
                 throw $exception;
             }
 
@@ -350,7 +357,7 @@ class TableImport extends Component
             'technical-reports' => route('technical-reports'),
             'history-reports' => route('history-reports'),
             'personnel' => route('personnel'),
-            default => \App\Models\DynamicTable::query()->where('key', $this->tableKey)->exists()
+            default => DynamicTable::query()->where('key', $this->tableKey)->exists()
                 ? route('tables.show', $this->tableKey)
                 : route('tables'),
         };

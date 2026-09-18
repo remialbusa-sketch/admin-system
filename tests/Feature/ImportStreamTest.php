@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Livewire\ServiceRequestTable;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -21,7 +22,7 @@ class ImportStreamTest extends TestCase
         $this->actingAs($user);
 
         // A real single-sheet workbook the wizard can analyze.
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('Service Requests');
         $sheet->setCellValue('A1', 'SR No');
@@ -97,5 +98,65 @@ class ImportStreamTest extends TestCase
             'HTTP_X_FILE_OFFSET' => '100',
             'CONTENT_TYPE' => 'application/octet-stream',
         ], 'x')->assertStatus(409);
+    }
+
+    /**
+     * The classic (non-Livewire) page must render through the dashboard shell.
+     * Regression guard: a <x-layouts.dashboard> tag with no matching component
+     * view breaks Volt's ensureViewsAreCached() (which compiles every view) and
+     * takes down unrelated tests.
+     */
+    public function test_classic_import_page_renders_with_the_dashboard_shell(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $this->get('/tables/service-requests/import-classic')
+            ->assertOk()
+            ->assertSee('classicImporter', false);
+    }
+
+    /**
+     * POST multipart chunk fallback (for hosts where ModSecurity blocks PUT)
+     * assembles the workbook, then the plain-JSON analyze endpoint returns the
+     * preview without touching /livewire/update.
+     */
+    public function test_classic_post_chunk_upload_assembles_and_analyzes(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Service Requests');
+        $sheet->setCellValue('A1', 'SR No');
+        $sheet->setCellValue('B1', 'Customer');
+        $sheet->setCellValue('A2', 'SR-7002');
+        $sheet->setCellValue('B2', 'Classic Hospital');
+        $path = tempnam(sys_get_temp_dir(), 'classic-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+
+        $uploadId = str_repeat('12', 16);
+
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'workbook.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'workbook.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        Storage::disk(config('filesystems.default'))->assertExists('imports/stream-'.$uploadId.'.xlsx');
+
+        $this->postJson('/tables/service-requests/import-classic/analyze', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+        ])
+            ->assertOk()
+            ->assertJsonPath('preview.sheet', 'Service Requests')
+            ->assertJsonPath('preview.headerRow', 1)
+            ->assertJsonPath('preview.totalRows', 1);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+        @unlink($path);
     }
 }

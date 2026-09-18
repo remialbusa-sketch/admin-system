@@ -2,7 +2,6 @@
 
 namespace App\Livewire;
 
-use App\Enums\UserRole;
 use App\Exports\ManagedTableExport;
 use App\Http\Controllers\ImportStreamController;
 use App\Models\CustomTableColumn;
@@ -13,6 +12,7 @@ use App\Models\TableColumnPreference;
 use App\Services\ColumnTypeRegistry;
 use App\Services\ImportMappingService;
 use App\Services\SourceWorkbookImportService;
+use App\Support\ImportFatalCapture;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -28,6 +28,7 @@ use Livewire\Component;
 use Livewire\WithPagination;
 use Maatwebsite\Excel\Facades\Excel;
 use RuntimeException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 
 abstract class ManagedTable extends Component
@@ -1189,6 +1190,10 @@ abstract class ManagedTable extends Component
      */
     public function analyzeStreamedImport(string $uploadId, string $originalName): void
     {
+        // An OOM fatal cannot be caught — capture it so the next attempt
+        // leaves a readable marker (storage/app/private/imports/last-fatal.json).
+        ImportFatalCapture::register('managed-table.analyze:'.$this->tableKey());
+
         try {
             abort_unless($this->canImport(), 403);
 
@@ -1279,7 +1284,7 @@ abstract class ManagedTable extends Component
             ]);
 
             // If it's an auth abort we should not mask it as a validation error.
-            if ($exception instanceof \Symfony\Component\HttpKernel\Exception\HttpException) {
+            if ($exception instanceof HttpException) {
                 throw $exception;
             }
 

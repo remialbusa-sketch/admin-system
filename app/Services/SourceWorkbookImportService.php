@@ -19,6 +19,7 @@ use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Reader\IReader;
+use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use Throwable;
 
@@ -670,7 +671,7 @@ class SourceWorkbookImportService
             // Only the two needed columns: an unbounded full-sheet load of
             // the raw PDB sheet (8k+ rows x every phantom column) is a
             // guaranteed memory blow-up on shared hosting.
-            $reader->setReadFilter(new class implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter
+            $reader->setReadFilter(new class implements IReadFilter
             {
                 public function readCell($column, $row, $worksheetName = ''): bool
                 {
@@ -842,7 +843,10 @@ class SourceWorkbookImportService
                 $sheet = $workbook->getSheetByName($sheetName);
 
                 if ($sheet) {
-                    foreach ($sheet->toArray(null, true, true, true) as $rowNumber => $row) {
+                    // calculateFormulas=false: we import the workbook's cached
+                    // values; recalculating can enumerate huge formula ranges
+                    // (e.g. SUM(A:A) ≈ 1M refs / ~33 MB) and OOM the worker.
+                    foreach ($sheet->toArray(null, false, true, true) as $rowNumber => $row) {
                         if ($rowNumber === 1 || $rowNumber < $dataStart || count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
                             continue;
                         }
@@ -1018,7 +1022,8 @@ class SourceWorkbookImportService
 
     private function headers(Worksheet $sheet): array
     {
-        return $this->normalizeHeaders($sheet->toArray(null, true, true, true)[1] ?? []);
+        // calculateFormulas=false — headers never need formula recalculation.
+        return $this->normalizeHeaders($sheet->toArray(null, false, true, true)[1] ?? []);
     }
 
     private function associate(array $headers, array $row): array
