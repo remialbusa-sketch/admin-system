@@ -282,6 +282,7 @@ abstract class ManagedTable extends Component
                         'value' => $value->value,
                         'value_text' => $value->value_text,
                         'value_number' => $value->value_number,
+                        'value_date' => $value->value_date,
                     ]);
                 }
             }
@@ -546,9 +547,28 @@ abstract class ManagedTable extends Component
             'row_id' => $rowId,
             'action' => $action,
             'field' => $field,
-            'old_value' => $old === null ? null : (string) $old,
-            'new_value' => $new === null ? null : (string) $new,
+            'old_value' => $this->auditValue($old),
+            'new_value' => $this->auditValue($new),
         ]);
+    }
+
+    /**
+     * Reduce an edit value to a loggable string. Array/object values (array
+     * casts such as raw_data, or JSON payloads) would raise "Array to string
+     * conversion" — an ErrorException that surfaces as a 500 — so they are
+     * JSON-encoded instead. Scalars and DateTimeInterface cast normally.
+     */
+    private function auditValue(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_array($value) || is_object($value) && ! $value instanceof \Stringable) {
+            return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: null;
+        }
+
+        return (string) $value;
     }
 
     /**

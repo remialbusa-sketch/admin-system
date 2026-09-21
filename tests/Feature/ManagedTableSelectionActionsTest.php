@@ -89,6 +89,38 @@ class ManagedTableSelectionActionsTest extends TestCase
         ]);
     }
 
+    public function test_duplicate_copies_date_custom_column_values(): void
+    {
+        $record = $this->createServiceRequest();
+
+        $column = CustomTableColumn::create([
+            'table_key' => 'service-requests',
+            'name' => 'Next Visit',
+            'type' => 'date',
+        ]);
+
+        CustomTableColumnValue::create([
+            'custom_column_id' => $column->id,
+            'row_id' => $record->id,
+            'value' => ['date' => '2026-09-01'],
+            'value_date' => '2026-09-01',
+        ]);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(ServiceRequestTable::class)
+            ->call('duplicateSelected', [$record->id])
+            ->assertHasNoErrors();
+
+        $copyId = ServiceRequest::query()->where('id', '!=', $record->id)->value('id');
+
+        $this->assertNotNull($copyId);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $copyId,
+            'value_date' => '2026-09-01 00:00:00',
+        ]);
+    }
+
     public function test_archive_hides_records_until_restored_and_gates_editing(): void
     {
         $record = $this->createServiceRequest(['customer_name' => 'Archive Me']);
@@ -167,5 +199,24 @@ class ManagedTableSelectionActionsTest extends TestCase
             ->assertHasNoErrors();
 
         $this->assertDatabaseMissing('service_requests', ['id' => $record->id]);
+    }
+
+    /**
+     * Regression guard for the live selection-bar 500: callWire() routed every
+     * grid action through Livewire.first() — which is <livewire:sidebar />, the
+     * first component in DOM order — and Livewire's $wire proxy returns a
+     * callable for ANY property name, so the typeof guard never fell back. Every
+     * floating-bar action (and sort/save/option edits) posted to the sidebar and
+     * 500'd with MethodNotFoundException. The grid script must call methods on
+     * its own $wire proxy only.
+     */
+    public function test_grid_script_never_routes_livewire_calls_through_livewire_first(): void
+    {
+        $script = file_get_contents(resource_path('js/managed-table.js'));
+
+        $this->assertIsString($script);
+        // The statement form (the regression), not the explanatory comment.
+        $this->assertStringNotContainsString('Livewire.first();', $script);
+        $this->assertStringContainsString('return this.wire.call(method, ...args);', $script);
     }
 }

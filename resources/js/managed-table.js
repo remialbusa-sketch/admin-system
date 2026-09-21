@@ -401,14 +401,17 @@ document.addEventListener('alpine:init', () => {
             Livewire.hook('morph.updated', this._onMorphUpdated);
         },
 
-        // Call a Livewire component method. Uses Livewire.first() to get a clean
-        // (non-reactive) reference to the component, avoiding the __v_raw proxy
-        // bug in Livewire 3.8.5 when calling methods from Alpine's reactive scope.
+        // Call a method on THIS grid's Livewire component.
+        //
+        // Do NOT use Livewire.first(): since the layout renders <livewire:sidebar />
+        // before the grid, the first component is the sidebar, and Livewire's
+        // $wire proxy returns a callable for ANY property name — so a
+        // `typeof component[method] === 'function'` guard is always true and the
+        // call is routed to the wrong component (MethodNotFoundException → 500
+        // on /livewire/update). `this.wire` is this component's own $wire proxy;
+        // `.call` is a defined proxy alias for `$call` (livewire.esm.js), so it
+        // does not hit the Alpine-reactive __v_raw fallback.
         callWire(method, ...args) {
-            const component = Livewire.first();
-            if (component && typeof component[method] === 'function') {
-                return component[method](...args);
-            }
             return this.wire.call(method, ...args);
         },
 
