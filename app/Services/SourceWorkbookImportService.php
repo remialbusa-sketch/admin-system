@@ -893,6 +893,10 @@ class SourceWorkbookImportService
      */
     private function invalidateExecutiveCaches(?ImportBatch $batch): void
     {
+        // Dashboard data sources aggregate every managed table; any import
+        // must drop those caches regardless of which workbook changed.
+        TableAggregationService::invalidate();
+
         if ($batch?->source_system === self::PRODUCT_SOURCE) {
             $this->forgetProductSummaryCache();
 

@@ -10,6 +10,7 @@ use App\Models\DashboardSource;
 use App\Models\DynamicTable;
 use App\Models\User;
 use App\Services\ProductDashboardService;
+use App\Services\TableAggregationService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\DashboardLayoutEngine;
 use App\Support\Dashboard\ExpressionEngine;
@@ -132,6 +133,73 @@ class Dashboard extends Component
     private function guardEdit(): void
     {
         abort_unless($this->canEditDashboard(), 403);
+    }
+
+    /**
+     * The region scope every data source aggregates under (null = all).
+     */
+    private function regionScope(): ?string
+    {
+        $user = auth()->user();
+
+        $region = $this->regionLocked && $user?->role === UserRole::RegionalManager
+            ? $user->region
+            : $this->region;
+
+        return $region === 'All regions' ? null : $region;
+    }
+
+    /**
+     * The dataset vocabulary for widget settings: the shipped default keys
+     * plus "alias.dataset" for every table connected to this dashboard.
+     *
+     * @return array<string, string> key => label
+     */
+    private function datasetOptions(): array
+    {
+        $options = config('dashboard.datasets', []);
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return $options;
+        }
+
+        $catalog = app(TableCatalog::class);
+        $aggregation = app(TableAggregationService::class);
+
+        foreach ($dashboard->sources()->get() as $source) {
+            $label = $catalog->resolve($source->table_key)['label'] ?? $source->table_key;
+            $summary = $aggregation->summary($source->table_key, $this->regionScope());
+
+            foreach (array_keys($summary['datasets']) as $name) {
+                $options[$source->alias.'.'.$name] = $label.' · '.ucfirst(str_replace('_', ' ', $name));
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * The connected sources resolved to aggregation summaries, keyed by alias.
+     *
+     * @return array<string, array{metrics: array<string, mixed>, datasets: array<string, array<int, array<string, mixed>>>}>
+     */
+    private function sourceData(): array
+    {
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return [];
+        }
+
+        $aggregation = app(TableAggregationService::class);
+        $data = [];
+
+        foreach ($dashboard->sources()->get() as $source) {
+            $data[$source->alias] = $aggregation->summary($source->table_key, $this->regionScope());
+        }
+
+        return $data;
     }
 
     /**
@@ -427,6 +495,16 @@ class Dashboard extends Component
         $this->settingsGraphCount = 0;
         $this->settingsOpenCount++;
 
+        // Dataset fields offer the dashboard's full vocabulary: shipped
+        // defaults plus every connected source's datasets (alias.name).
+        $datasetOptions = $this->datasetOptions();
+
+        foreach ($this->settingsSchema as $index => $field) {
+            if (($field['type'] ?? '') === 'dataset') {
+                $this->settingsSchema[$index]['options'] = array_keys($datasetOptions);
+            }
+        }
+
         // Seed every schema field so wire:model always has a key to bind to,
         // preferring the widget's own props, then the field default, then
         // the factory's defaultProps.
@@ -573,7 +651,9 @@ class Dashboard extends Component
                     continue;
                 }
             } elseif ($type === 'dataset') {
-                $allowed = $field['options'] ?? array_keys(config('dashboard.datasets', []));
+                // Validate against the dashboard's live vocabulary (default
+                // datasets + connected sources), not the factory's static list.
+                $allowed = array_keys($this->datasetOptions());
 
                 if (! in_array((string) $value, $allowed, true)) {
                     $errors[] = ($field['label'] ?? $key).' is not a known dataset.';
@@ -826,7 +906,10 @@ class Dashboard extends Component
         // Grid layout engine: while customizing we render the DRAFT (live
         // edits, nothing persisted); otherwise the dashboard's saved layout,
         // the user's personal Home layout, or the config default.
-        $context = DashboardContext::fromSummary($region, $this->period, $summary);
+        // Connected tables are resolved into the context so dataset-driven
+        // widgets can read any source via "alias.dataset" keys.
+        $context = DashboardContext::fromSummary($region, $this->period, $summary)
+            ->withSources($this->sourceData());
         $savedLayout = $dashboard?->layout
             ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null);
         $layout = $this->customizing && $this->draftLayout !== []
@@ -840,7 +923,7 @@ class Dashboard extends Component
             'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
             'metricLabels' => config('dashboard.metric_labels', []),
             'metricValues' => array_filter(is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], 'is_numeric'),
-            'datasetOptions' => config('dashboard.datasets', []),
+            'datasetOptions' => $this->datasetOptions(),
             'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
             'dashboard' => $dashboard,
             'canEditDashboard' => $this->canEditDashboard(),

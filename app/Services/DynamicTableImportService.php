@@ -144,10 +144,13 @@ class DynamicTableImportService
                 'completed_at' => now(),
             ]);
 
+            TableAggregationService::invalidate();
+
             return $batch->refresh();
         } catch (Throwable $exception) {
             $flush();
             $batch->update(['status' => 'failed', 'completed_at' => now()]);
+            TableAggregationService::invalidate();
             ImportFailure::query()->create([
                 'import_batch_id' => $batch->id,
                 'error_type' => 'configuration',

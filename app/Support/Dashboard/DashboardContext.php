@@ -8,18 +8,25 @@ namespace App\Support\Dashboard;
  * trend, SLA queue...). Built from ProductDashboardService::summary(), so
  * widgets never touch the database themselves — region scope and period are
  * enforced upstream before a widget ever sees the data.
+ *
+ * Multi-table dashboards add connected sources (alias => {metrics, datasets});
+ * dataset keys are then namespaced "alias.name", while bare names keep
+ * resolving against the default (Product Database) datasets for backward
+ * compatibility.
  */
 final class DashboardContext
 {
     /**
      * @param  array<string, mixed>  $metrics
      * @param  array<string, array<int, array<string, mixed>>>  $datasets
+     * @param  array<string, array{metrics: array<string, mixed>, datasets: array<string, array<int, array<string, mixed>>>}>  $sources
      */
     public function __construct(
         public readonly string $region,
         public readonly string $period,
         private readonly array $metrics,
         private readonly array $datasets,
+        private readonly array $sources = [],
     ) {}
 
     /**
@@ -46,8 +53,24 @@ final class DashboardContext
         return new self($region, $period, is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], $datasets);
     }
 
+    /**
+     * Attach the dashboard's connected sources (alias => aggregation summary).
+     *
+     * @param  array<string, array{metrics: array<string, mixed>, datasets: array<string, array<int, array<string, mixed>>>}>  $sources
+     */
+    public function withSources(array $sources): self
+    {
+        return new self($this->region, $this->period, $this->metrics, $this->datasets, $sources);
+    }
+
     public function metric(string $key, mixed $default = null): mixed
     {
+        if (str_contains($key, '.')) {
+            [$alias, $name] = explode('.', $key, 2);
+
+            return $this->sources[$alias]['metrics'][$name] ?? $default;
+        }
+
         return $this->metrics[$key] ?? $default;
     }
 
@@ -56,7 +79,32 @@ final class DashboardContext
      */
     public function dataset(string $key): array
     {
+        if (str_contains($key, '.')) {
+            [$alias, $name] = explode('.', $key, 2);
+
+            return $this->sources[$alias]['datasets'][$name] ?? [];
+        }
+
         return $this->datasets[$key] ?? [];
+    }
+
+    /**
+     * Every dataset key widgets may reference: the default (bare) keys plus
+     * "alias.name" for each connected source.
+     *
+     * @return array<int, string>
+     */
+    public function datasetKeys(): array
+    {
+        $keys = array_keys($this->datasets);
+
+        foreach ($this->sources as $alias => $source) {
+            foreach (array_keys($source['datasets'] ?? []) as $name) {
+                $keys[] = $alias.'.'.$name;
+            }
+        }
+
+        return $keys;
     }
 
     /**
