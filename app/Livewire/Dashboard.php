@@ -282,7 +282,7 @@ class Dashboard extends Component
             ? Str::lower(trim($this->sourceAlias))
             : Str::slug($this->sourceTableKey, '_');
 
-        $alias = $this->uniqueAlias($dashboard, $alias);
+        $alias = DashboardSource::uniqueAliasFor($dashboard, $alias);
 
         DashboardSource::create([
             'dashboard_id' => $dashboard->id,
@@ -292,20 +292,6 @@ class Dashboard extends Component
         ]);
 
         $this->reset(['sourceTableKey', 'sourceAlias']);
-    }
-
-    private function uniqueAlias(DashboardModel $dashboard, string $alias): string
-    {
-        $base = $alias !== '' ? $alias : 'source';
-        $candidate = $base;
-        $suffix = 2;
-
-        while ($dashboard->sources()->where('alias', $candidate)->exists()) {
-            $candidate = $base.'_'.$suffix;
-            $suffix++;
-        }
-
-        return $candidate;
     }
 
     public function removeSource(int $sourceId): void

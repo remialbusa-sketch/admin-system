@@ -31,4 +31,23 @@ class DashboardSource extends Model
     {
         return $this->belongsTo(Dashboard::class);
     }
+
+    /**
+     * A dashboard-unique alias derived from a base name ("service_requests",
+     * then "_2", "_3", ...). Shared by the dashboard panel and the
+     * visualization wizard so both always agree on widget dataset keys.
+     */
+    public static function uniqueAliasFor(Dashboard $dashboard, string $base): string
+    {
+        $base = $base !== '' ? $base : 'source';
+        $candidate = $base;
+        $suffix = 2;
+
+        while ($dashboard->sources()->where('alias', $candidate)->exists()) {
+            $candidate = $base.'_'.$suffix;
+            $suffix++;
+        }
+
+        return $candidate;
+    }
 }

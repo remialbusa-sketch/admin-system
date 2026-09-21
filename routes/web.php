@@ -18,6 +18,7 @@ use App\Livewire\TechnicalReportTable;
 use App\Livewire\TechnicalServiceAnalysis;
 use App\Livewire\TspAnalytics;
 use App\Livewire\UserManagement;
+use App\Livewire\WidgetWizard;
 use Illuminate\Support\Facades\Route;
 
 Route::redirect('/', '/login');
@@ -30,6 +31,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // the personal Product Database overview until Phase 4 migrates it).
     Route::get('dashboards', DashboardsIndex::class)->name('dashboards.index');
     Route::get('dashboards/{dashboard}', Dashboard::class)->name('dashboards.show');
+
+    // "Create a data visualization" wizard (single widget into a dashboard).
+    Route::get('visualize', WidgetWizard::class)->name('visualize');
 
     Route::get('tables', TablesList::class)->name('tables');
 

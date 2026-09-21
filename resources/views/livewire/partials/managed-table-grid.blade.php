@@ -9,6 +9,10 @@
             <x-mary-icon name="o-view-columns" class="h-4 w-4" />
             Columns
         </button>
+        <a href="{{ route('visualize', ['table' => $tableKey]) }}" class="admin-secondary-button" title="Create a chart or number widget from this table">
+            <x-mary-icon name="o-chart-bar" class="h-4 w-4" />
+            Visualize
+        </a>
         @if ($canImport)
             <a href="{{ route('tables.import.classic', $tableKey) }}" target="_blank" rel="noopener" class="admin-primary-button" title="Open the import wizard in a new tab (auto-mapping, preview, failed-rows download)">
                 <x-mary-icon name="o-arrow-up-tray" class="h-4 w-4" />

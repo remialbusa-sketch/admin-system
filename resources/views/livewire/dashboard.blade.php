@@ -109,6 +109,10 @@
                             Data sources ({{ $sources->count() }})
                         </button>
                         @if ($canEditDashboard)
+                            <a href="{{ route('visualize', ['dashboard' => $dashboard->id]) }}" class="admin-secondary-button" title="Create a chart or number widget for this dashboard">
+                                <x-mary-icon name="o-chart-bar" class="h-4 w-4" />
+                                Visualize
+                            </a>
                             <button type="button" x-on:click="$dispatch('open-modal', { name: 'dashboard-share' })" class="admin-secondary-button">
                                 <x-mary-icon name="o-user-plus" class="h-4 w-4" />
                                 Share
