@@ -8,6 +8,7 @@ use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Per-table aggregation for dashboard data sources. Every table connected to
@@ -46,6 +47,26 @@ class TableAggregationService
     }
 
     private function compute(string $tableKey, ?string $region): array
+    {
+        try {
+            return $this->computeOrFail($tableKey, $region);
+        } catch (\Throwable $exception) {
+            // A single bad source must never 500 a dashboard or the
+            // visualization wizard: log the real cause and degrade to an
+            // empty source (widgets render their empty state).
+            report($exception);
+
+            Log::error('tableAggregation.failed', [
+                'table' => $tableKey,
+                'region' => $region,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return ['metrics' => [], 'datasets' => []];
+        }
+    }
+
+    private function computeOrFail(string $tableKey, ?string $region): array
     {
         return match ($tableKey) {
             'service-requests' => $this->serviceRequests($region),

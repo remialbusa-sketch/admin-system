@@ -20,6 +20,7 @@ use App\Support\Dashboard\WidgetRegistry;
 use App\Support\TableCatalog;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Livewire\Attributes\On;
 use Livewire\Component;
@@ -93,6 +94,11 @@ class Dashboard extends Component
     public function mount(?DashboardModel $dashboard = null): void
     {
         $user = auth()->user();
+
+        // A pulled-but-unmigrated deploy should say what to run, not 500.
+        if (! Schema::hasTable('dashboards')) {
+            abort(503, 'Dashboard tables are missing on this server — run `php artisan migrate --force`.');
+        }
 
         // A shared dashboard may only be opened by its owner, a person it is
         // shared with, or anyone when it is a system dashboard.

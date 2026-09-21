@@ -4,6 +4,7 @@ namespace App\Livewire;
 
 use App\Models\Dashboard;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Facades\Schema;
 use Livewire\Component;
 
 /**
@@ -82,6 +83,11 @@ class DashboardsIndex extends Component
     public function render(): View
     {
         $user = auth()->user();
+
+        // A pulled-but-unmigrated deploy should say what to run, not 500.
+        if (! Schema::hasTable('dashboards')) {
+            abort(503, 'Dashboard tables are missing on this server — run `php artisan migrate --force`.');
+        }
 
         return view('livewire.dashboards-index', [
             'owned' => Dashboard::query()

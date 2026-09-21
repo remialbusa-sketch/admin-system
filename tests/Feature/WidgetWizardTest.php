@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Livewire\WidgetWizard;
 use App\Models\Dashboard as DashboardModel;
+use App\Models\DynamicTable;
 use App\Models\ServiceRequest;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -33,6 +34,41 @@ class WidgetWizardTest extends TestCase
             ->assertSet('widgetType', 'line_chart')
             ->assertSet('dataset', 'by_month')
             ->assertSee('by_month', false);
+    }
+
+    public function test_the_visualize_page_renders_over_http(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $this->serviceRequest(['group_status' => 'Open', 'source_updated_at' => now()]);
+
+        $this->actingAs($owner)
+            ->get(route('visualize', ['table' => 'service-requests']))
+            ->assertOk()
+            ->assertSee('Create a data visualization');
+
+        // The dashboard-toolbar entry point (no table preselected).
+        $dashboard = DashboardModel::create([
+            'owner_id' => $owner->id,
+            'name' => 'HTTP board',
+            'layout' => ['version' => 1, 'widgets' => []],
+        ]);
+
+        $this->actingAs($owner)
+            ->get(route('visualize', ['dashboard' => $dashboard->id]))
+            ->assertOk()
+            ->assertSee('Create a data visualization');
+
+        // The dynamic-table entry point.
+        $dynamic = DynamicTable::create([
+            'key' => 'wizard-dynamic',
+            'name' => 'Wizard dynamic',
+            'created_by' => $owner->id,
+        ]);
+
+        $this->actingAs($owner)
+            ->get(route('visualize', ['table' => $dynamic->key]))
+            ->assertOk()
+            ->assertSee('Create a data visualization');
     }
 
     public function test_create_adds_a_widget_and_connects_the_source(): void

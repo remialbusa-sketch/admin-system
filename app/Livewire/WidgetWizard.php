@@ -11,6 +11,8 @@ use App\Support\Dashboard\GridLayoutNormalizer;
 use App\Support\Dashboard\WidgetRegistry;
 use App\Support\TableCatalog;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
 use Livewire\Component;
@@ -55,6 +57,20 @@ class WidgetWizard extends Component
         $user = auth()->user();
         abort_unless($user !== null, 403);
 
+        // Breadcrumbs: a bare 500 in production becomes a one-line diagnosis
+        // (which step failed) without needing APP_DEBUG.
+        Log::info('widgetWizard.enter', [
+            'table' => $table,
+            'dashboard' => $dashboard,
+            'user_id' => $user->id,
+        ]);
+
+        // The dashboard subsystem needs its tables; a pulled-but-unmigrated
+        // deploy should say so instead of returning a bare 500.
+        if (! Schema::hasTable('dashboards')) {
+            abort(503, 'Dashboard tables are missing on this server — run `php artisan migrate --force`.');
+        }
+
         // #[Url] already filled these from the query string on a real request;
         // explicit mount arguments (tests, route params) win when provided.
         if ($table !== null && $table !== '') {
@@ -73,7 +89,23 @@ class WidgetWizard extends Component
 
         $this->dashboardId ??= $this->editableDashboards()->first()?->id;
 
-        $this->applySuggestion();
+        try {
+            $this->applySuggestion();
+        } catch (\Throwable $exception) {
+            // Suggestions are best-effort; never block the wizard page.
+            report($exception);
+
+            Log::error('widgetWizard.suggestFailed', [
+                'table' => $this->tableKey,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        Log::info('widgetWizard.ready', [
+            'table' => $this->tableKey,
+            'dashboard' => $this->dashboardId,
+            'widget_type' => $this->widgetType,
+        ]);
     }
 
     /** The dashboards this user may add widgets to (owned or shared edit). */
