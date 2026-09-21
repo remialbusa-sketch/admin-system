@@ -3,23 +3,17 @@
 namespace App\Livewire;
 
 use App\Exports\ManagedTableExport;
-use App\Http\Controllers\ImportStreamController;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
 use App\Models\RecordEditLog;
 use App\Models\TableColumnOption;
 use App\Models\TableColumnPreference;
 use App\Services\ColumnTypeRegistry;
-use App\Services\ImportMappingService;
-use App\Services\SourceWorkbookImportService;
-use App\Support\ImportFatalCapture;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
@@ -27,9 +21,6 @@ use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
 use Maatwebsite\Excel\Facades\Excel;
-use RuntimeException;
-use Symfony\Component\HttpKernel\Exception\HttpException;
-use Throwable;
 
 abstract class ManagedTable extends Component
 {
@@ -49,28 +40,6 @@ abstract class ManagedTable extends Component
     /** URL-bound (as ?status=…) so dashboard/status drill-downs can deep-link. */
     #[Url(as: 'status')]
     public ?string $statusFilter = null;
-
-    /** Stored relative path (storage/app/...) of the uploaded import workbook. */
-    public ?string $importStoredPath = null;
-
-    /** Workbook inspection: file type + sheet list. */
-    public array $importAnalysis = [];
-
-    /** Active sheet preview: header row, data start, columns, sample rows. */
-    public array $importPreview = [];
-
-    public string $importSheet = '';
-
-    public int $importHeaderRow = 1;
-
-    public int $importDataStart = 2;
-
-    /** Manual mapping: target field key => source column letter ('' = unmapped). */
-    public array $importMapping = [];
-
-    public ?int $lastImportId = null;
-
-    public array $importResult = [];
 
     /** Excel-style server-side sort state. */
     public ?string $sortField = null;
@@ -1184,311 +1153,9 @@ abstract class ManagedTable extends Component
 
     /*
     |--------------------------------------------------------------------------
-    | Import (existing) / Export (new)
+    | Export
     |--------------------------------------------------------------------------
     */
-
-    /*
-    |--------------------------------------------------------------------------
-    | Import wizard: upload -> manual column mapping -> official import
-    |--------------------------------------------------------------------------
-    |
-    | The upload is inspected and previewed first; the official import only
-    | ever runs from the mapping popup, with the user's hand-built mapping.
-    */
-
-    /**
-     * Step 1: a streamed upload finished. The chunks were already assembled
-     * on disk by ImportStreamController, so this only has to analyze the
-     * workbook and build the preview - no multipart limits involved.
-     *
-     * This entire method is wrapped so that ANY throwable (OOM, disk error,
-     * PHPSpreadsheet fatal, stale deployment) surfaces as a user-visible
-     * validation error instead of a bare 500 on /livewire/update. A bare 500
-     * on live prod gives the user no next step and hides the deployed-revision
-     * breadcrumb.
-     */
-    public function analyzeStreamedImport(string $uploadId, string $originalName): void
-    {
-        // An OOM fatal cannot be caught — capture it so the next attempt
-        // leaves a readable marker (storage/app/private/imports/last-fatal.json).
-        ImportFatalCapture::register('managed-table.analyze:'.$this->tableKey());
-
-        try {
-            abort_unless($this->canImport(), 403);
-
-            // Breadcrumbs: an ERROR logged right after this marker means
-            // the running code IS the fixed code and the failure is new; a log
-            // with no marker at all means the server never reached this method
-            // (stale deployment). Every early-return and the happy path also
-            // log so the next engineer can tell which branch the prod 5 MB
-            // failure took without needing APP_DEBUG=true.
-            $decodedName = urldecode($originalName);
-            Log::info('analyzeStreamedImport.enter', [
-                'upload_id' => $uploadId,
-                'original' => $originalName,
-                'decoded' => $decodedName,
-                'table' => $this->tableKey(),
-                'memory_limit' => ini_get('memory_limit'),
-                'max_execution_time' => (string) ini_get('max_execution_time'),
-            ]);
-
-            $extension = strtolower(pathinfo($decodedName, PATHINFO_EXTENSION));
-
-            if (! in_array($extension, ['xlsx', 'xls', 'csv', 'txt'], true)
-                || preg_match('/^[a-f0-9]{32}$/', $uploadId) !== 1) {
-                Log::warning('analyzeStreamedImport.rejected', ['upload_id' => $uploadId, 'extension' => $extension]);
-                $this->addError('importFile', 'That file type is not supported. Use .xlsx, .xls or .csv.');
-
-                return;
-            }
-
-            $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
-
-            $this->importStoredPath = ImportStreamController::storedPathFor($uploadId, $extension);
-            $fullPath = $this->storedImportPath();
-
-            Log::info('analyzeStreamedImport.storedPath', [
-                'upload_id' => $uploadId,
-                'relative' => $this->importStoredPath,
-                'absolute' => $fullPath,
-                'exists' => is_file($fullPath),
-                'bytes' => is_file($fullPath) ? filesize($fullPath) : null,
-            ]);
-
-            if (! is_file($fullPath) || filesize($fullPath) === 0) {
-                Log::warning('analyzeStreamedImport.missingFile', ['upload_id' => $uploadId, 'path' => $fullPath]);
-                $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
-                $this->addError('importFile', 'The streamed upload did not reach the server. Try again — the chunks may have been blocked by the web firewall (ModSecurity) or the disk is full.');
-
-                return;
-            }
-
-            // Lift per-request limits for the most memory-hungry step (PhpSpreadsheet).
-            // These may be no-ops on hosts that disable ini_set — logged above so
-            // the operator can see the effective limit.
-            @set_time_limit(0);
-            @ini_set('memory_limit', '512M');
-
-            try {
-                $mappingService = app(ImportMappingService::class);
-                $this->importAnalysis = $mappingService->analyze($fullPath, $this->tableKey());
-                $this->applyImportPreview($this->importAnalysis['preview']);
-                $this->importMapping = $mappingService->blankMapping($this->tableKey());
-                Log::info('analyzeStreamedImport.success', [
-                    'upload_id' => $uploadId,
-                    'sheet' => $this->importSheet,
-                    'rows' => $this->importPreview['totalRows'] ?? null,
-                    'cols' => $this->importPreview['totalColumns'] ?? null,
-                ]);
-            } catch (Throwable $exception) {
-                // Inner: workbook-level failure (read error, corrupt zip, etc.)
-                report($exception);
-                Log::error('analyzeStreamedImport.analyzeFailed', [
-                    'upload_id' => $uploadId,
-                    'error' => $exception->getMessage(),
-                    'file' => $fullPath,
-                ]);
-
-                $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
-                $this->addError('importFile', 'This file could not be read as an Excel or CSV workbook ('.Str::limit($exception->getMessage(), 180).'). Re-export it as .xlsx or .csv and try again.');
-            }
-        } catch (Throwable $exception) {
-            // Outer: ANY other throwable (abort, storage, OOM Error, stale code).
-            // Never let it become a bare 500 on /livewire/update.
-            report($exception);
-            Log::error('analyzeStreamedImport.outerFailed', [
-                'upload_id' => $uploadId ?? null,
-                'original' => $originalName ?? null,
-                'error' => $exception->getMessage(),
-            ]);
-
-            // If it's an auth abort we should not mask it as a validation error.
-            if ($exception instanceof HttpException) {
-                throw $exception;
-            }
-
-            $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping']);
-            $this->addError('importFile', 'The workbook could not be analyzed ('.Str::limit($exception->getMessage(), 180).'). If it is a large file, the server memory limit (currently '.ini_get('memory_limit').') may be too low — set it to 512M in the hosting control panel.');
-        }
-    }
-
-    /** Step 1: another sheet was picked - re-detect and preview it. */
-    public function updatedImportSheet(): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        if (! $this->importStoredPath || $this->importSheet === '') {
-            return;
-        }
-
-        $this->refreshImportPreview(null, null);
-    }
-
-    /** Step 1: the header row moved - re-anchor the preview columns/samples. */
-    public function updatedImportHeaderRow($value): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        if (! $this->importStoredPath || $this->importSheet === '') {
-            return;
-        }
-
-        $this->refreshImportPreview((int) $value, null);
-    }
-
-    /** Step 1: the first data row moved - re-anchor the preview samples. */
-    public function updatedImportDataStart($value): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        if (! $this->importStoredPath || $this->importSheet === '') {
-            return;
-        }
-
-        $this->refreshImportPreview($this->importHeaderRow, (int) $value);
-    }
-
-    /** Step 2: open the mapping popup, pre-filling the last committed mapping. */
-    public function openImportMapping(): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        if (! $this->importStoredPath || ($this->importPreview['columns'] ?? []) === []) {
-            return;
-        }
-
-        $this->importMapping = app(ImportMappingService::class)
-            ->recallMapping($this->tableKey(), $this->importPreview['columns']);
-
-        $this->dispatch('open-modal', name: 'import-mapping');
-    }
-
-    /**
-     * Step 3: run the official import with the user's mapping. Validates the
-     * mapping (required identity fields, distinct in-range columns), records
-     * it on the batch, then hands workbook + mapping to the import service.
-     */
-    public function executeMappedImport(): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        if (! $this->importStoredPath) {
-            $this->addError('importFile', 'Choose a workbook first.');
-
-            return;
-        }
-
-        $targets = ImportMappingService::TARGETS[$this->tableKey()] ?? null;
-
-        if ($targets === null) {
-            $this->addError('importMapping', 'This table does not support mapped imports.');
-
-            return;
-        }
-
-        $mapping = collect($this->importMapping)
-            ->map(fn ($letter): string => strtoupper(trim((string) $letter)));
-
-        $missing = collect($targets['fields'])
-            ->filter(fn (array $field): bool => $field['required'] && ($mapping[$field['key']] ?? '') === '')
-            ->pluck('label');
-
-        if ($missing->isNotEmpty()) {
-            $this->addError('importMapping', 'Map the required field(s) first: '.$missing->implode(', ').'.');
-
-            return;
-        }
-
-        $used = $mapping->filter(fn (string $letter): bool => $letter !== '');
-
-        if ($used->isEmpty()) {
-            $this->addError('importMapping', 'Map at least one column before importing.');
-
-            return;
-        }
-
-        $duplicates = $used->duplicates();
-
-        if ($duplicates->isNotEmpty()) {
-            $this->addError('importMapping', 'Multiple fields map to column '.$duplicates->first().'. Each source column can be used once.');
-
-            return;
-        }
-
-        $validLetters = collect($this->importPreview['columns'] ?? [])->pluck('letter')->flip();
-        $invalid = $used->reject(fn (string $letter): bool => $validLetters->has($letter));
-
-        if ($invalid->isNotEmpty()) {
-            $this->addError('importMapping', 'Column '.$invalid->first().' does not exist on this sheet.');
-
-            return;
-        }
-
-        try {
-            $batch = app(SourceWorkbookImportService::class)->importMapped(
-                $this->storedImportPath(),
-                $this->tableKey(),
-                $this->importSheet,
-                $mapping->all(),
-                $this->importHeaderRow,
-                max($this->importHeaderRow + 1, $this->importDataStart),
-                auth()->id(),
-            );
-        } catch (InvalidArgumentException|RuntimeException $exception) {
-            $this->addError('importMapping', $exception->getMessage());
-
-            return;
-        }
-
-        app(ImportMappingService::class)->rememberMapping($this->tableKey(), $mapping->all());
-
-        $this->lastImportId = $batch->id;
-        $this->importResult = [
-            'status' => $batch->status,
-            'processed' => $batch->processed_rows,
-            'failed' => $batch->failed_rows,
-        ];
-    }
-
-    /** Clear the whole wizard (file, preview, mapping, result). */
-    public function resetImportWizard(): void
-    {
-        $this->reset(['importStoredPath', 'importAnalysis', 'importPreview', 'importSheet', 'importHeaderRow', 'importDataStart', 'importMapping', 'importResult', 'lastImportId']);
-    }
-
-    private function refreshImportPreview(?int $headerRow, ?int $dataStart): void
-    {
-        try {
-            $this->applyImportPreview(app(ImportMappingService::class)->previewSheet(
-                $this->storedImportPath(),
-                $this->importSheet,
-                $headerRow,
-                $dataStart,
-            ));
-        } catch (Throwable) {
-            $this->addError('importSheet', 'That sheet could not be previewed.');
-        }
-    }
-
-    private function applyImportPreview(array $preview): void
-    {
-        $this->importPreview = $preview;
-        $this->importSheet = (string) ($preview['sheet'] ?? '');
-        $this->importHeaderRow = (int) ($preview['headerRow'] ?? 1);
-        $this->importDataStart = (int) ($preview['dataStart'] ?? 2);
-    }
-
-    /**
-     * Absolute path of the stored import workbook. The default disk's root
-     * is storage/app/private on the Laravel 11+ skeleton, so this must be
-     * resolved through the filesystem disk - storage_path('app/...') never
-     * matches where store() actually wrote the file.
-     */
-    private function storedImportPath(): string
-    {
-        return Storage::disk(config('filesystems.default'))->path((string) $this->importStoredPath);
-    }
 
     public function exportExcel(): mixed
     {
@@ -1688,12 +1355,6 @@ abstract class ManagedTable extends Component
     {
         $rows = $this->rows();
         $columns = $this->orderedColumns();
-        $importTargets = $this->importTargets();
-        $importMissingRequired = collect($importTargets['fields'] ?? [])
-            ->filter(fn (array $field): bool => $field['required'] && trim((string) ($this->importMapping[$field['key']] ?? '')) === '')
-            ->pluck('label')
-            ->values()
-            ->all();
 
         return view('livewire.managed-table', [
             'rows' => $rows,
@@ -1705,10 +1366,6 @@ abstract class ManagedTable extends Component
                 ? $this->model()::query()->whereNotNull('archived_at')->count()
                 : 0,
             'statuses' => $this->statusOptions(),
-            'importTargets' => $importTargets,
-            'importMappedCount' => collect($this->importMapping)->filter(fn ($letter): bool => trim((string) $letter) !== '')->count(),
-            'importMissingRequired' => $importMissingRequired,
-            'importResult' => $this->importResult,
             'title' => $this->title(),
             'description' => $this->description(),
             'tableKey' => $this->tableKey(),
@@ -1721,16 +1378,6 @@ abstract class ManagedTable extends Component
     protected function statusOptions(): array
     {
         return [];
-    }
-
-    /**
-     * The mappable import columns for this table (drives the import-wizard
-     * mapping popup). Subclasses for dynamic/user-created tables override this
-     * to build targets from their custom columns.
-     */
-    protected function importTargets(): ?array
-    {
-        return ImportMappingService::TARGETS[$this->tableKey()] ?? null;
     }
 
     protected function title(): string

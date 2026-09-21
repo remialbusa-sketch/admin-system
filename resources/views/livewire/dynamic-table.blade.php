@@ -13,7 +13,7 @@
                 </h2>
                 <p class="mt-1.5 text-xs leading-5 text-base-content/55">
                     When ON, newly created items on the connected monday.com board are pulled
-                    into this table and mapped column-by-column. Backfill via the Import table
+                    into this table and mapped column-by-column. Backfill via the Import
                     button is independent of this toggle.
                 </p>
 

@@ -3,57 +3,46 @@
 namespace App\Http\Controllers;
 
 use App\Models\DynamicTable;
+use App\Models\ImportBatch;
+use App\Services\DynamicTableImportService;
 use App\Services\ImportMappingService;
 use App\Services\SourceWorkbookImportService;
 use App\Support\ImportFatalCapture;
+use App\Support\ImportTargetResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Throwable;
 
 class ClassicImportController extends Controller
 {
     /**
      * Show the classic (non-Livewire) import page. This page never calls
-     * /livewire/update, so the 500 seen on srf.mcbtsi.com for 5 MB files
-     * (Livewire snapshot / middleware) cannot happen here. The file still
-     * streams via PUT /import/upload-stream, then analysis runs in a plain
-     * POST that returns JSON.
+     * /livewire/update, so Livewire-snapshot failures cannot happen here.
+     * The file streams via POST /import/upload-chunk (PUT fallback), then
+     * analysis and execution run as plain JSON POSTs.
      */
     public function show(Request $request, string $table)
     {
         abort_unless($request->user()?->canImport(), 403);
 
-        $title = ImportMappingService::TARGETS[$table]['label'] ?? null;
-        $isDynamic = DynamicTable::query()->where('key', $table)->exists();
+        $targets = ImportTargetResolver::for($table);
 
-        if ($title === null && ! $isDynamic) {
+        if ($targets === null) {
             abort(404, 'Import is not supported for this table.');
         }
 
-        $title = $title ?? Str::headline(str_replace('-', ' ', $table));
-
-        $backUrl = match ($table) {
-            'installed-products' => route('installed-products'),
-            'service-requests' => route('service-requests'),
-            'technical-reports' => route('technical-reports'),
-            'history-reports' => route('history-reports'),
-            'personnel' => route('personnel'),
-            default => $isDynamic ? route('tables.show', $table) : route('tables'),
-        };
-
         return view('import.classic', [
             'tableKey' => $table,
-            'title' => $title,
-            'backUrl' => $backUrl,
-            'targets' => ImportMappingService::TARGETS[$table] ?? null,
+            'title' => $targets['label'],
+            'backUrl' => $this->backUrl($table),
+            'targets' => $targets,
         ]);
     }
 
     /**
-     * Analyze the assembled streamed file and return JSON preview.
-     * Called via fetch POST from the classic page's Alpine, not via Livewire.
+     * Analyze the assembled streamed file and return the preview plus the
+     * auto-suggested and previously-committed mappings.
      */
     public function analyze(Request $request, string $table)
     {
@@ -70,6 +59,12 @@ class ClassicImportController extends Controller
             'headerRow' => ['nullable', 'integer', 'min:1', 'max:200'],
             'dataStart' => ['nullable', 'integer', 'min:1', 'max:500'],
         ]);
+
+        $targets = ImportTargetResolver::for($table);
+
+        if ($targets === null) {
+            return response()->json(['message' => 'This table does not support imports.'], 422);
+        }
 
         $uploadId = $request->input('uploadId');
         $originalName = urldecode((string) $request->input('originalName'));
@@ -113,24 +108,21 @@ class ClassicImportController extends Controller
         $mappingService = app(ImportMappingService::class);
 
         try {
-            // If a specific sheet/row was requested (user changed dropdown), preview that sheet.
             if ($sheet !== null && $sheet !== '') {
+                // A specific sheet/row was requested (user changed the picker).
                 $preview = $mappingService->previewSheet($absolute, $sheet, $headerRow, $dataStart);
-                // Also return sheet list for the picker.
                 $analysis = $mappingService->analyze($absolute, $table);
                 $analysis['preview'] = $preview;
-
-                return response()->json([
-                    'analysis' => $analysis,
-                    'preview' => $preview,
-                ]);
+            } else {
+                $analysis = $mappingService->analyze($absolute, $table);
+                $preview = $analysis['preview'];
             }
-
-            $analysis = $mappingService->analyze($absolute, $table);
 
             return response()->json([
                 'analysis' => $analysis,
-                'preview' => $analysis['preview'],
+                'preview' => $preview,
+                'suggested' => $mappingService->suggestMapping($targets['fields'], $preview['columns'] ?? []),
+                'recalled' => $mappingService->recallFor($targets['fields'], $table, $preview['columns'] ?? []),
             ]);
         } catch (Throwable $e) {
             report($e);
@@ -141,7 +133,9 @@ class ClassicImportController extends Controller
     }
 
     /**
-     * Execute the import with the user's column mapping.
+     * Execute the import with the user's column mapping. Managed tables go
+     * through SourceWorkbookImportService; dynamic (user-created) tables go
+     * through DynamicTableImportService.
      */
     public function execute(Request $request, string $table)
     {
@@ -159,33 +153,47 @@ class ClassicImportController extends Controller
             'mapping' => ['required', 'array'],
         ]);
 
+        $targets = ImportTargetResolver::for($table);
+
+        if ($targets === null) {
+            return response()->json(['message' => 'This table does not support imports.'], 422);
+        }
+
         $uploadId = $request->input('uploadId');
         $originalName = urldecode((string) $request->input('originalName'));
         $sheet = (string) $request->input('sheet');
         $headerRow = (int) $request->input('headerRow');
         $dataStart = (int) $request->input('dataStart');
-        $mapping = $request->input('mapping', []);
 
-        $targets = ImportMappingService::TARGETS[$table] ?? null;
+        $mapping = collect($request->input('mapping', []))
+            ->map(fn ($letter): string => strtoupper(trim((string) $letter)))
+            ->all();
 
-        if ($targets === null) {
-            return response()->json(['message' => 'This table does not support mapped imports yet.'], 422);
-        }
+        $missing = collect($targets['fields'])
+            ->filter(fn (array $field): bool => $field['required'] && ($mapping[$field['key']] ?? '') === '')
+            ->pluck('label');
 
-        $mapping = collect($mapping)->map(fn ($v) => strtoupper(trim((string) $v)))->all();
-
-        $missing = collect($targets['fields'])->filter(fn ($f) => $f['required'] && ($mapping[$f['key']] ?? '') === '')->pluck('label');
         if ($missing->isNotEmpty()) {
             return response()->json(['message' => 'Map the required field(s) first: '.$missing->implode(', ').'.'], 422);
         }
 
-        $used = collect($mapping)->filter(fn ($v) => $v !== '');
+        $used = collect($mapping)->filter(fn (string $letter): bool => $letter !== '');
+
         if ($used->isEmpty()) {
             return response()->json(['message' => 'Map at least one column before importing.'], 422);
         }
+
         $duplicates = $used->duplicates();
+
         if ($duplicates->isNotEmpty()) {
             return response()->json(['message' => 'Multiple fields map to column '.$duplicates->first().'. Each source column can be used once.'], 422);
+        }
+
+        $knownKeys = collect($targets['fields'])->pluck('key')->flip();
+        $unknown = collect($mapping)->keys()->reject(fn (string $key): bool => $knownKeys->has($key));
+
+        if ($unknown->isNotEmpty()) {
+            return response()->json(['message' => 'Unknown import target field.'], 422);
         }
 
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
@@ -197,15 +205,25 @@ class ClassicImportController extends Controller
         }
 
         try {
-            $batch = app(SourceWorkbookImportService::class)->importMapped(
-                $absolute,
-                $table,
-                $sheet,
-                $mapping,
-                $headerRow,
-                max($headerRow + 1, $dataStart),
-                $request->user()?->id,
-            );
+            $batch = $targets['dynamic']
+                ? app(DynamicTableImportService::class)->import(
+                    $absolute,
+                    $table,
+                    $sheet,
+                    $mapping,
+                    $headerRow,
+                    max($headerRow + 1, $dataStart),
+                    $request->user()?->id,
+                )
+                : app(SourceWorkbookImportService::class)->importMapped(
+                    $absolute,
+                    $table,
+                    $sheet,
+                    $mapping,
+                    $headerRow,
+                    max($headerRow + 1, $dataStart),
+                    $request->user()?->id,
+                );
         } catch (Throwable $e) {
             report($e);
 
@@ -220,5 +238,78 @@ class ClassicImportController extends Controller
             'failed' => $batch->failed_rows,
             'batchId' => $batch->id,
         ]);
+    }
+
+    /**
+     * Download the failed rows of a completed import as CSV, so the operator
+     * can fix and re-import just those rows.
+     */
+    public function failedRows(Request $request, string $table, ImportBatch $batch)
+    {
+        abort_unless($request->user()?->canImport(), 403);
+
+        if (! $this->batchBelongsTo($table, $batch)) {
+            abort(404);
+        }
+
+        $failures = $batch->failures()->orderBy('row_number')->get();
+
+        return response()->streamDownload(function () use ($failures): void {
+            $out = fopen('php://output', 'wb');
+
+            fputcsv($out, ['Row', 'Source ID', 'Error type', 'Error', 'Raw row']);
+
+            foreach ($failures as $failure) {
+                fputcsv($out, [
+                    $failure->row_number,
+                    $failure->source_record_id,
+                    $failure->error_type,
+                    $failure->error_message,
+                    json_encode($failure->raw_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ]);
+            }
+
+            fclose($out);
+        }, 'import-'.$batch->id.'-failed-rows.csv', [
+            'Content-Type' => 'text/csv',
+        ]);
+    }
+
+    private function batchBelongsTo(string $table, ImportBatch $batch): bool
+    {
+        $target = $batch->metadata['target_table'] ?? null;
+
+        if ($target === null) {
+            return false;
+        }
+
+        if ($target === $table) {
+            return true; // dynamic table keys are stored as-is
+        }
+
+        $managedTable = match ($table) {
+            'installed-products' => 'installations',
+            'service-requests' => 'service_requests',
+            'technical-reports' => 'technical_reports',
+            'history-reports' => 'historical_tsms_reports',
+            'personnel' => 'technical_personnel',
+            default => null,
+        };
+
+        return $managedTable !== null && $target === $managedTable;
+    }
+
+    private function backUrl(string $table): string
+    {
+        return match ($table) {
+            'installed-products' => route('installed-products'),
+            'service-requests' => route('service-requests'),
+            'technical-reports' => route('technical-reports'),
+            'history-reports' => route('history-reports'),
+            'personnel' => route('personnel'),
+            default => DynamicTable::query()->where('key', $table)->exists()
+                ? route('tables.show', $table)
+                : route('tables'),
+        };
     }
 }

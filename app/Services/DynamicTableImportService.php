@@ -107,16 +107,25 @@ class DynamicTableImportService
                 $worksheet = $workbook->getSheetByName($sheet);
 
                 if ($worksheet) {
-                    $rowNumber = $dataStart - 1;
                     $sinceFlush = 0;
                     // calculateFormulas=false: import cached values; recalculating
                     // can enumerate huge formula ranges and OOM the worker.
-                    foreach ($worksheet->toArray(null, false, true, true) as $row) {
-                        $rowNumber++;
+                    // returnCellRef=true keys rows by PHYSICAL row number, and the
+                    // read filter always allows row 1 — so rows before $dataStart
+                    // (the header) must be skipped explicitly or the header gets
+                    // imported as a data row.
+                    foreach ($worksheet->toArray(null, false, true, true) as $physicalRow => $row) {
+                        $physicalRow = (int) $physicalRow;
+
+                        if ($physicalRow < $dataStart) {
+                            continue;
+                        }
+
                         if (count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
                             continue;
                         }
-                        $this->importRow($batch, $tableKey, $columns, $mapping, $identityLetter, $rowNumber, $row, $registry) ? $ok++ : $failed++;
+
+                        $this->importRow($batch, $tableKey, $columns, $mapping, $identityLetter, $physicalRow, $row, $registry) ? $ok++ : $failed++;
                         if (++$sinceFlush >= 250) {
                             $flush();
                             $sinceFlush = 0;

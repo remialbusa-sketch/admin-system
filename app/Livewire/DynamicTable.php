@@ -8,13 +8,11 @@ use App\Models\DynamicRow;
 use App\Models\DynamicTable as DynamicTableModel;
 use App\Models\MondaySyncSetting;
 use App\Services\ColumnTypeRegistry;
-use App\Services\DynamicTableImportService;
 use App\Services\MondayApiClient;
 use App\Services\MondayItemMapper;
 use App\Services\MondaySyncService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -164,110 +162,6 @@ class DynamicTable extends ManagedTable
 
     /*
     |--------------------------------------------------------------------------
-    | Backfill import (dynamic table column mapping)
-    |--------------------------------------------------------------------------
-    */
-
-    protected function importTargets(): ?array
-    {
-        $fields = collect(CustomTableColumn::query()
-            ->where('table_key', $this->dynamicKey)
-            ->orderBy('position')
-            ->get(['id', 'name', 'type']))
-            ->map(fn (CustomTableColumn $column): array => [
-                'key' => $column->columnKey(),
-                'label' => $column->name,
-                'required' => false,
-                'kind' => $column->type,
-            ])
-            ->all();
-
-        return [
-            'label' => $this->dynamicName,
-            'fields' => [
-                ['key' => '__identity__', 'label' => 'Identity (Item ID)', 'required' => false, 'kind' => 'text'],
-                ['key' => 'name', 'label' => 'Name', 'required' => false, 'kind' => 'text'],
-                ...$fields,
-            ],
-        ];
-    }
-
-    public function openImportMapping(): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        if (! $this->importStoredPath || ($this->importPreview['columns'] ?? []) === []) {
-            return;
-        }
-
-        $targets = $this->importTargets()['fields'] ?? [];
-        $this->importMapping = collect($targets)->mapWithKeys(fn (array $field): array => [$field['key'] => ''])->all();
-
-        $this->dispatch('open-modal', name: 'import-mapping');
-    }
-
-    public function executeMappedImport(): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        if (! $this->importStoredPath) {
-            $this->addError('importMapping', 'Choose a workbook first.');
-
-            return;
-        }
-
-        $targets = $this->importTargets()['fields'] ?? [];
-        $validLetters = collect($this->importPreview['columns'] ?? [])->pluck('letter')->flip();
-
-        $mapping = collect($this->importMapping)
-            ->map(fn ($letter): string => strtoupper(trim((string) $letter)))
-            ->filter(fn (string $letter): string => $letter !== '');
-
-        $mappedValid = $mapping->filter(fn (string $letter): string => (string) $validLetters->get($letter, '') === $letter);
-
-        if ($mappedValid->isEmpty()) {
-            $this->addError('importMapping', 'Map at least one column before importing.');
-
-            return;
-        }
-
-        $targetKeys = collect($targets)->pluck('key')->flip();
-        $badTargets = $mapping->keys()->reject(fn (string $key): bool => $targetKeys->has($key));
-
-        if ($badTargets->isNotEmpty()) {
-            $this->addError('importMapping', 'Unknown import target.');
-
-            return;
-        }
-
-        try {
-            $batch = app(DynamicTableImportService::class)->import(
-                $this->storedImportPath(),
-                $this->dynamicKey,
-                $this->importSheet,
-                $mapping->all(),
-                $this->importHeaderRow,
-                max($this->importHeaderRow + 1, $this->importDataStart),
-                auth()->id(),
-            );
-        } catch (Throwable $exception) {
-            $this->addError('importMapping', Str::limit($exception->getMessage(), 200));
-
-            return;
-        }
-
-        session()->put('import-mapping:'.$this->dynamicKey, $mapping->all());
-
-        $this->lastImportId = $batch->id;
-        $this->importResult = [
-            'status' => $batch->status,
-            'processed' => $batch->processed_rows,
-            'failed' => $batch->failed_rows,
-        ];
-    }
-
-    /*
-    |--------------------------------------------------------------------------
     | monday.com live-pull toggle + board connect (M-DT entry points)
     |--------------------------------------------------------------------------
     */
@@ -373,12 +267,6 @@ class DynamicTable extends ManagedTable
     {
         $rows = $this->rows();
         $columns = $this->orderedColumns();
-        $importTargets = $this->importTargets();
-        $importMissingRequired = collect($importTargets['fields'] ?? [])
-            ->filter(fn (array $field): bool => $field['required'] && trim((string) ($this->importMapping[$field['key']] ?? '')) === '')
-            ->pluck('label')
-            ->values()
-            ->all();
 
         // Last-sync state for the monday panel (display-only, no API call).
         $setting = MondaySyncSetting::forDomain($this->dynamicKey);
@@ -393,10 +281,6 @@ class DynamicTable extends ManagedTable
                 ? DynamicRow::query()->where('table_key', $this->dynamicKey)->whereNotNull('archived_at')->count()
                 : 0,
             'statuses' => $this->statusOptions(),
-            'importTargets' => $importTargets,
-            'importMappedCount' => collect($this->importMapping)->filter(fn ($letter): bool => trim((string) $letter) !== '')->count(),
-            'importMissingRequired' => $importMissingRequired,
-            'importResult' => $this->importResult,
             'title' => $this->title(),
             'description' => $this->description(),
             'tableKey' => $this->tableKey(),

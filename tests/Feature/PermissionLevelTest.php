@@ -59,10 +59,13 @@ class PermissionLevelTest extends TestCase
 
     public function test_editor_cannot_import(): void
     {
-        Livewire::actingAs(User::factory()->assistantCoordinator()->create(['permission' => UserPermission::Editor]))
-            ->test(ServiceRequestTable::class)
-            ->call('analyzeStreamedImport', str_repeat('a', 32), 'file.xlsx')
-            ->assertStatus(403);
+        $this->actingAs(User::factory()->assistantCoordinator()->create(['permission' => UserPermission::Editor]));
+
+        // The classic import endpoints are gated by the `can:import` middleware.
+        $this->postJson('/tables/service-requests/import-classic/analyze', [
+            'uploadId' => str_repeat('a', 32),
+            'originalName' => 'file.xlsx',
+        ])->assertForbidden();
     }
 
     public function test_admin_permission_can_import(): void

@@ -162,7 +162,23 @@
         </form>
     </x-admin.modal>
 
-    <x-admin.modal name="import-table" title="Import table" description="Choose a managed table and upload its Excel/CSV source.">
-        <p class="text-sm text-base-content/60">Open the target table first, then use its Import table button to run a re-import.</p>
+    <x-admin.modal name="import-table" title="Import a table" description="Pick the table to import into. The wizard opens in a new tab with auto-mapping, a preview and a failed-rows download.">
+        <div class="space-y-4" x-data="{ target: @js($tables[0]['key'] ?? '') }">
+            <div>
+                <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Table</label>
+                <select x-model="target" class="admin-control w-full">
+                    @foreach ($tables as $table)
+                        <option value="{{ $table['key'] }}">{{ $table['label'] }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="flex items-center justify-end gap-2 border-t border-base-300 pt-4">
+                <button type="button" x-on:click="$dispatch('close-modal', { name: 'import-table' })" class="admin-secondary-button">Cancel</button>
+                <a :href="'{{ route('tables.import.classic', ['table' => '__TABLE__']) }}'.replace('__TABLE__', target)" target="_blank" rel="noopener" class="admin-primary-button">
+                    <x-mary-icon name="o-arrow-top-right-on-square" class="h-4 w-4" />
+                    Open import wizard
+                </a>
+            </div>
+        </div>
     </x-admin.modal>
 </div>

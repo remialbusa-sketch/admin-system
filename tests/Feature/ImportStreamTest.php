@@ -2,12 +2,13 @@
 
 namespace Tests\Feature;
 
-use App\Livewire\ServiceRequestTable;
+use App\Models\CustomTableColumn;
+use App\Models\DynamicRow;
+use App\Models\DynamicTable;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Livewire\Livewire;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
@@ -25,7 +26,7 @@ class ImportStreamTest extends TestCase
         $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('Service Requests');
-        $sheet->setCellValue('A1', 'SR No');
+        $sheet->setCellValue('A1', 'Service Request No');
         $sheet->setCellValue('B1', 'Customer');
         $sheet->setCellValue('A2', 'SR-7001');
         $sheet->setCellValue('B2', 'Stream Hospital');
@@ -52,13 +53,17 @@ class ImportStreamTest extends TestCase
         $relative = 'imports/stream-'.$uploadId.'.xlsx';
         Storage::disk(config('filesystems.default'))->assertExists($relative);
 
-        Livewire::actingAs($user)
-            ->test(ServiceRequestTable::class)
-            ->call('analyzeStreamedImport', $uploadId, 'workbook.xlsx')
-            ->assertHasNoErrors()
-            ->assertSet('importPreview.sheet', 'Service Requests')
-            ->assertSet('importPreview.headerRow', 1)
-            ->assertSet('importPreview.totalRows', 1);
+        // The classic wizard analyzes via a plain JSON POST (no Livewire).
+        $this->postJson('/tables/service-requests/import-classic/analyze', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+        ])
+            ->assertOk()
+            ->assertJsonPath('preview.sheet', 'Service Requests')
+            ->assertJsonPath('preview.headerRow', 1)
+            ->assertJsonPath('preview.totalRows', 1)
+            // Auto-mapping suggests the identity column from its header label.
+            ->assertJsonPath('suggested.service_request_no', 'A');
 
         Storage::disk(config('filesystems.default'))->delete($relative);
         @unlink($path);
@@ -155,6 +160,95 @@ class ImportStreamTest extends TestCase
             ->assertJsonPath('preview.sheet', 'Service Requests')
             ->assertJsonPath('preview.headerRow', 1)
             ->assertJsonPath('preview.totalRows', 1);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+        @unlink($path);
+    }
+
+    /**
+     * The classic wizard must also serve user-created (dynamic) tables: targets
+     * come from their custom columns and execution goes through
+     * DynamicTableImportService.
+     */
+    public function test_classic_wizard_imports_into_a_dynamic_table(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $dynamic = DynamicTable::create([
+            'key' => 'field-sites',
+            'name' => 'Field Sites',
+            'created_by' => $user->id,
+        ]);
+
+        $siteColumn = CustomTableColumn::create([
+            'table_key' => $dynamic->key,
+            'name' => 'Site',
+            'type' => 'text',
+            'position' => 0,
+            'created_by' => $user->id,
+        ]);
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Sites');
+        $sheet->setCellValue('A1', 'Name');
+        $sheet->setCellValue('B1', 'Site');
+        $sheet->setCellValue('A2', 'North Clinic');
+        $sheet->setCellValue('B2', 'Bacolod');
+        $path = tempnam(sys_get_temp_dir(), 'dynamic-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+
+        $uploadId = str_repeat('34', 16);
+
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'sites.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'sites.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        $analysis = $this->postJson('/tables/'.$dynamic->key.'/import-classic/analyze', [
+            'uploadId' => $uploadId,
+            'originalName' => 'sites.xlsx',
+        ])
+            ->assertOk()
+            ->assertJsonPath('preview.sheet', 'Sites')
+            ->assertJsonPath('suggested.name', 'A')
+            ->assertJsonPath('suggested.custom_'.$siteColumn->id, 'B')
+            ->json();
+
+        $execution = $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'sites.xlsx',
+            'sheet' => $analysis['preview']['sheet'],
+            'headerRow' => $analysis['preview']['headerRow'],
+            'dataStart' => $analysis['preview']['dataStart'],
+            'mapping' => [
+                'name' => 'A',
+                'custom_'.$siteColumn->id => 'B',
+            ],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        $this->assertDatabaseHas('dynamic_rows', [
+            'table_key' => $dynamic->key,
+            'name' => 'North Clinic',
+        ]);
+
+        $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->value('id');
+
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $siteColumn->id,
+            'row_id' => $rowId,
+            'value_text' => 'Bacolod',
+        ]);
 
         Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
         @unlink($path);

@@ -11,7 +11,6 @@ use App\Livewire\HistoricalTsmsTable;
 use App\Livewire\InstalledProductsTable;
 use App\Livewire\ServiceRequestTable;
 use App\Livewire\Settings;
-use App\Livewire\TableImport;
 use App\Livewire\TablesList;
 use App\Livewire\TechnicalPersonnelTable;
 use App\Livewire\TechnicalReportTable;
@@ -38,11 +37,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->name('import.upload-chunk')
         ->middleware('can:import');
 
-    // Dedicated lean import wizard (new tab) — avoids the grid's Livewire snapshot.
-    Route::get('tables/{table}/import', TableImport::class)
-        ->name('tables.import')
-        ->middleware('can:import');
-
     // Classic non-Livewire import (bypasses /livewire/update entirely).
     Route::get('tables/{table}/import-classic', [ClassicImportController::class, 'show'])
         ->name('tables.import.classic')
@@ -52,6 +46,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:import');
     Route::post('tables/{table}/import-classic/execute', [ClassicImportController::class, 'execute'])
         ->name('tables.import.classic.execute')
+        ->middleware('can:import');
+    Route::get('tables/{table}/import-classic/failed-rows/{batch}', [ClassicImportController::class, 'failedRows'])
+        ->name('tables.import.classic.failed-rows')
         ->middleware('can:import');
 
     Route::get('installed-products', InstalledProductsTable::class)->name('installed-products');

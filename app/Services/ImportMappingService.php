@@ -289,6 +289,127 @@ class ImportMappingService
         session()->put('import-mapping:'.$tableKey, $mapping);
     }
 
+    /**
+     * Recall the last committed mapping for ANY target field set (managed or
+     * dynamic tables): only entries whose target key still exists and whose
+     * source column still exists in this workbook survive.
+     *
+     * @param  array<int, array{key: string}>  $fields
+     * @param  array<int, array{letter: string}>  $columns
+     * @return array<string, string>
+     */
+    public function recallFor(array $fields, string $tableKey, array $columns): array
+    {
+        $stored = session()->get('import-mapping:'.$tableKey, []);
+        $validLetters = collect($columns)->pluck('letter')->flip();
+        $known = collect($fields)->pluck('key')->flip();
+
+        return collect($stored)
+            ->filter(fn ($letter, $target): bool => is_string($letter)
+                && $letter !== ''
+                && $known->has((string) $target)
+                && $validLetters->has($letter))
+            ->all();
+    }
+
+    /**
+     * Auto-map source columns to target fields by header label similarity.
+     *
+     * Normalized exact match wins, then substring containment, then a small
+     * edit distance / similarity percentage. Each source column is used at
+     * most once, so a suggestion is always a legal mapping; unmatched fields
+     * are omitted (the UI leaves them blank for the user).
+     *
+     * @param  array<int, array{key: string, label: string}>  $fields
+     * @param  array<int, array{letter: string, label: string|null}>  $columns
+     * @return array<string, string> target key => column letter
+     */
+    public function suggestMapping(array $fields, array $columns): array
+    {
+        $normalizedColumns = collect($columns)
+            ->map(fn (array $column): array => [
+                'letter' => (string) $column['letter'],
+                'norm' => $this->normalizeLabel((string) ($column['label'] ?? '')),
+            ])
+            ->filter(fn (array $column): bool => $column['norm'] !== '')
+            ->values()
+            ->all();
+
+        $suggested = [];
+        $usedLetters = [];
+
+        foreach ($fields as $field) {
+            $target = $this->normalizeLabel((string) ($field['label'] ?? ''));
+            $key = $this->normalizeLabel((string) ($field['key'] ?? ''));
+
+            if ($target === '' && $key === '') {
+                continue;
+            }
+
+            $bestLetter = null;
+            $bestScore = 0;
+
+            foreach ($normalizedColumns as $column) {
+                if (in_array($column['letter'], $usedLetters, true)) {
+                    continue;
+                }
+
+                $score = $this->similarityScore($column['norm'], $target, $key);
+
+                if ($score > $bestScore) {
+                    $bestScore = $score;
+                    $bestLetter = $column['letter'];
+                }
+            }
+
+            if ($bestLetter !== null && $bestScore >= 60) {
+                $suggested[(string) $field['key']] = $bestLetter;
+                $usedLetters[] = $bestLetter;
+            }
+        }
+
+        return $suggested;
+    }
+
+    private function similarityScore(string $column, string $target, string $key): int
+    {
+        if ($column === $target || ($key !== '' && $column === $key)) {
+            return 100;
+        }
+
+        if ($target !== '' && (str_contains($column, $target) || str_contains($target, $column))) {
+            return 70 + min(20, strlen($column));
+        }
+
+        if ($target !== '') {
+            $distance = levenshtein($column, $target);
+
+            if ($distance <= 1) {
+                return 65;
+            }
+
+            if ($distance === 2) {
+                return 60;
+            }
+
+            similar_text($column, $target, $percent);
+
+            if ($percent >= 85) {
+                return 62;
+            }
+        }
+
+        return 0;
+    }
+
+    private function normalizeLabel(string $label): string
+    {
+        $label = strtolower(trim($label));
+        $label = preg_replace('/[^a-z0-9]+/', ' ', $label) ?? '';
+
+        return trim(preg_replace('/\s+/', ' ', $label) ?? '');
+    }
+
     /** A ready-to-bind map of every target field for this table => ''. */
     public function blankMapping(string $tableKey): array
     {

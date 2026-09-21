@@ -1,5 +1,5 @@
 <x-layouts.dashboard title="Import {{ $title }}">
-    <x-admin.page-header eyebrow="Import" title="Import {{ $title }}" description="Classic import — no Livewire. If the modal or the lean Livewire tab still 500s, use this tab. When the import finishes, return to the original tab.">
+    <x-admin.page-header eyebrow="Import" title="Import {{ $title }}" description="Upload, preview and map your workbook, then import. Existing records are updated by stable identifiers; nothing is written until you press Start import.">
         <x-slot name="actions">
             <a href="{{ $backUrl }}" class="admin-secondary-button">
                 <x-mary-icon name="o-arrow-left" class="h-4 w-4" />
@@ -14,6 +14,7 @@
              tableKey: @js($tableKey),
              analyzeUrl: @js(route('tables.import.classic.analyze', $tableKey)),
              executeUrl: @js(route('tables.import.classic.execute', $tableKey)),
+             failedRowsUrlTemplate: @js(route('tables.import.classic.failed-rows', ['table' => $tableKey, 'batch' => '__BATCH__'])),
              uploadUrl: @js(route('import.upload-stream')),
              uploadChunkUrl: @js(route('import.upload-chunk')),
              targets: @js($targets)
@@ -37,14 +38,19 @@
             </div>
 
             <div class="space-y-6 px-6 py-6">
-                {{-- Global error / success --}}
+                {{-- Global error / result --}}
                 <div x-show="globalError" x-cloak class="rounded-md border border-error/30 bg-error/10 p-3 text-sm text-error" x-text="globalError"></div>
-                <div x-show="result" x-cloak class="rounded-md border p-4 text-sm" :class="(result?.failed > 0 || result?.status === 'failed') ? 'border-error/30 bg-error/10 text-error' : 'border-success/30 bg-success/10 text-success'">
+
+                <div x-show="result" x-cloak class="rounded-md border p-4 text-sm" :class="(result?.failed > 0 || result?.status === 'failed') ? 'border-warning/40 bg-warning/10 text-warning-content' : 'border-success/30 bg-success/10 text-success'">
                     <p class="font-semibold" x-text="result ? `Import ${result.status.replaceAll('_',' ')}.` : ''"></p>
                     <p class="mt-0.5 text-xs opacity-80" x-text="result ? `${Number(result.processed).toLocaleString()} processed, ${Number(result.failed).toLocaleString()} failed · batch #${result.batchId}` : ''"></p>
-                    <div class="mt-3 flex gap-2">
+                    <div class="mt-3 flex flex-wrap items-center gap-2">
                         <a :href="backUrl" class="admin-primary-button">Back to table</a>
                         <button type="button" @click="reset()" class="admin-secondary-button">Import another file</button>
+                        <a x-show="result && result.failed > 0" x-cloak :href="failedRowsUrl()" class="admin-secondary-button">
+                            <x-mary-icon name="o-arrow-down-tray" class="h-4 w-4" />
+                            Download failed rows (CSV)
+                        </a>
                     </div>
                 </div>
 
@@ -54,7 +60,10 @@
                     <input type="file" @change="onFile($el.files[0])" :disabled="uploading || analyzing" class="admin-control w-full" accept=".xlsx,.xls,.csv,.txt">
                     <span class="mt-1 block text-xs font-semibold text-primary" x-show="uploading" x-cloak>Uploading... <span x-text="progress"></span>%</span>
                     <span class="mt-1 block text-xs font-semibold text-primary" x-show="analyzing" x-cloak>Analyzing workbook...</span>
-                     <span class="mt-1 block text-xs text-base-content/50">The file streams in 1 MB chunks via <code class="font-mono">POST /import/upload-chunk</code> (multipart, firewall-safe; falls back to <code class="font-mono">PUT /import/upload-stream</code>) — then analysis runs in a plain <code class="font-mono">POST</code> (not <code class="font-mono">/livewire/update</code>).</span>
+                    <span class="mt-1 block text-xs text-base-content/50">
+                        The file streams in 1 MB chunks (<span class="font-mono">POST /import/upload-chunk</span>, firewall-safe with a
+                        <span class="font-mono">PUT</span> fallback) — large workbooks are fine, and column mapping is auto-suggested from the headers.
+                    </span>
                 </div>
 
                 {{-- Preview --}}
@@ -116,21 +125,36 @@
 
                 {{-- Mapping --}}
                 <div x-show="preview && !result" x-cloak class="rounded-md border border-base-300">
-                    <div class="flex items-center justify-between border-b border-base-300 bg-base-200/40 px-4 py-3">
-                        <p class="text-xs font-bold uppercase tracking-[0.08em] text-base-content/60" x-text="`Map columns — ${targets?.label || tableKey} — ${sheet || 'the file'}`"></p>
-                        <span class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-primary tabular-nums" x-text="`${mappedCount()} / ${(targets?.fields || []).length} fields mapped`"></span>
+                    <div class="flex flex-wrap items-center gap-3 border-b border-base-300 bg-base-200/40 px-4 py-3">
+                        <p class="text-xs font-bold uppercase tracking-[0.08em] text-base-content/60" x-text="`Map columns — ${targets?.label || tableKey}`"></p>
+                        <span class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-primary tabular-nums" x-text="`${mappedCount()} / ${(targets?.fields || []).length} mapped`"></span>
+                        <template x-for="label in missingRequired()" :key="label">
+                            <span class="rounded-full bg-error/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-error" x-text="`Required: ${label}`"></span>
+                        </template>
+
+                        <div class="ml-auto flex flex-wrap items-center gap-3">
+                            <label class="flex items-center gap-1.5 text-xs text-base-content/60">
+                                <input type="checkbox" x-model="unmappedOnly">
+                                Unmapped only
+                            </label>
+                            <input type="search" x-model="fieldSearch" placeholder="Filter fields..." class="admin-control h-8 w-44 py-1 text-xs" aria-label="Filter fields">
+                        </div>
                     </div>
-                    <template x-for="label in missingRequired()" :key="label">
-                        <span class="m-2 inline-flex rounded-full bg-error/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-error" x-text="`Required: ${label}`"></span>
-                    </template>
+
                     <div class="max-h-[46vh] divide-y divide-base-300 overflow-y-auto">
-                        <template x-for="field in (targets?.fields || [])" :key="field.key">
-                            <div class="grid grid-cols-1 items-center gap-2 px-4 py-2.5 sm:grid-cols-[minmax(0,200px)_minmax(0,1fr)_minmax(0,200px)] sm:gap-3" :class="field.required && !mapping[field.key] ? 'bg-error/5' : ''">
+                        <template x-for="field in visibleFields()" :key="field.key">
+                            <div class="grid grid-cols-1 items-center gap-2 px-4 py-2.5 sm:grid-cols-[minmax(0,210px)_minmax(0,1fr)_minmax(0,200px)] sm:gap-3" :class="field.required && !mapping[field.key] ? 'bg-error/5' : ''">
                                 <div class="min-w-0">
-                                    <p class="truncate text-sm font-semibold text-base-content"><span x-text="field.label"></span><span x-show="field.required" class="ml-0.5 text-error">*</span></p>
+                                    <p class="flex items-center gap-1.5 truncate text-sm font-semibold text-base-content">
+                                        <span x-text="field.label"></span>
+                                        <span x-show="field.required" class="text-error" title="Required field">*</span>
+                                        <span x-show="mappingSource[field.key] === 'auto'" x-cloak class="rounded-full bg-info/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-info">Auto</span>
+                                        <span x-show="mappingSource[field.key] === 'recalled'" x-cloak class="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary">Last used</span>
+                                        <span x-show="mappingSource[field.key] === 'manual'" x-cloak class="rounded-full bg-base-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-base-content/60">Manual</span>
+                                    </p>
                                     <p class="text-[11px] uppercase tracking-[0.06em] text-base-content/45" x-text="field.kind"></p>
                                 </div>
-                                <select x-model="mapping[field.key]" class="admin-control w-full font-mono text-xs">
+                                <select x-model="mapping[field.key]" @change="markManual(field.key)" class="admin-control w-full font-mono text-xs">
                                     <option value="">-- not mapped --</option>
                                     <template x-for="col in (preview?.columns || [])" :key="col.letter">
                                         <option :value="col.letter" x-text="`${col.letter} · ${col.label || '(untitled)'}`"></option>
@@ -139,8 +163,11 @@
                                 <p class="hidden truncate text-xs text-base-content/50 sm:block" :title="sampleFor(field.key)" x-text="sampleFor(field.key) || '--'"></p>
                             </div>
                         </template>
+
+                        <p x-show="visibleFields().length === 0" class="px-4 py-6 text-center text-sm text-base-content/55">No fields match the current filter.</p>
                     </div>
-                    <div class="flex items-center justify-between border-t border-base-300 px-4 py-3">
+
+                    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 px-4 py-3">
                         <span class="text-xs text-base-content/50">Only mapped columns are imported; existing records are updated by stable identifiers.</span>
                         <button type="button" @click="execute()" :disabled="executing" class="admin-primary-button">
                             <span x-show="!executing" x-text="`Start import (${Number(preview?.totalRows || 0).toLocaleString()} rows)`"></span>
@@ -152,14 +179,15 @@
         </div>
 
         <p class="mt-4 text-center text-xs text-base-content/40">
-            Classic import never calls <code class="font-mono">/livewire/update</code>. If this tab also fails, share the red banner text — it now comes from a plain JSON <code class="font-mono">POST</code> and <code class="font-mono">storage/logs/laravel.log</code> <code class="font-mono">classicImport.*</code> breadcrumbs.
+            This wizard never calls <span class="font-mono">/livewire/update</span>. If something fails, the message above comes from a plain JSON response and
+            <span class="font-mono">storage/logs/laravel.log</span> holds the matching <span class="font-mono">classicImport.*</span> breadcrumbs.
         </p>
     </div>
 
     <script>
         document.addEventListener('alpine:init', () => {
-            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, uploadUrl, uploadChunkUrl, targets }) => ({
-                tableKey, analyzeUrl, executeUrl, uploadUrl, targets,
+            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets }) => ({
+                tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets,
                 backUrl: @js($backUrl),
                 step: 1,
                 uploading: false,
@@ -175,12 +203,15 @@
                 headerRow: 1,
                 dataStart: 2,
                 mapping: {},
+                mappingSource: {},
+                fieldSearch: '',
+                unmappedOnly: false,
                 result: null,
 
                 init() {
-                    // blank mapping
-                    const fields = targets?.fields || [];
-                    fields.forEach(f => this.mapping[f.key] = '');
+                    (targets?.fields || []).forEach((field) => {
+                        this.mapping[field.key] = '';
+                    });
                 },
 
                 async onFile(file) {
@@ -202,7 +233,7 @@
                         crypto.getRandomValues(bytes);
                         const uploadId = Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join('');
                         this.uploadId = uploadId;
-                        // Primary: POST multipart chunk (1 MB, stays under cPanel's 2M post_max_size and avoids ModSecurity PUT blocking).
+                        // Primary: POST multipart chunk (1 MB, under cPanel's post_max_size and ModSecurity-safe).
                         const chunkSize = 1 * 1024 * 1024;
                         let offset = 0;
                         let usePost = true;
@@ -223,7 +254,6 @@
                                     },
                                     body: form,
                                 });
-                                // If POST endpoint not deployed (404) or returns 405, fall back to PUT for remaining chunks.
                                 if (resp.status === 404 || resp.status === 405) {
                                     usePost = false;
                                 }
@@ -244,7 +274,7 @@
                             }
                             if (!resp.ok) {
                                 let detail = await resp.text();
-                                try { const p = JSON.parse(detail); if (p?.message) detail = p.message; } catch { if (detail.trimStart().startsWith('<')) detail = `Upload blocked by web firewall (HTTP ${resp.status}). Tried ${usePost ? 'POST' : 'PUT'} ${usePost ? uploadChunkUrl : uploadUrl} — ask host to allow it or share this HTML snippet.`; }
+                                try { const p = JSON.parse(detail); if (p?.message) detail = p.message; } catch { if (detail.trimStart().startsWith('<')) detail = `Upload blocked by web firewall (HTTP ${resp.status}). Tried ${usePost ? 'POST' : 'PUT'} — ask the host to allow it.`; }
                                 throw new Error(detail.slice(0,320) || 'Upload failed at byte ' + offset + '.');
                             }
                             offset = Math.min(offset + chunkSize, file.size);
@@ -287,10 +317,7 @@
                         this.sheet = this.preview.sheet || this.sheet;
                         this.headerRow = this.preview.headerRow || 1;
                         this.dataStart = this.preview.dataStart || this.headerRow + 1;
-                        // seed blank mapping if empty
-                        if (Object.keys(this.mapping).length === 0) {
-                            (targets?.fields || []).forEach(f => this.mapping[f.key] = '');
-                        }
+                        this.seedMapping(data.recalled || {}, data.suggested || {});
                     } catch (e) {
                         this.globalError = e.message || 'The workbook could not be analyzed.';
                         throw e;
@@ -299,9 +326,45 @@
                     }
                 },
 
+                /** Pre-fill the mapping: last-used values win, auto-suggestions fill the rest. */
+                seedMapping(recalled, suggested) {
+                    (targets?.fields || []).forEach((field) => {
+                        if (!(field.key in this.mapping)) {
+                            this.mapping[field.key] = '';
+                        }
+                    });
+
+                    Object.entries(recalled).forEach(([key, letter]) => {
+                        if (this.mapping[key] === '' && letter) {
+                            this.mapping[key] = letter;
+                            this.mappingSource[key] = 'recalled';
+                        }
+                    });
+
+                    Object.entries(suggested).forEach(([key, letter]) => {
+                        if (this.mapping[key] === '' && letter) {
+                            this.mapping[key] = letter;
+                            this.mappingSource[key] = 'auto';
+                        }
+                    });
+                },
+
+                markManual(key) {
+                    this.mappingSource[key] = this.mapping[key] ? 'manual' : '';
+                },
+
                 async reAnalyze() {
                     if (!this.preview) return;
                     try { await this.analyze(); } catch {}
+                },
+
+                visibleFields() {
+                    const term = (this.fieldSearch || '').trim().toLowerCase();
+                    return (targets?.fields || []).filter((field) => {
+                        if (this.unmappedOnly && this.mapping[field.key]) return false;
+                        if (!term) return true;
+                        return (field.label || '').toLowerCase().includes(term) || (field.key || '').toLowerCase().includes(term);
+                    });
                 },
 
                 mappedCount() {
@@ -309,14 +372,17 @@
                 },
 
                 missingRequired() {
-                    const fields = targets?.fields || [];
-                    return fields.filter(f => f.required && !this.mapping[f.key]).map(f => f.label);
+                    return (targets?.fields || []).filter(f => f.required && !this.mapping[f.key]).map(f => f.label);
                 },
 
                 sampleFor(key) {
                     const col = (this.preview?.columns || []).find(c => c.letter === this.mapping[key]);
                     const samples = (col?.samples || []).filter(Boolean).slice(0,2);
                     return samples.length ? 'e.g. ' + samples.join(' | ') : '';
+                },
+
+                failedRowsUrl() {
+                    return (this.failedRowsUrlTemplate || '').replace('__BATCH__', this.result?.batchId ?? '');
                 },
 
                 async execute() {
@@ -361,7 +427,10 @@
                     this.headerRow = 1;
                     this.dataStart = 2;
                     this.mapping = {};
-                    (targets?.fields || []).forEach(f => this.mapping[f.key] = '');
+                    this.mappingSource = {};
+                    this.fieldSearch = '';
+                    this.unmappedOnly = false;
+                    (targets?.fields || []).forEach(f => { this.mapping[f.key] = ''; });
                     this.step = 1;
                     this.uploadId = null;
                     this.originalName = null;
