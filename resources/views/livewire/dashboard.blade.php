@@ -84,7 +84,14 @@
                     <span class="inline-block h-px w-6 bg-primary/60"></span>
                     Operations grid
                 </p>
-                <p class="mt-1 text-xs text-base-content/50">Layout-engine widgets — every value computed live from the imported installed base.</p>
+                <p class="mt-1 text-xs text-base-content/50">
+                    @if ($dashboard)
+                        <span class="font-semibold text-base-content/70">{{ $dashboard->name }}</span>
+                        &middot; {{ $canEditDashboard ? 'you can edit' : 'view only' }}
+                        &middot;
+                    @endif
+                    Layout-engine widgets — every value computed live from the imported installed base.
+                </p>
             </div>
             <div class="no-print flex flex-wrap items-center gap-2">
                 @if ($customizing)
@@ -96,7 +103,21 @@
                     <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Cancel</button>
                     <button type="button" data-grid-done class="admin-primary-button">Done</button>
                 @else
-                    <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Customize grid</button>
+                    @if ($dashboard)
+                        <button type="button" x-on:click="$dispatch('open-modal', { name: 'dashboard-sources' })" class="admin-secondary-button">
+                            <x-mary-icon name="o-circle-stack" class="h-4 w-4" />
+                            Data sources ({{ $sources->count() }})
+                        </button>
+                        @if ($canEditDashboard)
+                            <button type="button" x-on:click="$dispatch('open-modal', { name: 'dashboard-share' })" class="admin-secondary-button">
+                                <x-mary-icon name="o-user-plus" class="h-4 w-4" />
+                                Share
+                            </button>
+                        @endif
+                    @endif
+                    @if ($canEditDashboard)
+                        <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Customize grid</button>
+                    @endif
                 @endif
             </div>
         </div>
@@ -202,6 +223,111 @@
         </x-admin.modal>
     @endif
 
+    @if ($dashboard)
+        {{-- Data sources: which tables this dashboard reads from. Widgets
+             reference a source by its alias. --}}
+        <x-admin.modal name="dashboard-sources" title="Data sources" description="Tables this dashboard reads from. Each source gets an alias widgets reference (e.g. pdb.brands)." size="lg">
+            <div class="space-y-4">
+                <div class="divide-y divide-base-300 rounded-md border border-base-300">
+                    @forelse ($sources as $source)
+                        <div class="flex items-center justify-between gap-3 px-4 py-3">
+                            <div class="min-w-0">
+                                <p class="truncate text-sm font-semibold text-base-content">
+                                    {{ collect($tableOptions)->firstWhere('key', $source->table_key)['label'] ?? $source->table_key }}
+                                </p>
+                                <p class="font-mono text-[11px] text-base-content/45">{{ $source->alias }}</p>
+                            </div>
+                            @if ($canEditDashboard)
+                                <button type="button" wire:click="removeSource({{ $source->id }})" wire:confirm="Disconnect this source? Widgets referencing it will show an error card until reconnected." class="admin-icon-button" aria-label="Disconnect source">
+                                    <x-mary-icon name="o-trash" class="h-4 w-4" />
+                                </button>
+                            @endif
+                        </div>
+                    @empty
+                        <p class="px-4 py-6 text-center text-sm text-base-content/55">No sources connected yet.</p>
+                    @endforelse
+                </div>
+
+                @if ($canEditDashboard)
+                    <form wire:submit="connectSource" class="flex flex-wrap items-end gap-3 rounded-md border border-base-300 p-3">
+                        <div class="min-w-[220px] flex-1">
+                            <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Table</label>
+                            <select wire:model="sourceTableKey" class="admin-control w-full">
+                                <option value="">-- choose a table --</option>
+                                @foreach ($tableOptions as $option)
+                                    <option value="{{ $option['key'] }}">{{ $option['label'] }}</option>
+                                @endforeach
+                            </select>
+                            <x-input-error :messages="$errors->get('sourceTableKey')" class="mt-1.5" />
+                        </div>
+                        <div class="w-40">
+                            <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Alias (optional)</label>
+                            <input type="text" wire:model="sourceAlias" class="admin-control w-full font-mono text-xs" placeholder="auto">
+                            <x-input-error :messages="$errors->get('sourceAlias')" class="mt-1.5" />
+                        </div>
+                        <button type="submit" class="admin-primary-button">
+                            <x-mary-icon name="o-link" class="h-4 w-4" />
+                            Connect table
+                        </button>
+                    </form>
+                @endif
+            </div>
+        </x-admin.modal>
+
+        {{-- People sharing: view or edit access per person. --}}
+        <x-admin.modal name="dashboard-share" title="Share dashboard" description="Give specific people access. Viewers can open the dashboard; editors can also customize the grid and its sources." size="lg">
+            <div class="space-y-4">
+                <div class="divide-y divide-base-300 rounded-md border border-base-300">
+                    @forelse ($shares as $share)
+                        <div class="flex items-center justify-between gap-3 px-4 py-3">
+                            <div class="min-w-0">
+                                <p class="truncate text-sm font-semibold text-base-content">{{ $share->user?->name }}</p>
+                                <p class="truncate text-xs text-base-content/50">{{ $share->user?->email }}</p>
+                            </div>
+                            <div class="flex shrink-0 items-center gap-3">
+                                <span class="rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] {{ $share->permission === 'edit' ? 'bg-primary/10 text-primary' : 'bg-base-200 text-base-content/60' }}">
+                                    {{ $share->permission }}
+                                </span>
+                                <button type="button" wire:click="unshareDashboard({{ $share->id }})" wire:confirm="Remove this person's access?" class="admin-icon-button" aria-label="Remove access">
+                                    <x-mary-icon name="o-x-mark" class="h-4 w-4" />
+                                </button>
+                            </div>
+                        </div>
+                    @empty
+                        <p class="px-4 py-6 text-center text-sm text-base-content/55">Only you can see this dashboard.</p>
+                    @endforelse
+                </div>
+
+                <form wire:submit="shareDashboard" class="flex flex-wrap items-end gap-3 rounded-md border border-base-300 p-3">
+                    <div class="min-w-[240px] flex-1">
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Person</label>
+                        <select wire:model="shareUserId" class="admin-control w-full">
+                            <option value="">-- choose a person --</option>
+                            @foreach ($userOptions as $option)
+                                <option value="{{ $option->id }}">{{ $option->name }} ({{ $option->email }})</option>
+                            @endforeach
+                        </select>
+                        <x-input-error :messages="$errors->get('shareUserId')" class="mt-1.5" />
+                    </div>
+                    <div class="w-36">
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Access</label>
+                        <select wire:model="sharePermission" class="admin-control w-full">
+                            <option value="view">Can view</option>
+                            <option value="edit">Can edit</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="admin-primary-button">
+                        <x-mary-icon name="o-user-plus" class="h-4 w-4" />
+                        Share
+                    </button>
+                </form>
+            </div>
+        </x-admin.modal>
+    @endif
+
+    {{-- The curated Product Database overview is the Home dashboard only.
+         User-created / shared dashboards render just the widget grid. --}}
+    @if (! $dashboard)
     @php
         $headlineKeys = ['Installed products', 'Active products', 'Warranty covered', 'Service contracts', 'Annual BU charges'];
         $primary = collect($kpis)->filter(fn ($k) => in_array($k['label'], $headlineKeys))->values()->all();
@@ -543,4 +669,9 @@
         <span>Product Database overview · click any card, segment, or point to open the records behind it — the grid arrives pre-filtered, with a one-click clear.</span>
         <span>All metrics computed live from the imported installed-base records — never hardcoded.</span>
     </footer>
+    @else
+    <footer class="px-1 text-[11px] text-base-content/35">
+        Dashboard widgets compute live from the connected data sources — never hardcoded.
+    </footer>
+    @endif
 </div>

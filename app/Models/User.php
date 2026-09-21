@@ -21,7 +21,7 @@ use Illuminate\Notifications\Notifiable;
 
 #[Fillable(['name', 'email', 'password'])]
 #[Hidden(['password', 'remember_token'])]
-class User extends Authenticatable implements MustVerifyEmail, FilamentUser
+class User extends Authenticatable implements FilamentUser, MustVerifyEmail
 {
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
@@ -76,5 +76,17 @@ class User extends Authenticatable implements MustVerifyEmail, FilamentUser
     public function dashboardLayout(): HasOne
     {
         return $this->hasOne(DashboardLayout::class);
+    }
+
+    /** Dashboards this user owns. */
+    public function dashboards(): HasMany
+    {
+        return $this->hasMany(Dashboard::class, 'owner_id');
+    }
+
+    /** Dashboards shared with this user (view or edit). */
+    public function dashboardShares(): HasMany
+    {
+        return $this->hasMany(DashboardShare::class);
     }
 }

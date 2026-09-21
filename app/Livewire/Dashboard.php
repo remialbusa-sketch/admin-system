@@ -3,7 +3,12 @@
 namespace App\Livewire;
 
 use App\Enums\UserRole;
+use App\Models\Dashboard as DashboardModel;
 use App\Models\DashboardLayout;
+use App\Models\DashboardShare;
+use App\Models\DashboardSource;
+use App\Models\DynamicTable;
+use App\Models\User;
 use App\Services\ProductDashboardService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\DashboardLayoutEngine;
@@ -11,6 +16,7 @@ use App\Support\Dashboard\ExpressionEngine;
 use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\GridLayoutNormalizer;
 use App\Support\Dashboard\WidgetRegistry;
+use App\Support\TableCatalog;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -25,6 +31,28 @@ class Dashboard extends Component
 
     /** Set when the viewer's role pins the dashboard to their own region. */
     public bool $regionLocked = false;
+
+    /** The dashboard being viewed (null = Home, the personal product overview). */
+    public ?int $dashboardId = null;
+
+    public string $dashboardName = '';
+
+    /** Effective permission from the DB, re-resolved on every render. */
+    public string $dashboardPermission = 'edit';
+
+    /** Share modal state. */
+    public bool $showShareModal = false;
+
+    public string $shareUserId = '';
+
+    public string $sharePermission = 'view';
+
+    /** Data-sources modal state. */
+    public bool $showSourcesModal = false;
+
+    public string $sourceTableKey = '';
+
+    public string $sourceAlias = '';
 
     /** Edit mode for the grid-layout-engine widget grid. */
     public bool $customizing = false;
@@ -61,16 +89,171 @@ class Dashboard extends Component
      *  with stale state. */
     public int $settingsOpenCount = 0;
 
-    public function mount(): void
+    public function mount(?DashboardModel $dashboard = null): void
     {
-        // Regional managers operate their own region: scope the dashboard to
-        // it and lock the selector. National/president roles see everything.
         $user = auth()->user();
 
+        // A shared dashboard may only be opened by its owner, a person it is
+        // shared with, or anyone when it is a system dashboard.
+        if ($dashboard !== null) {
+            abort_unless($dashboard->canBeViewedBy($user), 403);
+
+            $this->dashboardId = $dashboard->id;
+            $this->dashboardName = $dashboard->name;
+            $this->dashboardPermission = $dashboard->permissionFor($user) ?? 'view';
+        }
+
+        // Regional managers operate their own region: scope the dashboard to
+        // it and lock the selector. National/president roles see everything.
         if ($user?->role === UserRole::RegionalManager && filled($user->region)) {
             $this->region = $user->region;
             $this->regionLocked = true;
         }
+    }
+
+    /**
+     * The dashboard model for the current view (null = Home). Queried fresh
+     * so permission checks can never trust a tampered snapshot property.
+     */
+    private function dashboard(): ?DashboardModel
+    {
+        return $this->dashboardId !== null
+            ? DashboardModel::query()->find($this->dashboardId)
+            : null;
+    }
+
+    private function canEditDashboard(): bool
+    {
+        $dashboard = $this->dashboard();
+
+        return $dashboard === null || $dashboard->canBeEditedBy(auth()->user());
+    }
+
+    private function guardEdit(): void
+    {
+        abort_unless($this->canEditDashboard(), 403);
+    }
+
+    /**
+     * Add or update a person's access to this dashboard (owner/edit only).
+     */
+    public function shareDashboard(): void
+    {
+        $this->guardEdit();
+
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return;
+        }
+
+        $this->validate([
+            'shareUserId' => ['required', 'integer', 'exists:users,id'],
+            'sharePermission' => ['required', 'in:view,edit'],
+        ]);
+
+        $userId = (int) $this->shareUserId;
+
+        if ($userId === $dashboard->owner_id) {
+            $this->addError('shareUserId', 'The owner already has full access.');
+
+            return;
+        }
+
+        DashboardShare::updateOrCreate(
+            ['dashboard_id' => $dashboard->id, 'user_id' => $userId],
+            ['permission' => $this->sharePermission, 'shared_by' => auth()->id()],
+        );
+
+        $this->reset(['shareUserId']);
+        $this->sharePermission = 'view';
+    }
+
+    public function unshareDashboard(int $shareId): void
+    {
+        $this->guardEdit();
+
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return;
+        }
+
+        DashboardShare::query()
+            ->where('dashboard_id', $dashboard->id)
+            ->whereKey($shareId)
+            ->delete();
+    }
+
+    /**
+     * Connect a table to this dashboard. The alias is generated from the
+     * table key and made unique per dashboard (widgets reference it).
+     */
+    public function connectSource(): void
+    {
+        $this->guardEdit();
+
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return;
+        }
+
+        $this->validate([
+            'sourceTableKey' => ['required', 'string', 'max:64'],
+            'sourceAlias' => ['nullable', 'string', 'max:32', 'regex:/^[a-z][a-z0-9_]*$/'],
+        ]);
+
+        if (! app(TableCatalog::class)->exists($this->sourceTableKey)) {
+            $this->addError('sourceTableKey', 'That table does not exist.');
+
+            return;
+        }
+
+        $alias = trim($this->sourceAlias) !== ''
+            ? Str::lower(trim($this->sourceAlias))
+            : Str::slug($this->sourceTableKey, '_');
+
+        $alias = $this->uniqueAlias($dashboard, $alias);
+
+        DashboardSource::create([
+            'dashboard_id' => $dashboard->id,
+            'table_key' => $this->sourceTableKey,
+            'alias' => $alias,
+            'position' => (int) $dashboard->sources()->max('position') + 1,
+        ]);
+
+        $this->reset(['sourceTableKey', 'sourceAlias']);
+    }
+
+    private function uniqueAlias(DashboardModel $dashboard, string $alias): string
+    {
+        $base = $alias !== '' ? $alias : 'source';
+        $candidate = $base;
+        $suffix = 2;
+
+        while ($dashboard->sources()->where('alias', $candidate)->exists()) {
+            $candidate = $base.'_'.$suffix;
+            $suffix++;
+        }
+
+        return $candidate;
+    }
+
+    public function removeSource(int $sourceId): void
+    {
+        $this->guardEdit();
+
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return;
+        }
+
+        DashboardSource::query()
+            ->where('dashboard_id', $dashboard->id)
+            ->whereKey($sourceId)
+            ->delete();
     }
 
     public function updatedRegion(): void
@@ -89,6 +272,8 @@ class Dashboard extends Component
      */
     public function toggleCustomizing(): void
     {
+        $this->guardEdit();
+
         if ($this->customizing) {
             $this->customizing = false;
             $this->discardDraft();
@@ -97,13 +282,15 @@ class Dashboard extends Component
         }
 
         $user = auth()->user();
-        $saved = $user ? DashboardLayout::query()->where('user_id', $user->id)->first() : null;
+        $dashboard = $this->dashboard();
 
         // Deep-copy so the draft never aliases the config default.
-        $this->draftLayout = json_decode(
-            json_encode($saved?->layout ?? config('dashboard.default_layout')),
-            true,
-        ) ?: ['version' => 1, 'widgets' => []];
+        $source = $dashboard?->layout
+            ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null)
+            ?? config('dashboard.default_layout');
+
+        $this->draftLayout = json_decode(json_encode($source), true)
+            ?: ['version' => 1, 'widgets' => []];
 
         $this->customizing = true;
     }
@@ -117,6 +304,8 @@ class Dashboard extends Component
     #[On('dashboard-layout-save')]
     public function saveLayout(array $layout = []): void
     {
+        $this->guardEdit();
+
         $user = auth()->user();
 
         if (! $user) {
@@ -135,10 +324,16 @@ class Dashboard extends Component
 
         $normalized = app(GridLayoutNormalizer::class)->normalize($draft);
 
-        DashboardLayout::updateOrCreate(
-            ['user_id' => $user->id],
-            ['layout' => $normalized],
-        );
+        $dashboard = $this->dashboard();
+
+        if ($dashboard !== null) {
+            $dashboard->update(['layout' => $normalized]);
+        } else {
+            DashboardLayout::updateOrCreate(
+                ['user_id' => $user->id],
+                ['layout' => $normalized],
+            );
+        }
 
         $this->customizing = false;
         $this->discardDraft();
@@ -151,6 +346,8 @@ class Dashboard extends Component
     #[On('dashboard-layout-sync')]
     public function syncLayout(array $layout = []): void
     {
+        $this->guardEdit();
+
         if (! $this->customizing || $this->draftLayout === [] || $layout === []) {
             return;
         }
@@ -161,7 +358,16 @@ class Dashboard extends Component
     /** Back to the shipped default layout: drop the saved one and exit. */
     public function resetLayout(): void
     {
-        DashboardLayout::where('user_id', auth()->id())->delete();
+        $this->guardEdit();
+
+        $dashboard = $this->dashboard();
+
+        if ($dashboard !== null) {
+            $dashboard->update(['layout' => null]);
+        } else {
+            DashboardLayout::where('user_id', auth()->id())->delete();
+        }
+
         $this->customizing = false;
         $this->discardDraft();
     }
@@ -173,6 +379,8 @@ class Dashboard extends Component
      */
     public function addWidget(string $type): void
     {
+        $this->guardEdit();
+
         if (! config('dashboard.allow_add_widgets')) {
             return;
         }
@@ -198,6 +406,8 @@ class Dashboard extends Component
     /** Open the settings modal for one widget in the draft. */
     public function editWidget(string $id): void
     {
+        $this->guardEdit();
+
         if (! $this->customizing) {
             return;
         }
@@ -285,6 +495,8 @@ class Dashboard extends Component
      */
     public function applyWidgetSettings(array $graphs = []): void
     {
+        $this->guardEdit();
+
         if (! $this->customizing || ! $this->settingsWidgetId) {
             return;
         }
@@ -442,6 +654,8 @@ class Dashboard extends Component
      */
     public function commitTreeGraph(string $key, ?string $graphJson): void
     {
+        $this->guardEdit();
+
         if (! $this->customizing || ! $this->settingsWidgetId) {
             return;
         }
@@ -599,15 +813,25 @@ class Dashboard extends Component
 
         $summary = $service->summary($region === 'All regions' ? null : $region, $this->period);
 
+        // Re-resolve the dashboard + permission from the DB (never trust the
+        // snapshot): a revoked share or deleted dashboard must fail closed.
+        $dashboard = $this->dashboard();
+
+        if ($this->dashboardId !== null) {
+            abort_unless($dashboard?->canBeViewedBy($user) ?? false, 403);
+
+            $this->dashboardPermission = $dashboard->permissionFor($user) ?? 'view';
+        }
+
         // Grid layout engine: while customizing we render the DRAFT (live
-        // edits, nothing persisted); otherwise the user's saved layout or
-        // the config default. Queried directly (not via the relation) so a
-        // long-lived model instance can never serve a stale cached null.
+        // edits, nothing persisted); otherwise the dashboard's saved layout,
+        // the user's personal Home layout, or the config default.
         $context = DashboardContext::fromSummary($region, $this->period, $summary);
-        $savedLayout = $user ? DashboardLayout::query()->where('user_id', $user->id)->first() : null;
+        $savedLayout = $dashboard?->layout
+            ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null);
         $layout = $this->customizing && $this->draftLayout !== []
             ? $this->draftLayout
-            : ($savedLayout?->layout ?? config('dashboard.default_layout'));
+            : ($savedLayout ?? config('dashboard.default_layout'));
 
         return view('livewire.dashboard', [
             'regionLocked' => $this->regionLocked,
@@ -618,9 +842,38 @@ class Dashboard extends Component
             'metricValues' => array_filter(is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], 'is_numeric'),
             'datasetOptions' => config('dashboard.datasets', []),
             'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
+            'dashboard' => $dashboard,
+            'canEditDashboard' => $this->canEditDashboard(),
+            'shares' => $dashboard?->shares()->with('user')->orderBy('id')->get() ?? collect(),
+            'sources' => $dashboard?->sources()->get() ?? collect(),
+            'userOptions' => $dashboard !== null
+                ? User::query()->whereKeyNot($user?->id)->orderBy('name')->get(['id', 'name', 'email'])
+                : collect(),
+            'tableOptions' => $this->tableOptions(),
             ...$summary,
         ])
             ->layout('layouts.dashboard')
-            ->title('Home');
+            ->title($dashboard?->name ?? 'Home');
+    }
+
+    /**
+     * Selectable tables for the data-sources picker: core + dynamic.
+     *
+     * @return array<int, array{key: string, label: string}>
+     */
+    private function tableOptions(): array
+    {
+        $catalog = app(TableCatalog::class);
+
+        $core = collect(TableCatalog::CORE)
+            ->map(fn (array $table, string $key): array => ['key' => $key, 'label' => $table['label']])
+            ->values();
+
+        $dynamic = DynamicTable::query()
+            ->orderBy('name')
+            ->get(['key', 'name'])
+            ->map(fn ($table): array => ['key' => $table->key, 'label' => $table->name]);
+
+        return $core->concat($dynamic)->all();
     }
 }

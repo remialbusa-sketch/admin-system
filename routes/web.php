@@ -5,6 +5,7 @@ use App\Http\Controllers\ImportStreamController;
 use App\Http\Controllers\MondayWebhookController;
 use App\Livewire\Actions\Logout;
 use App\Livewire\Dashboard;
+use App\Livewire\DashboardsIndex;
 use App\Livewire\DynamicTable;
 use App\Livewire\HelpCenter;
 use App\Livewire\HistoricalTsmsTable;
@@ -24,6 +25,11 @@ Route::redirect('/', '/login');
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', Dashboard::class)->name('dashboard');
     Route::redirect('president', 'dashboard')->name('president');
+
+    // Shareable dashboards: index + one page per dashboard (Home above stays
+    // the personal Product Database overview until Phase 4 migrates it).
+    Route::get('dashboards', DashboardsIndex::class)->name('dashboards.index');
+    Route::get('dashboards/{dashboard}', Dashboard::class)->name('dashboards.show');
 
     Route::get('tables', TablesList::class)->name('tables');
 
