@@ -494,7 +494,25 @@ document.addEventListener('alpine:init', () => {
                 this.table.setColumns(this.buildColumnDefs(payload.columns));
             }
 
+            // Preserve the user's selection by row id across the refresh:
+            // replaceData() rebuilds every row object, so a selection made
+            // right after a floating-bar action used to be dropped by the
+            // post-action refresh (the bar then never re-appeared until the
+            // row was ticked a second time).
+            const selectedIds = (this.table.getSelectedRows() ?? [])
+                .map((row) => row.getData().id)
+                .filter((id) => id !== undefined && id !== null);
+
             this.table.replaceData(payload.rows);
+
+            if (selectedIds.length > 0) {
+                const reselect = this.table.getRows().filter((row) => selectedIds.includes(row.getData().id));
+
+                if (reselect.length > 0) {
+                    this.table.selectRow(reselect);
+                }
+            }
+
             this.applyRemoteSort(payload.meta);
             // Re-anchor checkbox visuals + count after data replacement.
             this.updateSelectionUI();
@@ -673,21 +691,23 @@ document.addEventListener('alpine:init', () => {
             }
 
             const rows = this.table.getRows();
-            let selected = 0;
+            // The selection module is authoritative; row objects can be stale
+            // after replaceData(), so match by id instead of trusting
+            // row.isSelected() on a detached component.
+            const selectedIds = new Set(
+                (this.table.getSelectedRows() ?? []).map((row) => row.getData().id),
+            );
 
             rows.forEach((row) => {
-                const isSelected = typeof row.isSelected === 'function' ? row.isSelected() : false;
-
-                if (isSelected) {
-                    selected++;
-                }
-
+                const isSelected = selectedIds.has(row.getData().id);
                 const checkbox = row._row?.modules?.select?.checkboxEl;
 
                 if (checkbox) {
                     checkbox.checked = isSelected;
                 }
             });
+
+            const selected = selectedIds.size;
 
             const header = this.table.modules?.selectRow?.headerCheckboxElement;
 
