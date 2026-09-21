@@ -61,12 +61,21 @@ return new class extends Migration
 
         DB::table('dashboard_layouts')->orderBy('id')->chunkById(100, function ($rows): void {
             foreach ($rows as $row) {
+                // MySQL rejects invalid JSON in a JSON column (SQLite does
+                // not), so a corrupt/empty legacy layout must never fail the
+                // migration — fall back to null (the default layout applies).
+                $layout = $row->layout ?? null;
+
+                if (is_string($layout) && json_decode($layout, true) === null && json_last_error() !== JSON_ERROR_NONE) {
+                    $layout = null;
+                }
+
                 $dashboardId = DB::table('dashboards')->insertGetId([
                     'owner_id' => $row->user_id,
                     'name' => 'My dashboard',
                     'description' => null,
                     'is_system' => false,
-                    'layout' => $row->layout,
+                    'layout' => $layout,
                     'created_at' => $row->created_at ?? now(),
                     'updated_at' => $row->updated_at ?? now(),
                 ]);
