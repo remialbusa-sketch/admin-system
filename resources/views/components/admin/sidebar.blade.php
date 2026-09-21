@@ -87,6 +87,63 @@
                                     <span x-show="!sidebarCollapsed && @js($active)" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70"></span>
                                 </a>
                             @endforeach
+
+                            {{-- User dashboards: the index plus the dashboards this
+                                 user owns or has been given access to, so a newly
+                                 created dashboard shows up here immediately. --}}
+                            @php
+                                $dashboardsActive = request()->routeIs('dashboards.*') || request()->routeIs('visualize');
+                            @endphp
+                            <a
+                                href="{{ route('dashboards.index') }}"
+                                wire:navigate
+                                @class([
+                                    'group flex h-10 items-center rounded-md text-sm font-semibold transition',
+                                    'bg-primary text-primary-content' => $dashboardsActive,
+                                    'text-base-content/65 hover:bg-base-200 hover:text-base-content' => ! $dashboardsActive,
+                                ])
+                                :class="sidebarCollapsed ? 'justify-center px-0' : 'gap-3 px-3'"
+                                @if($dashboardsActive) aria-current="page" @endif
+                                title="Dashboards"
+                            >
+                                <x-mary-icon name="o-squares-2x2" class="h-[18px] w-[18px] shrink-0" />
+                                <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">Dashboards</span>
+                                <span x-show="!sidebarCollapsed" class="ml-auto rounded-full bg-base-200 px-1.5 text-[10px] font-bold tabular-nums text-base-content/50">{{ $dashboards->count() }}</span>
+                            </a>
+
+                            <div x-show="!sidebarCollapsed" x-transition.opacity class="space-y-0.5 pl-3">
+                                @forelse ($dashboards as $dashboard)
+                                    @php
+                                        // Route model binding hands back the Dashboard model,
+                                        // not an id — never cast it to int.
+                                        $routeDashboard = request()->route('dashboard');
+                                        $routeDashboardId = $routeDashboard instanceof \App\Models\Dashboard
+                                            ? $routeDashboard->id
+                                            : (is_numeric($routeDashboard) ? (int) $routeDashboard : null);
+                                        $dashboardActive = request()->routeIs('dashboards.show')
+                                            && $routeDashboardId === $dashboard->id;
+                                    @endphp
+                                    <a
+                                        href="{{ route('dashboards.show', $dashboard) }}"
+                                        wire:navigate
+                                        @class([
+                                            'group flex h-8 items-center gap-2 rounded-md pr-3 text-xs font-medium transition',
+                                            'text-primary' => $dashboardActive,
+                                            'text-base-content/55 hover:bg-base-200 hover:text-base-content' => ! $dashboardActive,
+                                        ])
+                                        @if($dashboardActive) aria-current="page" @endif
+                                        title="{{ $dashboard->name }}"
+                                    >
+                                        <span class="h-1 w-1 shrink-0 rounded-full {{ $dashboardActive ? 'bg-primary' : 'bg-base-content/25' }}"></span>
+                                        <span class="truncate">{{ $dashboard->name }}</span>
+                                        @if ($dashboard->is_system)
+                                            <span class="ml-auto text-[9px] font-bold uppercase tracking-[0.08em] text-base-content/35">Tpl</span>
+                                        @endif
+                                    </a>
+                                @empty
+                                    <p class="px-3 pb-1 pt-0.5 text-[11px] leading-4 text-base-content/40">No dashboards yet — create one from the Dashboards page.</p>
+                                @endforelse
+                            </div>
                         </div>
 
                         <div class="my-6 border-t border-base-300"></div>

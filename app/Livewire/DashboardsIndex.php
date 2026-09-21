@@ -69,6 +69,8 @@ class DashboardsIndex extends Component
         $dashboard->update(['name' => trim($this->renamingName)]);
 
         $this->reset(['renamingId', 'renamingName']);
+
+        $this->dispatch('dashboard-list-updated');
     }
 
     public function deleteDashboard(int $id): void
@@ -78,6 +80,8 @@ class DashboardsIndex extends Component
         abort_unless($dashboard->owner_id === auth()->id() && ! $dashboard->is_system, 403);
 
         $dashboard->delete();
+
+        $this->dispatch('dashboard-list-updated');
     }
 
     public function render(): View
