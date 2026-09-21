@@ -4,7 +4,6 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
-use Livewire\Exceptions\MethodNotFoundException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -26,16 +25,13 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
 
-        // Livewire's client `$wire` proxy is built on Vue's reactivity system.
-        // Stale browser bundles can reflect Vue-internal keys (e.g. `__v_raw`)
-        // into a component call, which the server would otherwise 500 on.
-        // These keys carry no real intent, so swallow them gracefully.
-        $exceptions->renderable(function (MethodNotFoundException $exception, Request $request) {
-            if (str_contains($exception->getMessage(), '__v_')) {
-                return response()->json([
-                    'effects' => [],
-                    'serverMemo' => null,
-                ], 200);
-            }
-        });
+        // NOTE: a renderable handler used to swallow MethodNotFoundException
+        // messages containing "__v_" and return a Livewire-2-shaped payload
+        // ({"effects":[],"serverMemo":null}). Livewire 3 responses must carry
+        // a `components` array, so that payload crashed the client request
+        // pool ("Cannot read properties of undefined (reading 'shift')").
+        // The Vue-internal method leaks were fixed at the source (the grid no
+        // longer stores the $wire proxy on Alpine-reactive data), so a real
+        // MethodNotFound now returns an honest error instead of a malformed
+        // 200 response.
     })->create();

@@ -202,13 +202,19 @@ class ManagedTableSelectionActionsTest extends TestCase
     }
 
     /**
-     * Regression guard for the live selection-bar 500: callWire() routed every
-     * grid action through Livewire.first() — which is <livewire:sidebar />, the
-     * first component in DOM order — and Livewire's $wire proxy returns a
-     * callable for ANY property name, so the typeof guard never fell back. Every
-     * floating-bar action (and sort/save/option edits) posted to the sidebar and
-     * 500'd with MethodNotFoundException. The grid script must call methods on
-     * its own $wire proxy only.
+     * Regression guard for the live selection-bar 500 + pool crash.
+     *
+     * History: callWire() first used Livewire.first() — the sidebar, since the
+     * layout renders it before the grid — and every grid action 500'd with
+     * MethodNotFoundException. The next attempt stored the $wire proxy on the
+     * Alpine-reactive data object, where Alpine's wrapper turns it into the
+     * magic's no-op fallback: `wire.call` resolved to Function.prototype.call
+     * and Vue internals (__v_raw) leaked as method names, which produced a
+     * malformed Livewire-2-shaped response and crashed the client request pool
+     * ("Cannot read properties of undefined (reading 'shift')").
+     *
+     * The fix resolves the component from the server-rendered wire:id via
+     * Livewire.find() and invokes it with $call().
      */
     public function test_grid_script_never_routes_livewire_calls_through_livewire_first(): void
     {
@@ -217,6 +223,9 @@ class ManagedTableSelectionActionsTest extends TestCase
         $this->assertIsString($script);
         // The statement form (the regression), not the explanatory comment.
         $this->assertStringNotContainsString('Livewire.first();', $script);
-        $this->assertStringContainsString('return this.wire.call(method, ...args);', $script);
+        $this->assertStringContainsString('Livewire.find(this.wireId)', $script);
+        $this->assertStringContainsString('component.$call(method, ...args)', $script);
+        // The proxy must never be stored on the reactive data object.
+        $this->assertStringNotContainsString('this.wire = wire', $script);
     }
 }

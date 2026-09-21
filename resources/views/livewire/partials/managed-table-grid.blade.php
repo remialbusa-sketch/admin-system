@@ -71,7 +71,7 @@
         tableKey: @js($tableKey),
         editable: @js($editable),
     })"
-    x-init="init($wire)"
+    x-init="init()"
 >
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-5 py-3 text-sm text-base-content/60">
         <span>{{ $rows->total() }} records &middot; drag headers to reorder, drag edges to resize, right-click a header to freeze/hide &middot; tick rows to select &mdash; quick actions appear in the bar below, or open a row's &hellip; menu</span>

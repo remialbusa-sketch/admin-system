@@ -370,7 +370,16 @@ document.addEventListener('alpine:init', () => {
         editable,
         status: 'Ready',
         table: null,
-        wire: null,
+        /**
+         * Server-rendered wire:id of THIS grid component. Never store the
+         * $wire proxy on the Alpine data object: Alpine's reactive wrapper
+         * turns it into the magic's no-op fallback (a plain function whose
+         * `.call` is Function.prototype.call) and leaks Vue internals such as
+         * __v_raw as method names — malformed calls that crash Livewire's
+         * request pool ("Cannot read properties of undefined (reading
+         * 'shift')"). Resolve the component from the DOM id at call time.
+         */
+        wireId: null,
         columnDefs: [],
         pendingChanges: [],
         hasChanges: false,
@@ -380,8 +389,9 @@ document.addEventListener('alpine:init', () => {
         densitySelect: null,
         _suppressRefresh: false,
 
-        init(wire) {
-            this.wire = wire;
+        init() {
+            const root = this.$root.closest('[wire\\:id]');
+            this.wireId = root ? root.getAttribute('wire:id') : null;
             this.persistLayout = debounce(() => this.saveLayout(), 450);
             this.densitySelect = this.$root.querySelector('[data-density]');
             if (this.densitySelect) {
@@ -401,18 +411,18 @@ document.addEventListener('alpine:init', () => {
             Livewire.hook('morph.updated', this._onMorphUpdated);
         },
 
-        // Call a method on THIS grid's Livewire component.
-        //
-        // Do NOT use Livewire.first(): since the layout renders <livewire:sidebar />
-        // before the grid, the first component is the sidebar, and Livewire's
-        // $wire proxy returns a callable for ANY property name — so a
-        // `typeof component[method] === 'function'` guard is always true and the
-        // call is routed to the wrong component (MethodNotFoundException → 500
-        // on /livewire/update). `this.wire` is this component's own $wire proxy;
-        // `.call` is a defined proxy alias for `$call` (livewire.esm.js), so it
-        // does not hit the Alpine-reactive __v_raw fallback.
+        // Call a method on THIS grid's Livewire component. `Livewire.find()`
+        // returns the raw $wire proxy for the server-rendered id; `$call` is
+        // Livewire's documented method-invocation API and never resolves to
+        // Function.prototype.call or a Vue internal.
         callWire(method, ...args) {
-            return this.wire.call(method, ...args);
+            const component = this.wireId ? Livewire.find(this.wireId) : null;
+
+            if (!component) {
+                return Promise.reject(new Error(`Livewire component not found for "${method}"`));
+            }
+
+            return component.$call(method, ...args);
         },
 
         destroy() {
