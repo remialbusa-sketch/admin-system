@@ -10,6 +10,7 @@ use App\Notifications\AccountCreatedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
 use Livewire\Livewire;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\TestCase;
 
 class UserManagementTest extends TestCase
@@ -120,6 +121,36 @@ class UserManagementTest extends TestCase
         $this->assertSame(UserRole::President, $target->role);
         $this->assertNull($target->region);
         $this->assertTrue(auth()->validate(['email' => $target->email, 'password' => 'Another-Secret!']));
+    }
+
+    public function test_cannot_demote_the_last_superadmin(): void
+    {
+        $superadmin = User::factory()->superadmin()->create();
+
+        Livewire::actingAs($superadmin)
+            ->test(UserManagement::class)
+            ->call('startEditing', $superadmin->id)
+            ->set('editing.role', 'president')
+            ->call('saveEditing')
+            ->assertHasErrors('editing.role');
+
+        $this->assertSame(UserRole::Superadmin, $superadmin->refresh()->role);
+    }
+
+    public function test_can_demote_a_superadmin_when_another_one_exists(): void
+    {
+        $actor = User::factory()->superadmin()->create();
+        $target = User::factory()->superadmin()->create();
+
+        Livewire::actingAs($actor)
+            ->test(UserManagement::class)
+            ->call('startEditing', $target->id)
+            ->set('editing.role', 'president')
+            ->call('saveEditing')
+            ->assertHasNoErrors();
+
+        $this->assertSame(UserRole::President, $target->refresh()->role);
+        $this->assertSame(UserRole::Superadmin, $actor->refresh()->role);
     }
 
     public function test_created_accounts_appear_in_the_listing(): void
@@ -236,7 +267,7 @@ class UserManagementTest extends TestCase
                 // body adapts to point the user at the forgot-password flow.
                 return $notification->plainPassword === ''
                     && $notification->role === $target->role
-                    && $notification->permission === ($target->permission ?? \App\Enums\UserPermission::Viewer);
+                    && $notification->permission === ($target->permission ?? UserPermission::Viewer);
             }
         );
 
@@ -335,10 +366,10 @@ class UserManagementTest extends TestCase
         $this->actingAs(User::factory()->president()->create());
 
         try {
-            $component = new \App\Livewire\UserManagement();
+            $component = new UserManagement;
             $component->markVerified($target->id);
             $invoked = true;
-        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $exception) {
+        } catch (HttpException $exception) {
             $invoked = false;
         }
 

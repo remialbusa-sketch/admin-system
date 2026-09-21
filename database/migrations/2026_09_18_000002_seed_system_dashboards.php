@@ -22,12 +22,22 @@ return new class extends Migration
         }
 
         foreach (SystemDashboards::definitions() as $definition) {
-            $exists = DB::table('dashboards')
+            // DB::table bypasses SoftDeletes: a merely archived template must
+            // be restored here, not treated as missing (which would duplicate
+            // it) and not skipped (which would leave no visible template).
+            $existing = DB::table('dashboards')
                 ->where('is_system', true)
                 ->where('name', $definition['name'])
-                ->exists();
+                ->first(['id', 'deleted_at']);
 
-            if ($exists) {
+            if ($existing !== null) {
+                if ($existing->deleted_at !== null) {
+                    DB::table('dashboards')->where('id', $existing->id)->update([
+                        'deleted_at' => null,
+                        'updated_at' => now(),
+                    ]);
+                }
+
                 continue;
             }
 

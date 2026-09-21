@@ -52,19 +52,28 @@ class User extends Authenticatable implements FilamentUser, MustVerifyEmail
     }
 
     /**
+     * Is this the superadmin role? The single source of truth for every
+     * role-based override (dashboards, admin surfaces, gates).
+     */
+    public function isSuperadmin(): bool
+    {
+        return $this->role === UserRole::Superadmin;
+    }
+
+    /**
      * May this account edit records in the managed tables (grid edits)?
      * Superadmin always can; otherwise the permission level must be editor+.
      */
     public function canEditRecords(): bool
     {
-        return $this->role === UserRole::Superadmin
+        return $this->isSuperadmin()
             || in_array($this->permission, [UserPermission::Editor, UserPermission::Admin], true);
     }
 
     /** May this account run workbook imports? Superadmin or admin level. */
     public function canImport(): bool
     {
-        return $this->role === UserRole::Superadmin || $this->permission === UserPermission::Admin;
+        return $this->isSuperadmin() || $this->permission === UserPermission::Admin;
     }
 
     public function importBatches(): HasMany

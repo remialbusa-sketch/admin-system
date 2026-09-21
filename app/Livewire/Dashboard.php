@@ -17,6 +17,7 @@ use App\Support\Dashboard\ExpressionEngine;
 use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\GridLayoutNormalizer;
 use App\Support\Dashboard\WidgetRegistry;
+use App\Support\DashboardAudit;
 use App\Support\TableCatalog;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Log;
@@ -107,8 +108,9 @@ class Dashboard extends Component
 
             // System dashboards are templates: opening one lands the user on
             // their editable personal copy (created once), so a shared default
-            // can never be broken by one person's edits.
-            if ($dashboard->is_system && $user !== null) {
+            // can never be broken by one person's edits. Superadmins curate the
+            // template directly (audited); everyone else gets a copy.
+            if ($dashboard->is_system && $user !== null && ! $user->isSuperadmin()) {
                 $this->redirectRoute('dashboards.show', $this->personalCopyOf($dashboard, $user), navigate: true);
 
                 return;
@@ -145,12 +147,18 @@ class Dashboard extends Component
      */
     private function personalCopyOf(DashboardModel $system, User $user): DashboardModel
     {
-        $copy = DashboardModel::query()
+        // Include trashed copies: re-opening a template after archiving your
+        // copy restores it instead of creating a duplicate with the same name.
+        $copy = DashboardModel::withTrashed()
             ->where('owner_id', $user->id)
             ->where('name', $system->name)
             ->first();
 
         if ($copy !== null) {
+            if ($copy->trashed()) {
+                $copy->restore();
+            }
+
             return $copy;
         }
 
@@ -283,6 +291,12 @@ class Dashboard extends Component
             ['permission' => $this->sharePermission, 'shared_by' => auth()->id()],
         );
 
+        DashboardAudit::log($dashboard, 'shared', [
+            'user_id' => $userId,
+            'permission' => $this->sharePermission,
+            'by_superadmin' => auth()->user()?->isSuperadmin() && $dashboard->owner_id !== auth()->id(),
+        ]);
+
         $this->reset(['shareUserId']);
         $this->sharePermission = 'view';
     }
@@ -297,10 +311,18 @@ class Dashboard extends Component
             return;
         }
 
-        DashboardShare::query()
+        $share = DashboardShare::query()
             ->where('dashboard_id', $dashboard->id)
             ->whereKey($shareId)
-            ->delete();
+            ->first();
+
+        if ($share === null) {
+            return;
+        }
+
+        $share->delete();
+
+        DashboardAudit::log($dashboard, 'unshared', ['user_id' => $share->user_id]);
     }
 
     /**
@@ -341,6 +363,11 @@ class Dashboard extends Component
             'position' => (int) $dashboard->sources()->max('position') + 1,
         ]);
 
+        DashboardAudit::log($dashboard, 'source_connected', [
+            'table_key' => $this->sourceTableKey,
+            'alias' => $alias,
+        ]);
+
         $this->reset(['sourceTableKey', 'sourceAlias']);
     }
 
@@ -354,10 +381,21 @@ class Dashboard extends Component
             return;
         }
 
-        DashboardSource::query()
+        $source = DashboardSource::query()
             ->where('dashboard_id', $dashboard->id)
             ->whereKey($sourceId)
-            ->delete();
+            ->first();
+
+        if ($source === null) {
+            return;
+        }
+
+        $source->delete();
+
+        DashboardAudit::log($dashboard, 'source_disconnected', [
+            'table_key' => $source->table_key,
+            'alias' => $source->alias,
+        ]);
     }
 
     public function updatedRegion(): void
@@ -432,6 +470,11 @@ class Dashboard extends Component
 
         if ($dashboard !== null) {
             $dashboard->update(['layout' => $normalized]);
+
+            DashboardAudit::log($dashboard, 'layout_saved', [
+                'widgets' => count($normalized['widgets'] ?? []),
+                'by_superadmin' => $user->isSuperadmin() && $dashboard->owner_id !== $user->id,
+            ]);
         } else {
             DashboardLayout::updateOrCreate(
                 ['user_id' => $user->id],
@@ -468,6 +511,8 @@ class Dashboard extends Component
 
         if ($dashboard !== null) {
             $dashboard->update(['layout' => null]);
+
+            DashboardAudit::log($dashboard, 'layout_reset');
         } else {
             DashboardLayout::where('user_id', auth()->id())->delete();
         }

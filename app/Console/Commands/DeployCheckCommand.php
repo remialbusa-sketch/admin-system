@@ -27,6 +27,8 @@ class DeployCheckCommand extends Command
             'dashboards tables migrated' => fn (): bool => Schema::hasTable('dashboards')
                 && Schema::hasTable('dashboard_sources')
                 && Schema::hasTable('dashboard_shares'),
+            'dashboards soft-delete column' => fn (): bool => Schema::hasColumn('dashboards', 'deleted_at'),
+            'dashboard audit table' => fn (): bool => Schema::hasTable('dashboard_audit_logs'),
             'WidgetWizard autoloadable (classmap)' => fn (): bool => class_exists(WidgetWizard::class),
             'built assets present (public/build)' => fn (): bool => is_file(public_path('build/manifest.json')),
             'storage/logs writable' => fn (): bool => is_writable(storage_path('logs')),

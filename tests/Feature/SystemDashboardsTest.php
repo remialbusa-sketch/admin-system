@@ -58,7 +58,9 @@ class SystemDashboardsTest extends TestCase
 
     public function test_a_copy_renders_live_widget_data_from_its_sources(): void
     {
-        $user = User::factory()->superadmin()->create();
+        // A regular user gets the personal copy (superadmins curate the
+        // template directly — see DashboardSuperadminTest).
+        $user = User::factory()->president()->create();
         $system = DashboardModel::query()->where('is_system', true)->where('name', 'TSP Analytics')->firstOrFail();
 
         $this->actingAs($user)->get(route('dashboards.show', $system));
@@ -75,5 +77,22 @@ class SystemDashboardsTest extends TestCase
             ->assertOk()
             ->assertSee('Requests by region')
             ->assertSee('Personnel by position');
+    }
+
+    public function test_a_superadmin_edits_the_template_directly_without_a_copy(): void
+    {
+        $superadmin = User::factory()->superadmin()->create();
+        $system = DashboardModel::query()->where('is_system', true)->where('name', 'TSP Analytics')->firstOrFail();
+
+        $this->actingAs($superadmin)
+            ->get(route('dashboards.show', $system))
+            ->assertOk()
+            ->assertSee('Requests by region');
+
+        // No personal copy is created for a superadmin.
+        $this->assertSame(
+            0,
+            DashboardModel::query()->where('owner_id', $superadmin->id)->where('name', 'TSP Analytics')->count(),
+        );
     }
 }

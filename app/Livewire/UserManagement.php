@@ -157,6 +157,18 @@ class UserManagement extends Component
         ])['editing'];
 
         $user = User::query()->findOrFail($this->editingId);
+
+        // Never allow the last superadmin to be demoted — that would lock
+        // everyone out of /users and the manageUsers gate with no recovery
+        // path in the UI.
+        if ($user->role === UserRole::Superadmin
+            && $validated['role'] !== UserRole::Superadmin->value
+            && User::query()->where('role', UserRole::Superadmin->value)->count() <= 1) {
+            $this->addError('editing.role', 'This is the only Superadmin — create another Superadmin before changing this role.');
+
+            return;
+        }
+
         $user->forceFill([
             'role' => $validated['role'],
             'permission' => $validated['role'] === UserRole::Superadmin->value

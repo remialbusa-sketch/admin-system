@@ -9,8 +9,10 @@ use App\Services\TableAggregationService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\GridLayoutNormalizer;
 use App\Support\Dashboard\WidgetRegistry;
+use App\Support\DashboardAudit;
 use App\Support\TableCatalog;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -108,12 +110,26 @@ class WidgetWizard extends Component
         ]);
     }
 
-    /** The dashboards this user may add widgets to (owned or shared edit). */
-    private function editableDashboards()
+    /**
+     * The dashboards this user may add widgets to: owned or shared edit, and
+     * every dashboard for a superadmin. Cached per request (mount + render
+     * would otherwise query three times).
+     */
+    private ?Collection $editableDashboardsCache = null;
+
+    private function editableDashboards(): Collection
     {
+        if ($this->editableDashboardsCache !== null) {
+            return $this->editableDashboardsCache;
+        }
+
         $user = auth()->user();
 
-        return Dashboard::query()
+        if ($user?->isSuperadmin()) {
+            return $this->editableDashboardsCache = Dashboard::query()->orderBy('name')->get();
+        }
+
+        return $this->editableDashboardsCache = Dashboard::query()
             ->where(function ($query) use ($user): void {
                 $query->where('owner_id', $user->id)
                     ->orWhereHas('shares', fn ($share) => $share->where('user_id', $user->id)->where('permission', 'edit'));
@@ -370,6 +386,13 @@ class WidgetWizard extends Component
 
         $dashboard->update([
             'layout' => app(GridLayoutNormalizer::class)->normalize($layout),
+        ]);
+
+        DashboardAudit::log($dashboard, 'widget_added', [
+            'widget_type' => $this->widgetType,
+            'dataset' => $this->isDatasetWidget($this->widgetType) ? $this->dataset : null,
+            'metric' => $this->isMetricWidget($this->widgetType) ? $this->metric : null,
+            'by_superadmin' => $user->isSuperadmin() && $dashboard->owner_id !== $user->id,
         ]);
 
         $this->redirectRoute('dashboards.show', $dashboard);

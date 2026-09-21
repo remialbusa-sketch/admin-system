@@ -113,7 +113,10 @@ class WidgetWizardTest extends TestCase
 
     public function test_create_with_a_new_dashboard_name_creates_the_dashboard(): void
     {
-        $owner = User::factory()->superadmin()->create();
+        // A non-superadmin with no dashboards: the wizard must offer the
+        // inline "new dashboard" path (a superadmin always has the seeded
+        // templates available, so this is the user this flow is for).
+        $owner = User::factory()->president()->create();
         $this->serviceRequest(['group_status' => 'Completed']);
 
         Livewire::actingAs($owner)
