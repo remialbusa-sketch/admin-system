@@ -156,6 +156,25 @@ class WidgetWizardTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_selecting_create_a_new_dashboard_clears_the_dashboard(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+
+        DashboardModel::create([
+            'owner_id' => $owner->id,
+            'name' => 'Existing',
+            'layout' => ['version' => 1, 'widgets' => []],
+        ]);
+
+        // The select's "-- create a new one --" option posts an empty string;
+        // it must clear the selection, not throw on the typed ?int property.
+        $component = Livewire::actingAs($owner)
+            ->test(WidgetWizard::class, ['table' => 'service-requests'])
+            ->set('dashboardId', '');
+
+        $this->assertNull($component->get('dashboardId'));
+    }
+
     public function test_wizard_rejects_an_unknown_table_on_create(): void
     {
         Livewire::actingAs(User::factory()->superadmin()->create())
