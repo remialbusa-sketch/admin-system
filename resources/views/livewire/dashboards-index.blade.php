@@ -31,7 +31,12 @@
                             @else
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="min-w-0">
-                                        <h3 class="truncate text-base font-bold text-base-content">{{ $dashboard->name }}</h3>
+                                        <h3 class="flex items-center gap-2 truncate text-base font-bold text-base-content">
+                                            {{ $dashboard->name }}
+                                            @if ($dashboard->is_system)
+                                                <span class="rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary" title="Shared template — opening it gives you an editable copy">Template</span>
+                                            @endif
+                                        </h3>
                                         <p class="mt-1 text-xs text-base-content/50">
                                             {{ $dashboard->sources->count() }} source{{ $dashboard->sources->count() === 1 ? '' : 's' }}
                                             &middot; {{ count($dashboard->layout['widgets'] ?? []) }} widget{{ count($dashboard->layout['widgets'] ?? []) === 1 ? '' : 's' }}

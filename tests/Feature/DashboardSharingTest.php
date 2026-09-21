@@ -159,26 +159,37 @@ class DashboardSharingTest extends TestCase
         $this->assertDatabaseMissing('dashboard_sources', ['id' => $source->id]);
     }
 
-    public function test_system_dashboards_are_viewable_by_everyone_but_not_editable(): void
+    public function test_system_dashboards_open_as_an_editable_personal_copy(): void
     {
-        $admin = User::factory()->superadmin()->create();
         $viewer = User::factory()->president()->create();
 
-        $dashboard = DashboardModel::create([
+        $system = DashboardModel::create([
             'owner_id' => null,
             'name' => 'Company overview',
             'is_system' => true,
             'layout' => ['version' => 1, 'widgets' => []],
         ]);
 
+        // Opening the template lands on the user's editable copy.
         $this->actingAs($viewer)
-            ->get(route('dashboards.show', $dashboard))
-            ->assertOk();
+            ->get(route('dashboards.show', $system))
+            ->assertRedirect();
+
+        $copy = DashboardModel::query()
+            ->where('owner_id', $viewer->id)
+            ->where('name', 'Company overview')
+            ->first();
+
+        $this->assertNotNull($copy);
+        $this->assertFalse($copy->is_system);
 
         Livewire::actingAs($viewer)
-            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->test(Dashboard::class, ['dashboard' => $copy])
             ->call('toggleCustomizing')
-            ->assertForbidden();
+            ->assertHasNoErrors();
+
+        // The shared template itself is never mutated.
+        $this->assertSame([], $system->fresh()->layout['widgets']);
     }
 
     public function test_share_grants_are_managed_by_the_owner_only(): void

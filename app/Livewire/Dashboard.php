@@ -99,6 +99,15 @@ class Dashboard extends Component
         if ($dashboard !== null) {
             abort_unless($dashboard->canBeViewedBy($user), 403);
 
+            // System dashboards are templates: opening one lands the user on
+            // their editable personal copy (created once), so a shared default
+            // can never be broken by one person's edits.
+            if ($dashboard->is_system && $user !== null) {
+                $this->redirectRoute('dashboards.show', $this->personalCopyOf($dashboard, $user), navigate: true);
+
+                return;
+            }
+
             $this->dashboardId = $dashboard->id;
             $this->dashboardName = $dashboard->name;
             $this->dashboardPermission = $dashboard->permissionFor($user) ?? 'view';
@@ -121,6 +130,41 @@ class Dashboard extends Component
         return $this->dashboardId !== null
             ? DashboardModel::query()->find($this->dashboardId)
             : null;
+    }
+
+    /**
+     * The user's editable copy of a system dashboard template: found by name
+     * or created once (layout + sources copied). Idempotent, so re-opening
+     * the template always returns the same copy.
+     */
+    private function personalCopyOf(DashboardModel $system, User $user): DashboardModel
+    {
+        $copy = DashboardModel::query()
+            ->where('owner_id', $user->id)
+            ->where('name', $system->name)
+            ->first();
+
+        if ($copy !== null) {
+            return $copy;
+        }
+
+        $copy = DashboardModel::create([
+            'owner_id' => $user->id,
+            'name' => $system->name,
+            'description' => $system->description,
+            'layout' => $system->layout,
+        ]);
+
+        foreach ($system->sources()->get() as $source) {
+            $copy->sources()->create([
+                'table_key' => $source->table_key,
+                'alias' => $source->alias,
+                'position' => $source->position,
+                'settings' => $source->settings,
+            ]);
+        }
+
+        return $copy;
     }
 
     private function canEditDashboard(): bool
