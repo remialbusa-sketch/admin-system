@@ -1,6 +1,10 @@
 <div class="space-y-6">
     <x-admin.page-header eyebrow="Workspace" title="Dashboards" description="Create dashboards, connect the tables they read from, and share them with people.">
         <x-slot name="actions">
+            <a href="{{ route('visualize') }}" class="admin-secondary-button" title="Create one chart or number widget and add it to a dashboard">
+                <x-mary-icon name="o-chart-bar" class="h-4 w-4" />
+                New visualization
+            </a>
             <button type="button" x-on:click="$dispatch('open-modal', { name: 'create-dashboard' })" class="admin-primary-button">
                 <x-mary-icon name="o-plus" class="h-4 w-4" />
                 New dashboard
