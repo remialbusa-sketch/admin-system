@@ -52,7 +52,12 @@ final class TableWidget implements DashboardWidget
         $rows = $ctx->dataset($dataset);
 
         $labelKey = filled($props['label_key'] ?? null) ? (string) $props['label_key']
-            : ($dataset === 'top_accounts' ? 'customer' : ($dataset === 'machine_types' ? 'label' : 'region'));
+            : match ($dataset) {
+                'top_accounts' => 'customer',
+                'machine_types' => 'label',
+                'regions' => 'region',
+                default => 'label',
+            };
 
         $maxRows = max(1, (int) ($props['max_rows'] ?? 8));
 

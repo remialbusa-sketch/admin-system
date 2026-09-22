@@ -2,6 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\CustomTableColumnValue;
+use App\Models\DynamicRow;
+use App\Models\DynamicTable;
 use App\Models\HistoricalTsmsReport;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
@@ -9,6 +12,7 @@ use App\Models\TechnicalReport;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * Per-table aggregation for dashboard data sources. Every table connected to
@@ -77,11 +81,112 @@ class TableAggregationService
             'history-reports' => $this->historyReports($region, $filters),
             'personnel' => $this->personnel($region, $filters),
             'installed-products' => $this->installedProducts($region, $filters),
-            // User-created (dynamic) tables are EAV; generic aggregation is a
-            // follow-up. They still connect as sources, but expose no datasets
-            // yet — never fall through to the Product Database.
-            default => ['metrics' => [], 'datasets' => []],
+            default => $this->dynamicTable($tableKey, $region, $filters),
         };
+    }
+
+    /**
+     * User-created (dynamic) tables are EAV. Expose one dataset per
+     * custom column (by_<slug>) plus a rows metric, so the dashboard and
+     * Visualize wizard can chart them just like core tables.
+     *
+     * @return array{metrics: array<string, int>, datasets: array<string, array<int, array{label:string,value:int,total:int}>>, filters: array<string,mixed>}
+     */
+    private function dynamicTable(string $tableKey, ?string $region, array $filters = []): array
+    {
+        $table = DynamicTable::query()->where('key', $tableKey)->first();
+
+        if ($table === null) {
+            return ['metrics' => [], 'datasets' => []];
+        }
+
+        $columns = $table->columns()->get();
+        $total = DynamicRow::query()->where('table_key', $tableKey)->count();
+
+        $datasets = [];
+        $usedKeys = [];
+
+        foreach ($columns as $column) {
+            $slug = Str::slug((string) $column->name, '_');
+            $slug = $slug !== '' ? $slug : 'col_'.$column->id;
+            $base = 'by_'.$slug;
+            $key = $base;
+            $suffix = 2;
+            while (isset($datasets[$key]) || in_array($key, $usedKeys, true)) {
+                $key = $base.'_'.$suffix++;
+            }
+            $usedKeys[] = $key;
+
+            $query = CustomTableColumnValue::query()->where('custom_column_id', $column->id);
+
+            // Pick the shadow column that actually holds displayable data for
+            // this type (value_text for most; value_number for numbers; value_date for dates).
+            $counts = match ($column->type) {
+                'number' => $query
+                    ->whereNotNull('value_number')
+                    ->selectRaw('CAST(value_number AS TEXT) as label, count(*) as total')
+                    ->groupBy('label')
+                    ->orderByDesc('total')
+                    ->limit(12)
+                    ->get()
+                    ->map(fn ($row): array => ['label' => (string) $row->label, 'value' => (int) $row->total, 'total' => (int) $row->total])
+                    ->all(),
+                'date' => $query
+                    ->whereNotNull('value_date')
+                    ->selectRaw('value_date as label, count(*) as total')
+                    ->groupBy('label')
+                    ->orderByDesc('total')
+                    ->limit(12)
+                    ->get()
+                    ->map(fn ($row): array => ['label' => (string) $row->label, 'value' => (int) $row->total, 'total' => (int) $row->total])
+                    ->all(),
+                default => $query
+                    ->whereNotNull('value_text')
+                    ->where('value_text', '!=', '')
+                    ->selectRaw('value_text as label, count(*) as total')
+                    ->groupBy('label')
+                    ->orderByDesc('total')
+                    ->limit(12)
+                    ->get()
+                    ->map(fn ($row): array => ['label' => (string) $row->label, 'value' => (int) $row->total, 'total' => (int) $row->total])
+                    ->all(),
+            };
+
+            $datasets[$key] = $counts;
+        }
+
+        // Also expose a date-bucketed monthly dataset for the first date column, if any.
+        $dateColumn = $columns->firstWhere('type', 'date');
+        if ($dateColumn) {
+            $monthly = CustomTableColumnValue::query()
+                ->where('custom_column_id', $dateColumn->id)
+                ->whereNotNull('value_date')
+                ->selectRaw('date(value_date) as d, count(*) as total')
+                ->groupBy('d')
+                ->get();
+
+            $buckets = [];
+            foreach ($monthly as $row) {
+                $day = (string) ($row->d ?? '');
+                if (strlen($day) < 7) {
+                    continue;
+                }
+                $month = substr($day, 0, 7);
+                $buckets[$month] = ($buckets[$month] ?? 0) + (int) $row->total;
+            }
+            ksort($buckets);
+            $byMonth = collect(array_slice($buckets, -12, null, true))
+                ->map(fn (int $count, string $month): array => ['label' => $month, 'value' => $count, 'total' => $count, 'count' => $count])
+                ->values()
+                ->all();
+            $datasets['by_month'] = $byMonth;
+        }
+
+        return [
+            'metrics' => ['rows' => $total],
+            'datasets' => $datasets,
+            'filters' => $filters,
+        ];
     }
 
     private function installedProducts(?string $region, array $filters = []): array
