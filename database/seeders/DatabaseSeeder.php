@@ -32,7 +32,7 @@ class DatabaseSeeder extends Seeder
             'email' => 'regional@example.com',
         ]);
 
-        ImportBatch::factory()->create([
+        ImportBatch::create([
             'source_system' => 'product_database',
             'source_name' => 'MCBTSi PRODUCT DATABASE.xlsx',
             'source_sheet' => 'PDB Data',
@@ -41,6 +41,6 @@ class DatabaseSeeder extends Seeder
             'processed_rows' => 0,
         ]);
 
-        User::factory(3)->regionalManager()->create();
+        User::factory()->count(3)->regionalManager()->create();
     }
 }

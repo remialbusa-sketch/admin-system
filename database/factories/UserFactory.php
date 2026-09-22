@@ -27,14 +27,14 @@ class UserFactory extends Factory
     public function definition(): array
     {
         return [
-            'name' => fake()->name(),
-            'email' => fake()->unique()->safeEmail(),
+            'name' => 'User '.Str::random(6),
+            'email' => 'user_'.Str::lower(Str::random(8)).'@example.com',
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
             'role' => UserRole::RegionalManager->value,
             'permission' => UserPermission::Viewer->value,
-            'region' => fake()->randomElement(['NCR', 'North Luzon', 'Visayas', 'Mindanao']),
+            'region' => 'NCR',
         ];
     }
 
