@@ -2,7 +2,6 @@
 
 namespace App\Livewire;
 
-use App\Enums\UserRole;
 use App\Models\CustomTableColumn;
 use App\Models\DynamicTable;
 use App\Models\HistoricalTsmsReport;
@@ -57,10 +56,12 @@ class TablesList extends Component
     /**
      * Create a new user table: a dynamic_tables registry row plus a
      * table_custom_columns row per column the user defined while building it.
+     * Gated on the import capability (permission level Admin, or Superadmin),
+     * matching the "New table" button and the rest of the table tooling.
      */
     public function createTable(): void
     {
-        abort_unless(auth()->user()?->role === UserRole::Superadmin, 403);
+        abort_unless(auth()->user()?->canImport(), 403);
 
         $this->validate(['newTableName' => ['required', 'string', 'max:100']]);
 

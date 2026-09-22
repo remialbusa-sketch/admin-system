@@ -110,6 +110,7 @@
         </div>
     </section>
 
+    @can('import', App\Models\Installation::class)
     <x-admin.modal name="create-table" title="New table" description="Name the table and define its columns while building it — just like laying out a spreadsheet to mirror a monday.com board." size="lg">
         <form wire:submit="createTable" class="space-y-5">
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -181,4 +182,5 @@
             </div>
         </div>
     </x-admin.modal>
+    @endcan
 </div>

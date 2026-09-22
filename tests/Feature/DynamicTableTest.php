@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\UserPermission;
 use App\Enums\UserRole;
 use App\Livewire\DynamicTable;
 use App\Livewire\TablesList;
@@ -62,13 +63,42 @@ class DynamicTableTest extends TestCase
         $this->assertDatabaseMissing('dynamic_tables', ['name' => 'Bad']);
     }
 
-    public function test_only_superadmin_can_create_a_table(): void
+    public function test_admin_permission_users_can_create_a_table(): void
+    {
+        $admin = User::factory()->vpOperations()->create(['permission' => UserPermission::Admin]);
+
+        Livewire::actingAs($admin)
+            ->test(TablesList::class)
+            ->assertSee('New table')
+            ->set('newTableName', 'Admin Table')
+            ->set('draftColumns', [['name' => 'Brand', 'type' => 'text']])
+            ->call('createTable')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('dynamic_tables', [
+            'name' => 'Admin Table',
+            'created_by' => $admin->id,
+        ]);
+    }
+
+    public function test_viewer_and_editor_permission_users_cannot_create_a_table(): void
     {
         Livewire::actingAs(User::factory()->president()->create())
             ->test(TablesList::class)
+            ->assertDontSee('New table')
             ->set('newTableName', 'Nope')
             ->call('createTable')
             ->assertForbidden();
+
+        Livewire::actingAs(User::factory()->serviceCoordinator()->create(['permission' => UserPermission::Editor]))
+            ->test(TablesList::class)
+            ->assertDontSee('New table')
+            ->set('newTableName', 'Also nope')
+            ->call('createTable')
+            ->assertForbidden();
+
+        $this->assertDatabaseMissing('dynamic_tables', ['name' => 'Nope']);
+        $this->assertDatabaseMissing('dynamic_tables', ['name' => 'Also nope']);
     }
 
     public function test_dynamic_table_page_renders_monday_panel_and_custom_columns(): void
