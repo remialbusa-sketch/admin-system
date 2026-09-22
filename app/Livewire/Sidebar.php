@@ -32,6 +32,12 @@ class Sidebar extends Component
         // Same: render() re-reads the dashboard list.
     }
 
+    #[On('refresh-sidebar')]
+    public function refreshSidebar(): void
+    {
+        // Re-render with the fresh request() so routeIs() highlights correctly after wire:navigate.
+    }
+
     public function render()
     {
         $user = auth()->user();

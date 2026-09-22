@@ -151,7 +151,11 @@
                         <p x-show="!sidebarCollapsed" class="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-base-content/40">Tables</p>
                         <div class="space-y-1">
                             @forelse ($dataItems as $item)
-                                @php $active = request()->routeIs($item['route']); @endphp
+                                @php
+                                    $routeTable = request()->route('table');
+                                    $active = request()->routeIs($item['route'])
+                                        && (!isset($item['params']['table']) || (string) $routeTable === (string) $item['params']['table']);
+                                @endphp
                                 <a
                                     href="{{ route($item['route'], $item['params'] ?? []) }}"
                                     wire:navigate
@@ -265,3 +269,16 @@
         </footer>
     </aside>
 </div>
+
+@once
+@push('scripts')
+<script>
+if (!window._sidebarNavBound) {
+    window._sidebarNavBound = true;
+    document.addEventListener('livewire:navigated', () => {
+        if (window.Livewire) window.Livewire.dispatch('refresh-sidebar');
+    });
+}
+</script>
+@endpush
+@endonce
