@@ -10,6 +10,7 @@ use Livewire\Attributes\Url;
 
 class InstalledProductsTable extends ManagedTable
 {
+    #[Url(as: 'branch')]
     public string $branchFilter = 'All branches';
 
     /**

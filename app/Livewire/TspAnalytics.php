@@ -4,20 +4,27 @@ namespace App\Livewire;
 
 use App\Services\TspAnalyticsService;
 use Illuminate\Contracts\View\View;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 
 class TspAnalytics extends Component
 {
+    #[Url]
     public string $period = 'Last 30 days';
 
+    #[Url]
     public string $region = 'All regions';
 
+    #[Url]
     public string $tspName = 'All TSPs';
 
+    #[Url]
     public string $branch = 'All branches';
 
+    #[Url(as: 'from')]
     public ?string $dateFrom = null;
 
+    #[Url(as: 'to')]
     public ?string $dateTo = null;
 
     public function applyPeriod(): void

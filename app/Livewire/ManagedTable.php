@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
+use App\Livewire\Concerns\HasTableFilters;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -24,6 +25,7 @@ use Maatwebsite\Excel\Facades\Excel;
 
 abstract class ManagedTable extends Component
 {
+    use HasTableFilters;
     use WithPagination;
 
     /**
@@ -35,6 +37,7 @@ abstract class ManagedTable extends Component
         'text', 'long_text', 'number', 'checkbox', 'date', 'email', 'phone', 'link', 'status', 'dropdown',
     ];
 
+    #[Url]
     public string $search = '';
 
     /** URL-bound (as ?status=…) so dashboard/status drill-downs can deep-link. */
@@ -46,10 +49,12 @@ abstract class ManagedTable extends Component
 
     public string $sortDirection = 'asc';
 
-    /** Excel-style per-column filter state, keyed by column key. */
+    /** Excel-style per-column filter state, keyed by column key — URL-bound so filtered views are shareable. */
+    #[Url]
     public array $columnFilters = [];
 
     /** When true, the listing shows archived records instead of active ones. */
+    #[Url]
     public bool $showArchived = false;
 
     public bool $showColumnManagerModal = false;

@@ -33,7 +33,7 @@ class TechnicalPersonnelTable extends ManagedTable
                         ->orWhere('branch', 'like', $like);
                 });
             })
-            ->when($this->statusFilter !== null && $this->statusFilter !== 'All statuses', fn ($query) => $query->where('branch', $this->statusFilter));
+            ->when($this->statusFilter !== null && ! in_array($this->statusFilter, ['All statuses', 'All branches'], true), fn ($query) => $query->where('branch', $this->statusFilter));
     }
 
     public function model(): string

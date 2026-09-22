@@ -34,8 +34,10 @@ use Livewire\Component;
 
 class Dashboard extends Component
 {
+    #[Url]
     public string $region = 'All regions';
 
+    #[Url]
     public string $period = '12M';
 
     /** Set when the viewer's role pins the dashboard to their own region. */
@@ -287,7 +289,7 @@ class Dashboard extends Component
      * Global filter bag applied to every source. Empty strings and "All …"
      * sentinels are normalized to null so services can simply `when($filters['branch'], ...)`.
      *
-     * @return array{branch: ?string, status: ?string, date_from: ?string, date_to: ?string, region: ?string}
+     * @return array{branch: ?string, status: ?string, date_from: ?string, date_to: ?string, region: ?string, period: string}
      */
     private function filterScope(): array
     {
@@ -297,6 +299,7 @@ class Dashboard extends Component
             'date_from' => trim($this->dateFrom) !== '' ? trim($this->dateFrom) : null,
             'date_to' => trim($this->dateTo) !== '' ? trim($this->dateTo) : null,
             'region' => $this->regionScope(),
+            'period' => $this->period,
         ];
     }
 

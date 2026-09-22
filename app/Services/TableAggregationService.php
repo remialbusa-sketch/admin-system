@@ -191,7 +191,9 @@ class TableAggregationService
 
     private function installedProducts(?string $region, array $filters = []): array
     {
-        $summary = app(ProductDashboardService::class)->summary($region, '12M', $filters);
+        $period = $filters['period'] ?? $filters['months'] ?? '12M';
+        $period = in_array($period, ['6M', '12M'], true) ? $period : '12M';
+        $summary = app(ProductDashboardService::class)->summary($region, $period, $filters);
 
         return [
             'metrics' => is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [],

@@ -561,7 +561,27 @@ document.addEventListener('alpine:init', () => {
                 this.densitySelect.value = this.loadDensityLabel();
             }
 
-            this.table.on('tableBuilt', () => this.applyRemoteSort(payload.meta));
+            this.table.on('tableBuilt', () => {
+                this.applyRemoteSort(payload.meta);
+                // Keyboard: make headers focusable and sortable via Enter/Space (.impeccable.md:20 — keyboard movement)
+                setTimeout(() => {
+                    const holder = gridEl.querySelector('.tabulator-headers');
+                    if (!holder) return;
+                    holder.querySelectorAll('.tabulator-col[tabulator-field]').forEach((colEl) => {
+                        const field = colEl.getAttribute('tabulator-field');
+                        if (!field || field === '_select') return;
+                        colEl.setAttribute('tabindex', '0');
+                        colEl.setAttribute('role', 'button');
+                        colEl.setAttribute('aria-label', `Sort by ${colEl.textContent.trim()}`);
+                        colEl.addEventListener('keydown', (ev) => {
+                            if (ev.key === 'Enter' || ev.key === ' ') {
+                                ev.preventDefault();
+                                this.callWire('sortBy', field);
+                            }
+                        });
+                    });
+                }, 80);
+            });
             this.table.on('cellEdited', (cell) => this.handleCellEdited(cell));
             this.table.on('rowAdded', (row) => this.handleRowAdded(row));
             this.table.on('columnMoved', () => this.persistLayout());
