@@ -214,6 +214,26 @@
                     });
                 },
 
+                /**
+                 * Parse a fetch response as JSON. A server error page (HTML)
+                 * would otherwise surface as the cryptic
+                 * "Unexpected token '<'" — turn it into an actionable message
+                 * that carries the HTTP status.
+                 */
+                async readJson(resp) {
+                    const text = await resp.text();
+                    try {
+                        return JSON.parse(text);
+                    } catch {
+                        if (resp.status === 419) {
+                            throw new Error('Your session expired. Refresh this page, sign in again, then retry the import.');
+                        }
+                        throw new Error(text.trimStart().startsWith('<')
+                            ? `The server returned an HTML error page (HTTP ${resp.status}) instead of JSON — check storage/logs/laravel.log on the server for the real error.`
+                            : `The server returned an unreadable response (HTTP ${resp.status}).`);
+                    }
+                },
+
                 async onFile(file) {
                     this.globalError = '';
                     this.result = null;
@@ -310,7 +330,7 @@
                                 dataStart: this.dataStart || null,
                             }),
                         });
-                        const data = await resp.json();
+                        const data = await this.readJson(resp);
                         if (!resp.ok) throw new Error(data.message || 'Analysis failed.');
                         this.analysis = data.analysis;
                         this.preview = data.preview;
@@ -407,7 +427,7 @@
                                 mapping: this.mapping,
                             }),
                         });
-                        const data = await resp.json();
+                        const data = await this.readJson(resp);
                         if (!resp.ok) throw new Error(data.message || 'Import failed.');
                         this.result = data;
                         this.step = 3;

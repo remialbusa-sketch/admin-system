@@ -206,6 +206,49 @@ class ImportMappingTest extends TestCase
         }
     }
 
+    public function test_mapped_import_uses_cached_formula_values_from_xlsx(): void
+    {
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Staff');
+
+        $sheet->setCellValue('A1', 'Code');
+        $sheet->setCellValue('B1', 'Name');
+        $sheet->setCellValue('C1', 'Position');
+        $sheet->setCellValue('D1', 'Branch');
+
+        $sheet->setCellValue('A2', 'P-10');
+        $sheet->setCellValue('B2', 'Formula Reyes');
+        $sheet->setCellValue('C2', 'Engineer');
+        // Formula cell: the import must store the cached result ("Cebu"),
+        // not the "=..." formula string.
+        $sheet->setCellValue('D2', '="Ce"&"bu"');
+
+        $path = tempnam(sys_get_temp_dir(), 'mapping-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        $spreadsheet->disconnectWorksheets();
+
+        try {
+            $batch = app(SourceWorkbookImportService::class)->importMapped(
+                $path,
+                'personnel',
+                'Staff',
+                ['name' => 'B', 'position' => 'C', 'branch' => 'D'],
+                1,
+                2,
+            );
+
+            $this->assertSame('completed', $batch->status);
+            $this->assertSame(1, $batch->processed_rows);
+            $this->assertSame(
+                'Cebu',
+                TechnicalPersonnel::query()->where('name', 'Formula Reyes')->value('branch'),
+            );
+        } finally {
+            @unlink($path);
+        }
+    }
+
     private function csv(array $rows): string
     {
         $path = tempnam(sys_get_temp_dir(), 'mapping-').'.csv';

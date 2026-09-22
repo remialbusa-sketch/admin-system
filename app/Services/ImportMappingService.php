@@ -558,15 +558,11 @@ class ImportMappingService
         // full-column formula (e.g. SUM(A:A) = 1,048,576 refs) allocates
         // ~33 MB in one go — the uncatchable OOM that surfaced as a bare 500
         // on POST /livewire/update on hosts where memory_limit is locked
-        // below 512M. We only need the workbook's cached values for preview.
-        // calculateFormulas MUST stay false: PhpSpreadsheet's calculation
-        // engine enumerates every cell reference in a formula's range. Google
-        // Sheets exports (e.g. =IFERROR(__xludf.DUMMYFUNCTION("QUERY(PDB!B8:AI14342…)…"))
-        // carry bounded ranges that allocate 30-90 MB in a single array — the
-        // uncatchable OOM that surfaced as a bare 500 on POST /livewire/update
-        // on hosts where memory_limit is locked below 512M. We only need the
-        // workbook's cached values for preview.
-        $rows = $sheet->toArray(null, false, true, true);
+        // below 512M. Google Sheets exports (e.g. =IFERROR(__xludf.DUMMYFUNCTION("QUERY(...)")))
+        // carry bounded ranges that allocate 30-90 MB in a single array.
+        // We only need the workbook's cached values for preview, so
+        // oldCalculatedValue=true resolves formula cells from the file cache.
+        $rows = $sheet->toArray(null, false, true, true, oldCalculatedValue: true);
         $workbook->disconnectWorksheets();
         unset($sheet, $workbook);
 

@@ -110,11 +110,13 @@ class DynamicTableImportService
                     $sinceFlush = 0;
                     // calculateFormulas=false: import cached values; recalculating
                     // can enumerate huge formula ranges and OOM the worker.
+                    // oldCalculatedValue=true: a formula cell yields the value
+                    // Excel cached in the file, not the "=..." string.
                     // returnCellRef=true keys rows by PHYSICAL row number, and the
                     // read filter always allows row 1 — so rows before $dataStart
                     // (the header) must be skipped explicitly or the header gets
                     // imported as a data row.
-                    foreach ($worksheet->toArray(null, false, true, true) as $physicalRow => $row) {
+                    foreach ($worksheet->toArray(null, false, true, true, oldCalculatedValue: true) as $physicalRow => $row) {
                         $physicalRow = (int) $physicalRow;
 
                         if ($physicalRow < $dataStart) {

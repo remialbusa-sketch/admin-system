@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Reader\IReader;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
@@ -689,8 +690,10 @@ class SourceWorkbookImportService
             $highestRow = $sheet->getHighestRow();
 
             for ($row = 9; $row <= $highestRow; $row++) {
-                $pms = $sheet->getCell('AH'.$row)->getValue();
-                $tsp = $sheet->getCell('AI'.$row)->getValue();
+                // Formula cells resolve to the value cached in the file (never
+                // recalculated — see the calculation-engine OOM notes below).
+                $pms = $this->cachedCellValue($sheet, 'AH'.$row);
+                $tsp = $this->cachedCellValue($sheet, 'AI'.$row);
                 $map[$row] = [
                     'pms_frequency' => $this->value(['pms_frequency' => $pms], 'pms_frequency'),
                     'tsp_in_charge' => $this->value(['tsp_in_charge' => $tsp], 'tsp_in_charge'),
@@ -705,6 +708,22 @@ class SourceWorkbookImportService
         } catch (Throwable) {
             return [];
         }
+    }
+
+    /**
+     * The cell's value with formula cells resolved to the result cached in the
+     * file (`getOldCalculatedValue()`), falling back to the raw formula string
+     * when the file carries no cached result. Never recalculates.
+     */
+    private function cachedCellValue(Worksheet $sheet, string $coordinate): mixed
+    {
+        $cell = $sheet->getCell($coordinate);
+
+        if ($cell->getDataType() === DataType::TYPE_FORMULA) {
+            return $cell->getOldCalculatedValue() ?? $cell->getValue();
+        }
+
+        return $cell->getValue();
     }
 
     private function worksheetName(IReader $reader, string $path, string $preferredName): ?string
@@ -845,8 +864,10 @@ class SourceWorkbookImportService
                 if ($sheet) {
                     // calculateFormulas=false: we import the workbook's cached
                     // values; recalculating can enumerate huge formula ranges
-                    // (e.g. SUM(A:A) ≈ 1M refs / ~33 MB) and OOM the worker.
-                    foreach ($sheet->toArray(null, false, true, true) as $rowNumber => $row) {
+                    // (e.g. SUM(A:A) → 1M refs / ~33 MB) and OOM the worker.
+                    // oldCalculatedValue=true makes formula cells yield that
+                    // cached value instead of the raw "=..." formula string.
+                    foreach ($sheet->toArray(null, false, true, true, oldCalculatedValue: true) as $rowNumber => $row) {
                         if ($rowNumber === 1 || $rowNumber < $dataStart || count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
                             continue;
                         }
@@ -1026,8 +1047,9 @@ class SourceWorkbookImportService
 
     private function headers(Worksheet $sheet): array
     {
-        // calculateFormulas=false — headers never need formula recalculation.
-        return $this->normalizeHeaders($sheet->toArray(null, false, true, true)[1] ?? []);
+        // calculateFormulas=false — headers never need formula recalculation;
+        // oldCalculatedValue resolves any formula header to its cached text.
+        return $this->normalizeHeaders($sheet->toArray(null, false, true, true, oldCalculatedValue: true)[1] ?? []);
     }
 
     private function associate(array $headers, array $row): array
