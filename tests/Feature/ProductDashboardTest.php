@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Livewire\Dashboard;
 use App\Models\Account;
+use App\Models\Dashboard as DashboardModel;
 use App\Models\Installation;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -49,7 +50,7 @@ class ProductDashboardTest extends TestCase
             'installation_date' => now()->subYear(),
         ]);
 
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->assertOk()
             ->assertSee('Product Database')
@@ -92,7 +93,7 @@ class ProductDashboardTest extends TestCase
             'brand' => 'TERUMO',
         ]);
 
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->assertSee('SYSMEX')
             ->assertSee('TERUMO')
@@ -118,13 +119,36 @@ class ProductDashboardTest extends TestCase
             'brand' => 'TERUMO',
         ]);
 
-        Livewire::actingAs(User::factory()->regionalManager('NCR')->create())
-            ->test(Dashboard::class)
+        // Regional managers see empty Home (no PDB default). Scoping is verified
+        // via an owned dashboard that has an installed-products source.
+        $user = User::factory()->regionalManager('NCR')->create();
+        $dashboard = DashboardModel::create([
+            'owner_id' => $user->id,
+            'name' => 'Scoped board',
+            'layout' => ['version' => 1, 'widgets' => [[
+                'id' => 'table-1',
+                'type' => 'table',
+                'w' => 12,
+                'h' => 4,
+                'props' => ['label' => 'Top accounts', 'dataset' => 'pdb.top_accounts'],
+            ]]],
+        ]);
+        $dashboard->sources()->create(['table_key' => 'installed-products', 'alias' => 'pdb', 'position' => 0]);
+
+        Livewire::actingAs($user)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
             ->assertSee('Scoped to your region')
-            ->assertSee('SYSMEX')
-            // Even a tampered region property cannot widen the scope.
+            ->assertSee('NCR Hospital')
             ->set('region', 'Visayas')
-            ->assertDontSee('TERUMO');
+            ->assertDontSee('Visayas Hospital');
+    }
+
+    public function test_home_for_non_superadmin_is_empty_onboarding(): void
+    {
+        $this->actingAs(User::factory()->regionalManager('NCR')->create())
+            ->get('/dashboard')
+            ->assertOk()
+            ->assertSee('No dashboard yet');
     }
 
     public function test_president_route_redirects_to_consolidated_home(): void

@@ -141,13 +141,47 @@
         </section>
     @endif
 
-    <x-admin.modal name="create-dashboard" title="New dashboard" description="Name it, then connect the tables it should read from on the dashboard page." size="md">
+    <x-admin.modal name="create-dashboard" title="New dashboard" description="Pick the table this dashboard will read from — it will start empty so you can add widgets for that table." size="md">
         <form wire:submit="createDashboard" class="space-y-4">
             <div>
                 <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Name</label>
                 <input type="text" wire:model="newName" class="admin-control w-full" placeholder="e.g. Visayas operations">
                 <x-input-error :messages="$errors->get('newName')" class="mt-1.5" />
             </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Data source (table) <span class="text-error">*</span></label>
+                <select wire:model="newDashboardTableKey" class="admin-control w-full">
+                    <option value="">-- choose a table --</option>
+                    @foreach ($tableOptions as $option)
+                        <option value="{{ $option['key'] }}">{{ $option['label'] }} ({{ $option['key'] }})</option>
+                    @endforeach
+                </select>
+                <x-input-error :messages="$errors->get('newDashboardTableKey')" class="mt-1.5" />
+            </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Alias (optional)</label>
+                <input type="text" wire:model="newDashboardTableAlias" class="admin-control w-full font-mono text-xs" placeholder="auto: {{ Str::slug('your-table', '_') }}">
+                <x-input-error :messages="$errors->get('newDashboardTableAlias')" class="mt-1.5" />
+                <p class="mt-1 text-[11px] text-base-content/40">Lowercase letters, numbers and underscores. Leave blank to auto-generate from the table key.</p>
+            </div>
+            @if ($userOptions->isNotEmpty())
+                <div>
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Share with (optional) — toggle before creating</label>
+                    <div class="flex gap-2">
+                        <select wire:model="newDashboardShareUserIds" multiple class="admin-control flex-1 h-24 text-xs">
+                            @foreach ($userOptions as $u)
+                                <option value="{{ $u->id }}">{{ $u->name }} ({{ $u->email }})</option>
+                            @endforeach
+                        </select>
+                        <select wire:model="newDashboardSharePermission" class="admin-control w-28 text-xs">
+                            <option value="view">View</option>
+                            <option value="edit">Edit</option>
+                        </select>
+                    </div>
+                    <p class="mt-1 text-[11px] text-base-content/40">Hold Ctrl/Cmd to select multiple people. The owner can share later from the dashboard page.</p>
+                    <x-input-error :messages="$errors->get('newDashboardShareUserIds')" class="mt-1.5" />
+                </div>
+            @endif
             <div class="flex items-center justify-end gap-2 border-t border-base-300 pt-4">
                 <button type="button" x-on:click="$dispatch('close-modal', { name: 'create-dashboard' })" class="admin-secondary-button">Cancel</button>
                 <button type="submit" class="admin-primary-button">

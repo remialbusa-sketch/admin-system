@@ -105,6 +105,17 @@
         </div>
     </header>
 
+    @if (($isEmptyHome ?? false))
+        <div class="admin-surface p-8 text-center space-y-4">
+            <h2 class="text-lg font-bold text-base-content">No dashboard yet</h2>
+            <p class="text-sm text-base-content/60">Create a table, import your data, then create a dashboard for that table. Your dashboard will start empty — add widgets for your table.</p>
+            <div class="flex justify-center gap-2">
+                <a href="{{ route('tables') }}" wire:navigate class="admin-secondary-button">Go to Tables</a>
+                <a href="{{ route('dashboards.index') }}" wire:navigate class="admin-primary-button">Create dashboard</a>
+            </div>
+        </div>
+    @endif
+
     <x-admin.filter-bar>
         <select wire:model.live="branchFilter" class="admin-control" aria-label="Filter by branch">
             @foreach ($branchOptions as $branch)

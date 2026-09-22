@@ -351,7 +351,7 @@ class WidgetWizard extends Component
             $dashboard = Dashboard::create([
                 'owner_id' => $user->id,
                 'name' => trim($this->newDashboardName),
-                'layout' => null,
+                'layout' => ['version' => 1, 'widgets' => []],
             ]);
         }
 
@@ -375,7 +375,10 @@ class WidgetWizard extends Component
         $definition = app(WidgetRegistry::class)->make($this->widgetType)->definition();
         $size = $definition['defaultSize'] ?? ['w' => 4, 'h' => 2];
 
-        $layout = $dashboard->layout ?: config('dashboard.default_layout');
+        $layout = $dashboard->layout;
+        if ($layout === null) {
+            $layout = $dashboard->wasRecentlyCreated ? ['version' => 1, 'widgets' => []] : config('dashboard.default_layout');
+        }
         $layout['widgets'][] = [
             'id' => $this->widgetType.'-'.Str::lower(Str::random(6)),
             'type' => $this->widgetType,

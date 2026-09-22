@@ -63,7 +63,7 @@ class DashboardFiltersTest extends TestCase
     {
         $this->seedTwoBranches();
 
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->assertDontSee('Clear filters')
             ->assertSee('Makati')
@@ -83,7 +83,7 @@ class DashboardFiltersTest extends TestCase
     {
         $this->seedTwoBranches();
 
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->set('statusFilter', 'Active')
             ->assertSee('SYSMEX')
@@ -97,7 +97,7 @@ class DashboardFiltersTest extends TestCase
     {
         $this->seedTwoBranches();
 
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->set('dateFrom', now()->subMonths(6)->toDateString())
             ->assertSee('SYSMEX')
@@ -110,7 +110,7 @@ class DashboardFiltersTest extends TestCase
 
     public function test_clear_filters_resets_the_bar(): void
     {
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->set('branchFilter', 'Makati')
             ->set('statusFilter', 'Active')

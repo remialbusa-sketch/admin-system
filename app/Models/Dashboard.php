@@ -86,7 +86,7 @@ class Dashboard extends Model
                 : self::PERMISSION_VIEW;
         }
 
-        return $this->is_system ? self::PERMISSION_VIEW : null;
+        return null;
     }
 
     public function canBeViewedBy(?User $user): bool

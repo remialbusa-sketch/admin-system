@@ -39,6 +39,8 @@ class DashboardSharingTest extends TestCase
         Livewire::actingAs($owner)
             ->test(DashboardsIndex::class)
             ->set('newName', 'Visayas ops')
+            ->set('newDashboardTableKey', 'installed-products')
+            ->set('newDashboardTableAlias', 'pdb')
             ->call('createDashboard')
             ->assertHasNoErrors();
 
@@ -162,6 +164,7 @@ class DashboardSharingTest extends TestCase
     public function test_system_dashboards_open_as_an_editable_personal_copy(): void
     {
         $viewer = User::factory()->president()->create();
+        $sharer = User::factory()->superadmin()->create();
 
         $system = DashboardModel::create([
             'owner_id' => null,
@@ -170,7 +173,14 @@ class DashboardSharingTest extends TestCase
             'layout' => ['version' => 1, 'widgets' => []],
         ]);
 
-        // Opening the template lands on the user's editable copy.
+        DashboardShare::create([
+            'dashboard_id' => $system->id,
+            'user_id' => $viewer->id,
+            'permission' => 'view',
+            'shared_by' => $sharer->id,
+        ]);
+
+        // Opening the shared template lands on the user's editable copy.
         $this->actingAs($viewer)
             ->get(route('dashboards.show', $system))
             ->assertRedirect();

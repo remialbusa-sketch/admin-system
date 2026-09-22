@@ -167,7 +167,7 @@ class DynamicTableTest extends TestCase
             ->test(DynamicTable::class, ['table' => $table->key])
             ->call('deleteRecord', $row->id);
 
-        $this->assertDatabaseMissing('dynamic_rows', ['id' => $row->id]);
+        $this->assertSoftDeleted('dynamic_rows', ['id' => $row->id]);
         $this->assertDatabaseMissing('table_custom_column_values', ['custom_column_id' => $statusCol->id, 'row_id' => $row->id]);
     }
 

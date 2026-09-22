@@ -4,6 +4,7 @@ namespace App\Support\Dashboard\Widgets;
 
 use App\Support\Dashboard\Contracts\DashboardWidget;
 use App\Support\Dashboard\DashboardContext;
+use Illuminate\Support\Str;
 
 /**
  * Data Table: a clean grid over any label/value dataset — regional
@@ -51,8 +52,10 @@ final class TableWidget implements DashboardWidget
         $dataset = (string) ($props['dataset'] ?? 'regions');
         $rows = $ctx->dataset($dataset);
 
+        $baseDataset = Str::afterLast($dataset, '.');
+
         $labelKey = filled($props['label_key'] ?? null) ? (string) $props['label_key']
-            : match ($dataset) {
+            : match ($baseDataset) {
                 'top_accounts' => 'customer',
                 'machine_types' => 'label',
                 'regions' => 'region',

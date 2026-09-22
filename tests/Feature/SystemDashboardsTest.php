@@ -35,6 +35,8 @@ class SystemDashboardsTest extends TestCase
     {
         $user = User::factory()->president()->create();
         $system = DashboardModel::query()->where('is_system', true)->where('name', 'Technical Service Analysis')->firstOrFail();
+        $sharer = User::factory()->superadmin()->create();
+        \App\Models\DashboardShare::create(['dashboard_id' => $system->id, 'user_id' => $user->id, 'permission' => 'view', 'shared_by' => $sharer->id]);
 
         $this->actingAs($user)->get(route('dashboards.show', $system))->assertRedirect();
 
@@ -62,6 +64,8 @@ class SystemDashboardsTest extends TestCase
         // template directly — see DashboardSuperadminTest).
         $user = User::factory()->president()->create();
         $system = DashboardModel::query()->where('is_system', true)->where('name', 'TSP Analytics')->firstOrFail();
+        $sharer = User::factory()->superadmin()->create();
+        \App\Models\DashboardShare::create(['dashboard_id' => $system->id, 'user_id' => $user->id, 'permission' => 'view', 'shared_by' => $sharer->id]);
 
         $this->actingAs($user)->get(route('dashboards.show', $system));
 

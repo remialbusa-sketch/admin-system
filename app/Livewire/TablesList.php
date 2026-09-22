@@ -142,6 +142,63 @@ class TablesList extends Component
         };
     }
 
+    /**
+     * Archive (soft delete) a user table. Owners may archive their own;
+     * superadmins may archive any (restorable).
+     */
+    public function archiveTable(string $tableKey): void
+    {
+        $table = DynamicTable::where('key', $tableKey)->firstOrFail();
+
+        abort_unless($this->mayManageTable($table), 403);
+
+        $table->delete();
+
+        // Soft-delete its columns/rows so a restore brings everything back.
+        $table->columns()->delete();
+        $table->rows()->delete();
+
+        $this->dispatch('table-pins-updated');
+    }
+
+    /** Restore an archived user table (owner or superadmin). */
+    public function restoreTable(string $tableKey): void
+    {
+        $table = DynamicTable::onlyTrashed()->where('key', $tableKey)->firstOrFail();
+
+        abort_unless($this->mayManageTable($table), 403);
+
+        $table->restore();
+        $table->columns()->onlyTrashed()->restore();
+        $table->rows()->onlyTrashed()->restore();
+
+        $this->dispatch('table-pins-updated');
+    }
+
+    /** Permanently delete — superadmin only; cascades columns/rows/values. */
+    public function forceDeleteTable(string $tableKey): void
+    {
+        abort_unless(auth()->user()?->isSuperadmin(), 403);
+
+        $table = DynamicTable::withTrashed()->where('key', $tableKey)->firstOrFail();
+
+        // Hard delete values first via columns.
+        foreach ($table->columns()->withTrashed()->get() as $col) {
+            \App\Models\CustomTableColumnValue::where('custom_column_id', $col->id)->forceDelete();
+            $col->forceDelete();
+        }
+        $table->rows()->withTrashed()->forceDelete();
+        $table->forceDelete();
+
+        $this->dispatch('table-pins-updated');
+    }
+
+    private function mayManageTable(DynamicTable $table): bool
+    {
+        return $table->created_by === auth()->id()
+            || (bool) auth()->user()?->isSuperadmin();
+    }
+
     /*
     |--------------------------------------------------------------------------
     | Pinning (personal sidebar quick links)
@@ -211,6 +268,7 @@ class TablesList extends Component
                 'url' => route('installed-products'),
                 'count' => Installation::query()->count(),
                 'source' => 'MCBTSi PRODUCT DATABASE.xlsx',
+                'is_dynamic' => false,
             ],
             [
                 'key' => 'service-requests',
@@ -220,6 +278,7 @@ class TablesList extends Component
                 'url' => route('service-requests'),
                 'count' => ServiceRequest::query()->count(),
                 'source' => 'MCBTSI_Executive_Dashboard_Updated.xlsx',
+                'is_dynamic' => false,
             ],
             [
                 'key' => 'technical-reports',
@@ -229,6 +288,7 @@ class TablesList extends Component
                 'url' => route('technical-reports'),
                 'count' => TechnicalReport::query()->count(),
                 'source' => 'MCBTSI_Executive_Dashboard_Updated.xlsx',
+                'is_dynamic' => false,
             ],
             [
                 'key' => 'history-reports',
@@ -238,6 +298,7 @@ class TablesList extends Component
                 'url' => route('history-reports'),
                 'count' => HistoricalTsmsReport::query()->count(),
                 'source' => 'MCBTSi TSMS (Responses).xlsx',
+                'is_dynamic' => false,
             ],
             [
                 'key' => 'personnel',
@@ -247,6 +308,7 @@ class TablesList extends Component
                 'url' => route('personnel'),
                 'count' => TechnicalPersonnel::query()->count(),
                 'source' => 'Personnel list_.xlsx',
+                'is_dynamic' => false,
             ],
         ];
 
@@ -259,6 +321,8 @@ class TablesList extends Component
                 'url' => route('tables.show', ['table' => $table->key]),
                 'count' => $table->rows()->count(),
                 'source' => $table->monday_board_id ? 'monday.com board '.$table->monday_board_id : 'Manual',
+                'is_dynamic' => true,
+                'created_by' => $table->created_by,
             ];
         });
 
@@ -269,12 +333,26 @@ class TablesList extends Component
         $imports = ImportBatch::query()->latest()->limit(10)->get();
         $recentEdits = RecordEditLog::query()->with('user:id,name')->latest()->limit(12)->get();
 
+        $archivedTables = DynamicTable::onlyTrashed()
+            ->when(! auth()->user()?->isSuperadmin(), fn ($query) => $query->where('created_by', auth()->id()))
+            ->orderBy('name')
+            ->limit(50)
+            ->get()
+            ->map(fn (DynamicTable $table): array => [
+                'key' => $table->key,
+                'label' => $table->name,
+                'deleted_at' => $table->deleted_at,
+            ])
+            ->all();
+
         return view('livewire.tables-list', [
             'tables' => $tables,
             'pinnedCount' => count($this->pinnedKeys),
             'imports' => $imports,
             'recentEdits' => $recentEdits,
             'columnTypeOptions' => app(ColumnTypeRegistry::class)->all(),
+            'archivedTables' => $archivedTables,
+            'isSuperadmin' => (bool) auth()->user()?->isSuperadmin(),
         ])->layout('layouts.dashboard')->title('Tables');
     }
 }

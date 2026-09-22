@@ -129,16 +129,16 @@ class Dashboard extends Component
             abort(503, 'Dashboard tables are missing on this server — run `php artisan migrate --force`.');
         }
 
-        // A shared dashboard may only be opened by its owner, a person it is
-        // shared with, or anyone when it is a system dashboard.
         if ($dashboard !== null) {
             abort_unless($dashboard->canBeViewedBy($user), 403);
 
             // System dashboards are templates: opening one lands the user on
-            // their editable personal copy (created once), so a shared default
-            // can never be broken by one person's edits. Superadmins curate the
-            // template directly (audited); everyone else gets a copy.
+            // their editable personal copy (created once). Superadmins curate
+            // the template directly (audited); others may only open a system
+            // board if a superadmin has shared it, then they get a copy.
             if ($dashboard->is_system && $user !== null && ! $user->isSuperadmin()) {
+                abort_unless($dashboard->shares()->where('user_id', $user->id)->exists(), 403);
+
                 $this->redirectRoute('dashboards.show', $this->personalCopyOf($dashboard, $user), navigate: true);
 
                 return;
@@ -1121,6 +1121,77 @@ class Dashboard extends Component
 
         $filters = $this->filterScope();
 
+        // Home for non-superadmins is empty onboarding (no PDB default, no redirect).
+        // Superadmin keeps the Product Database overview as Home.
+        $isEmptyHome = $this->dashboardId === null && $user !== null && ! $user->isSuperadmin();
+
+        if ($isEmptyHome) {
+            $summary = [
+                'metrics' => [],
+                'regions' => [],
+                'regionMax' => ['products' => 1, 'warranty' => 1],
+                'installTrend' => [],
+                'installArea' => ['area' => '', 'line' => '', 'dots' => []],
+                'machineTypes' => [],
+                'typeMax' => 1,
+                'topAccounts' => [],
+                'fleetDonut' => [],
+                'fleetTotal' => 1,
+                'brandDonut' => [],
+                'brandTotal' => 1,
+                'kpis' => [],
+                'sla' => [],
+                'attentionSignals' => [],
+                'installDelta' => null,
+                'trendMonths' => 12,
+                'filters' => $filters,
+                'regionOptions' => ['All regions', ...ProductDashboardService::REGIONS],
+                'freshness' => 'no data yet',
+                'selectedRegion' => $region,
+                'scopeNote' => $region,
+            ];
+            $context = DashboardContext::fromSummary($region, $this->period, $summary)
+                ->withSources([])
+                ->withFilters($filters);
+            $layout = ['version' => 1, 'widgets' => []];
+            $grid = $engine->build($layout, $context);
+
+            $hasActiveFilters = $this->branchFilter !== 'All branches'
+                || $this->statusFilter !== 'All statuses'
+                || trim($this->dateFrom) !== ''
+                || trim($this->dateTo) !== '';
+
+            return view('livewire.dashboard', [
+                'regionLocked' => $this->regionLocked,
+                'periodOptions' => array_keys(ProductDashboardService::PERIODS),
+                'branchOptions' => $this->branchOptions(),
+                'statusOptions' => $this->statusOptions(),
+                'hasActiveFilters' => $hasActiveFilters,
+                'activeFilters' => array_filter([
+                    'branch' => $filters['branch'] ?? null,
+                    'status' => $filters['status'] ?? null,
+                    'from' => $filters['date_from'] ?? null,
+                    'to' => $filters['date_to'] ?? null,
+                ]),
+                'grid' => $grid,
+                'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
+                'metricLabels' => config('dashboard.metric_labels', []),
+                'metricValues' => [],
+                'datasetOptions' => $this->datasetOptions(),
+                'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
+                'dashboard' => null,
+                'canEditDashboard' => false,
+                'shares' => collect(),
+                'sources' => collect(),
+                'userOptions' => collect(),
+                'tableOptions' => $this->tableOptions(),
+                'isEmptyHome' => true,
+                ...$summary,
+            ])
+                ->layout('layouts.dashboard')
+                ->title('Dashboards');
+        }
+
         $summary = $service->summary($region === 'All regions' ? null : $region, $this->period, $filters);
 
         // Re-resolve the dashboard + permission from the DB (never trust the
@@ -1143,6 +1214,13 @@ class Dashboard extends Component
             ->withFilters($filters);
         $savedLayout = $dashboard?->layout
             ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null);
+
+        // Owned dashboards created via Branch A start empty (no PDB default).
+        // A null layout on an owned board means empty, not Home's default.
+        if ($dashboard !== null && $dashboard->layout === null) {
+            $savedLayout = ['version' => 1, 'widgets' => []];
+        }
+
         $layout = $this->customizing && $this->draftLayout !== []
             ? $this->draftLayout
             : ($savedLayout ?? config('dashboard.default_layout'));

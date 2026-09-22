@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Livewire\Dashboard;
 use App\Models\Account;
+use App\Models\Dashboard as DashboardModel;
 use App\Models\DashboardLayout;
 use App\Models\Installation;
 use App\Models\User;
@@ -45,7 +46,7 @@ class DashboardGridTest extends TestCase
         $ncr = $this->account('acc-1', 'Example Hospital', 'NCR');
         $this->installation($ncr, ['warranty_end_date' => now()->addDays(21)]);
 
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->assertOk()
             ->assertSee('Operations grid')
@@ -73,14 +74,14 @@ class DashboardGridTest extends TestCase
         $ncr = $this->account('acc-live', 'Live Check Hospital', 'NCR');
         $this->installation($ncr, ['warranty_end_date' => now()->addDays(40)]);
 
-        Livewire::actingAs(User::factory()->president()->create())
+        Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->assertSee('100.0');
     }
 
     public function test_save_layout_persists_and_rerenders_in_order(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -103,7 +104,7 @@ class DashboardGridTest extends TestCase
 
     public function test_editor_stays_in_customize_mode_until_done_is_clicked(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         $component = Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -135,7 +136,7 @@ class DashboardGridTest extends TestCase
 
     public function test_cancel_discards_the_draft_without_persisting(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -156,7 +157,7 @@ class DashboardGridTest extends TestCase
         // The widget generator is opt-in: enable it for this test.
         config(['dashboard.allow_add_widgets' => true]);
 
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -181,7 +182,7 @@ class DashboardGridTest extends TestCase
         // on, but the hidden state must keep working whenever it's set.
         config(['dashboard.allow_add_widgets' => false]);
 
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         // Flag off (default): the picker UI is absent and addWidget no-ops.
         Livewire::actingAs($user)
@@ -198,7 +199,7 @@ class DashboardGridTest extends TestCase
 
     public function test_widget_settings_apply_to_the_draft_and_persist_on_done(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -226,7 +227,7 @@ class DashboardGridTest extends TestCase
 
     public function test_widget_settings_reject_invalid_formulas(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -244,7 +245,7 @@ class DashboardGridTest extends TestCase
 
     public function test_settings_modal_seeds_a_visual_tree_for_arithmetic_formulas(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         // KPI widget: the default formula reads back as a 5-node graph.
         Livewire::actingAs($user)
@@ -272,7 +273,7 @@ class DashboardGridTest extends TestCase
 
     public function test_advanced_formulas_fall_back_instead_of_a_visual_tree(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         // A ternary formula cannot be drawn on the canvas: tree must be
         // null so the UI shows the advanced fallback instead of rewriting.
@@ -293,7 +294,7 @@ class DashboardGridTest extends TestCase
 
     public function test_a_visually_built_formula_validates_and_applies(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         // The tree editor pushes generated strings like this via
         // $wire.set; Apply must accept and store them unchanged.
@@ -324,7 +325,7 @@ class DashboardGridTest extends TestCase
 
     public function test_the_canvas_graph_persists_across_apply_and_reopen(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         // Exactly what the editor writes: the raw canvas graph (blocks,
         // positions, connections) next to the expression string.
@@ -362,7 +363,7 @@ class DashboardGridTest extends TestCase
 
     public function test_blocks_survive_close_done_and_a_fresh_page_load(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         $graph = [
             'nodes' => [
@@ -398,7 +399,7 @@ class DashboardGridTest extends TestCase
 
     public function test_a_tampered_canvas_graph_is_sanitized_on_apply(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         $evilGraph = [
             'nodes' => [
@@ -424,7 +425,7 @@ class DashboardGridTest extends TestCase
 
     public function test_legacy_saved_layouts_migrate_to_the_new_widget_types(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         // A layout saved before the widget-library replacement.
         DashboardLayout::create([
@@ -459,7 +460,7 @@ class DashboardGridTest extends TestCase
 
     public function test_unknown_widget_types_are_dropped_from_user_layouts(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         DashboardLayout::create([
             'user_id' => $user->id,
@@ -481,7 +482,7 @@ class DashboardGridTest extends TestCase
 
     public function test_a_broken_widget_formula_degrades_to_an_error_card(): void
     {
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         DashboardLayout::create([
             'user_id' => $user->id,
@@ -505,7 +506,7 @@ class DashboardGridTest extends TestCase
     {
         // No installations at all: the default KPI formula divides by zero,
         // which must render as "no data" — never an error card.
-        $user = User::factory()->president()->create();
+        $user = User::factory()->superadmin()->create();
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -519,11 +520,24 @@ class DashboardGridTest extends TestCase
         $ncr = $this->account('acc-ncr-3', 'NCR Hospital', 'NCR');
         $this->installation($ncr);
 
-        Livewire::actingAs(User::factory()->regionalManager('NCR')->create())
-            ->test(Dashboard::class)
+        $user = User::factory()->regionalManager('NCR')->create();
+        $dashboard = DashboardModel::create([
+            'owner_id' => $user->id,
+            'name' => 'Scoped board',
+            'layout' => ['version' => 1, 'widgets' => [[
+                'id' => 'table-1',
+                'type' => 'table',
+                'w' => 12,
+                'h' => 4,
+                'props' => ['label' => 'Top accounts', 'dataset' => 'pdb.top_accounts'],
+            ]]],
+        ]);
+        $dashboard->sources()->create(['table_key' => 'installed-products', 'alias' => 'pdb', 'position' => 0]);
+
+        Livewire::actingAs($user)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
             ->assertOk()
             ->assertSee('Scoped to your region')
-            ->assertSee('Operations grid')
             ->assertSee('NCR Hospital');
     }
 }

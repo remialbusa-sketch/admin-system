@@ -58,9 +58,40 @@
                     </div>
                 </div>
                 <a href="{{ $table['url'] }}" wire:navigate class="admin-secondary-button mt-4 w-full justify-center">Open table</a>
+                @if (($table['is_dynamic'] ?? false) && (($table['created_by'] ?? null) === auth()->id() || ($isSuperadmin ?? false)))
+                    <button type="button" wire:click="archiveTable('{{ $table['key'] }}')" wire:confirm="Archive this table? You can restore it from the Archived section." class="admin-secondary-button mt-2 w-full justify-center text-xs">
+                        <x-mary-icon name="o-archive-box" class="h-4 w-4" />
+                        Archive table
+                    </button>
+                @endif
             </article>
         @endforeach
     </div>
+
+    @if (!empty($archivedTables))
+        <section class="admin-surface p-5 sm:p-6">
+            <h2 class="text-base font-bold text-base-content">Archived tables</h2>
+            <p class="mt-1 text-xs text-base-content/55">Soft-deleted user tables — owners can restore, superadmins can permanently delete.</p>
+            <div class="mt-4 divide-y divide-base-300 rounded-md border border-base-300">
+                @foreach ($archivedTables as $archived)
+                    <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                        <div class="min-w-0">
+                            <p class="truncate text-sm font-semibold text-base-content/70">{{ $archived['label'] }} ({{ $archived['key'] }})</p>
+                            <p class="truncate text-xs text-base-content/45">Archived {{ $archived['deleted_at']?->diffForHumans() }}</p>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-2">
+                            <button type="button" wire:click="restoreTable('{{ $archived['key'] }}')" class="admin-secondary-button">Restore</button>
+                            @if ($isSuperadmin ?? false)
+                                <button type="button" wire:click="forceDeleteTable('{{ $archived['key'] }}')" wire:confirm="Permanently delete this table? Columns, rows and values are removed. This cannot be undone." class="admin-icon-button" aria-label="Delete permanently">
+                                    <x-mary-icon name="o-trash" class="h-4 w-4" />
+                                </button>
+                            @endif
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+        </section>
+    @endif
 
     <section class="admin-surface p-5 sm:p-6">
         <h2 class="text-base font-bold text-base-content">Recent imports</h2>
