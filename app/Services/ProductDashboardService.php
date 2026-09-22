@@ -30,23 +30,28 @@ class ProductDashboardService
      * when the dedupe collapses rows, or when a Superadmin edits a record by
      * hand (bounded by the short TTL). Cached per region scope + period.
      */
-    public function summary(?string $region = 'All regions', string $period = '12M'): array
+    public function summary(?string $region = 'All regions', string $period = '12M', array $filters = []): array
     {
         $isAll = ! $region || $region === 'All regions';
         $months = self::PERIODS[$period] ?? self::PERIODS['12M'];
-        $key = 'product:summary:'.($isAll ? 'all' : $region).':'.$months;
+        $filterHash = md5(json_encode($filters));
+        $key = 'product:summary:'.($isAll ? 'all' : $region).':'.$months.':'.$filterHash;
 
-        return Cache::remember($key, now()->addMinutes(self::CACHE_TTL_MINUTES), fn (): array => $this->computeSummary($region, $months));
+        return Cache::remember($key, now()->addMinutes(self::CACHE_TTL_MINUTES), fn (): array => $this->computeSummary($region, $months, $filters));
     }
 
-    private function computeSummary(?string $region, int $months): array
+    private function computeSummary(?string $region, int $months, array $filters = []): array
     {
         $isAll = ! $region || $region === 'All regions';
         $scopeRegion = $isAll ? null : $region;
 
         // Canonical, casing-safe fleet buckets (workbook values vary in case).
         $base = Installation::query()
-            ->when($scopeRegion, fn ($q) => $q->whereHas('account', fn ($a) => $a->where('region', $scopeRegion)));
+            ->when($scopeRegion, fn ($q) => $q->whereHas('account', fn ($a) => $a->where('region', $scopeRegion)))
+            ->when($filters['branch'] ?? null, fn ($q, $branch) => $q->whereHas('account', fn ($a) => $a->where('branch', $branch)))
+            ->when($filters['status'] ?? null, fn ($q, $status) => $q->whereRaw('lower(trim(device_status)) = ?', [strtolower(trim((string) $status))]))
+            ->when($filters['date_from'] ?? null, fn ($q, $from) => $q->where('installation_date', '>=', $from))
+            ->when($filters['date_to'] ?? null, fn ($q, $to) => $q->where('installation_date', '<=', $to));
 
         $totalProducts = (int) (clone $base)->count();
         $activeProducts = (int) (clone $base)->whereRaw("lower(trim(device_status)) = 'active'")->count();
@@ -127,6 +132,10 @@ class ProductDashboardService
         $regionRows = Installation::query()
             ->join('accounts', 'accounts.id', '=', 'installations.account_id')
             ->when($scopeRegion, fn ($q) => $q->where('accounts.region', $scopeRegion))
+            ->when($filters['branch'] ?? null, fn ($q, $branch) => $q->where('accounts.branch', $branch))
+            ->when($filters['status'] ?? null, fn ($q, $status) => $q->whereRaw('lower(trim(installations.device_status)) = ?', [strtolower(trim((string) $status))]))
+            ->when($filters['date_from'] ?? null, fn ($q, $from) => $q->where('installations.installation_date', '>=', $from))
+            ->when($filters['date_to'] ?? null, fn ($q, $to) => $q->where('installations.installation_date', '<=', $to))
             ->selectRaw("accounts.region as region,
                 COUNT(*) as products,
                 SUM(CASE WHEN lower(trim(installations.device_status)) = 'active' THEN 1 ELSE 0 END) as active,
@@ -211,6 +220,10 @@ class ProductDashboardService
         $topAccounts = Installation::query()
             ->join('accounts', 'accounts.id', '=', 'installations.account_id')
             ->when($scopeRegion, fn ($q) => $q->where('accounts.region', $scopeRegion))
+            ->when($filters['branch'] ?? null, fn ($q, $branch) => $q->where('accounts.branch', $branch))
+            ->when($filters['status'] ?? null, fn ($q, $status) => $q->whereRaw('lower(trim(installations.device_status)) = ?', [strtolower(trim((string) $status))]))
+            ->when($filters['date_from'] ?? null, fn ($q, $from) => $q->where('installations.installation_date', '>=', $from))
+            ->when($filters['date_to'] ?? null, fn ($q, $to) => $q->where('installations.installation_date', '<=', $to))
             ->selectRaw("accounts.customer_name as customer, accounts.region as region,
                 COUNT(*) as products,
                 SUM(CASE WHEN lower(trim(installations.device_status)) = 'active' THEN 1 ELSE 0 END) as active,
@@ -293,6 +306,7 @@ class ProductDashboardService
             'installDelta' => $installDelta,
             'trendMonths' => $months,
             'scopeNote' => $isAll ? 'All regions' : $region,
+            'filters' => $filters,
         ];
     }
 

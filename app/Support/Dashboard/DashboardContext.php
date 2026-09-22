@@ -27,6 +27,7 @@ final class DashboardContext
         private readonly array $metrics,
         private readonly array $datasets,
         private readonly array $sources = [],
+        public readonly array $filters = [],
     ) {}
 
     /**
@@ -50,7 +51,7 @@ final class DashboardContext
             $datasets[$key] = is_array($summary[$summaryKey] ?? null) ? $summary[$summaryKey] : [];
         }
 
-        return new self($region, $period, is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], $datasets);
+        return new self($region, $period, is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], $datasets, $summary['filters'] ?? []);
     }
 
     /**
@@ -60,7 +61,12 @@ final class DashboardContext
      */
     public function withSources(array $sources): self
     {
-        return new self($this->region, $this->period, $this->metrics, $this->datasets, $sources);
+        return new self($this->region, $this->period, $this->metrics, $this->datasets, $sources, $this->filters);
+    }
+
+    public function withFilters(array $filters): self
+    {
+        return new self($this->region, $this->period, $this->metrics, $this->datasets, $this->sources, $filters);
     }
 
     public function metric(string $key, mixed $default = null): mixed
@@ -115,6 +121,6 @@ final class DashboardContext
      */
     public function variables(): array
     {
-        return [...$this->metrics, 'region' => $this->region, 'period' => $this->period];
+        return [...$this->metrics, 'region' => $this->region, 'period' => $this->period, ...$this->filters];
     }
 }

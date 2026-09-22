@@ -26,17 +26,19 @@ class TableAggregationService
     private const COMPLETED = ['completed', 'resolved', 'closed', 'done', 'complete'];
 
     /**
+     * @param  array<string, mixed>  $filters  branch/status/date_from/date_to
      * @return array{metrics: array<string, float|int>, datasets: array<string, array<int, array<string, mixed>>>}
      */
-    public function summary(string $tableKey, ?string $region = null): array
+    public function summary(string $tableKey, ?string $region = null, array $filters = []): array
     {
         $version = (int) Cache::get(self::CACHE_VERSION_KEY, 1);
         $scope = $region ?: 'all';
+        $filterHash = md5(json_encode($filters));
 
         return Cache::remember(
-            "table-agg:v{$version}:{$tableKey}:{$scope}",
+            "table-agg:v{$version}:{$tableKey}:{$scope}:{$filterHash}",
             300,
-            fn (): array => $this->compute($tableKey, $region),
+            fn (): array => $this->compute($tableKey, $region, $filters),
         );
     }
 
@@ -46,10 +48,10 @@ class TableAggregationService
         Cache::increment(self::CACHE_VERSION_KEY);
     }
 
-    private function compute(string $tableKey, ?string $region): array
+    private function compute(string $tableKey, ?string $region, array $filters = []): array
     {
         try {
-            return $this->computeOrFail($tableKey, $region);
+            return $this->computeOrFail($tableKey, $region, $filters);
         } catch (\Throwable $exception) {
             // A single bad source must never 500 a dashboard or the
             // visualization wizard: log the real cause and degrade to an
@@ -59,6 +61,7 @@ class TableAggregationService
             Log::error('tableAggregation.failed', [
                 'table' => $tableKey,
                 'region' => $region,
+                'filters' => $filters,
                 'error' => $exception->getMessage(),
             ]);
 
@@ -66,14 +69,14 @@ class TableAggregationService
         }
     }
 
-    private function computeOrFail(string $tableKey, ?string $region): array
+    private function computeOrFail(string $tableKey, ?string $region, array $filters = []): array
     {
         return match ($tableKey) {
-            'service-requests' => $this->serviceRequests($region),
-            'technical-reports' => $this->technicalReports($region),
-            'history-reports' => $this->historyReports($region),
-            'personnel' => $this->personnel($region),
-            'installed-products' => $this->installedProducts($region),
+            'service-requests' => $this->serviceRequests($region, $filters),
+            'technical-reports' => $this->technicalReports($region, $filters),
+            'history-reports' => $this->historyReports($region, $filters),
+            'personnel' => $this->personnel($region, $filters),
+            'installed-products' => $this->installedProducts($region, $filters),
             // User-created (dynamic) tables are EAV; generic aggregation is a
             // follow-up. They still connect as sources, but expose no datasets
             // yet — never fall through to the Product Database.
@@ -81,9 +84,9 @@ class TableAggregationService
         };
     }
 
-    private function installedProducts(?string $region): array
+    private function installedProducts(?string $region, array $filters = []): array
     {
-        $summary = app(ProductDashboardService::class)->summary($region, '12M');
+        $summary = app(ProductDashboardService::class)->summary($region, '12M', $filters);
 
         return [
             'metrics' => is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [],
@@ -95,14 +98,19 @@ class TableAggregationService
                 'fleet' => $summary['fleetDonut'] ?? [],
                 'brands' => $summary['brandDonut'] ?? [],
             ],
+            'filters' => $filters,
         ];
     }
 
-    private function serviceRequests(?string $region): array
+    private function serviceRequests(?string $region, array $filters = []): array
     {
         $base = fn (): Builder => ServiceRequest::query()
             ->whereNull('archived_at')
-            ->when($region, fn (Builder $query) => $query->where('region', $region));
+            ->when($region, fn (Builder $query) => $query->where('region', $region))
+            ->when($filters['branch'] ?? null, fn (Builder $q, $v) => $q->where('branch', $v))
+            ->when($filters['status'] ?? null, fn (Builder $q, $v) => $q->whereRaw('lower(trim(group_status)) = ?', [strtolower(trim((string) $v))]))
+            ->when($filters['date_from'] ?? null, fn (Builder $q, $v) => $q->where('source_updated_at', '>=', $v))
+            ->when($filters['date_to'] ?? null, fn (Builder $q, $v) => $q->where('source_updated_at', '<=', $v));
 
         $total = $base()->count();
         $byGroup = $this->countsBy($base(), 'group_status');
@@ -124,12 +132,20 @@ class TableAggregationService
                 'by_brand' => $this->countsBy($base(), 'brand'),
                 'by_month' => $this->monthly($base(), 'source_updated_at'),
             ],
+            'filters' => $filters,
         ];
     }
 
-    private function technicalReports(?string $region): array
+    private function technicalReports(?string $region, array $filters = []): array
     {
-        $base = fn (): Builder => TechnicalReport::query()->whereNull('archived_at');
+        $base = fn (): Builder => TechnicalReport::query()
+            ->whereNull('archived_at')
+            // Technical reports carry no branch column; branch comes from the
+            // linked service request.
+            ->when($filters['branch'] ?? null, fn (Builder $q, $v) => $q->whereHas('serviceRequest', fn (Builder $r) => $r->where('branch', $v)))
+            ->when($filters['status'] ?? null, fn (Builder $q, $v) => $q->whereRaw('lower(trim(service_status)) = ?', [strtolower(trim((string) $v))]))
+            ->when($filters['date_from'] ?? null, fn (Builder $q, $v) => $q->where('service_completed_at', '>=', $v))
+            ->when($filters['date_to'] ?? null, fn (Builder $q, $v) => $q->where('service_completed_at', '<=', $v));
 
         $total = $base()->count();
         $byStatus = $this->countsBy($base(), 'service_status');
@@ -155,12 +171,20 @@ class TableAggregationService
                 'by_machine_type' => $this->countsBy($base(), 'machine_type'),
                 'by_month' => $this->monthly($base(), 'service_completed_at'),
             ],
+            'filters' => $filters,
         ];
     }
 
-    private function historyReports(?string $region): array
+    private function historyReports(?string $region, array $filters = []): array
     {
-        $base = fn (): Builder => HistoricalTsmsReport::query()->whereNull('archived_at');
+        $base = fn (): Builder => HistoricalTsmsReport::query()
+            ->whereNull('archived_at')
+            // Historical TSMS reports have no region column, so the region
+            // scope cannot narrow them — only branch/status/date filters apply.
+            ->when($filters['branch'] ?? null, fn (Builder $q, $v) => $q->where('branch', $v))
+            ->when($filters['status'] ?? null, fn (Builder $q, $v) => $q->whereRaw('lower(trim(status)) = ?', [strtolower(trim((string) $v))]))
+            ->when($filters['date_from'] ?? null, fn (Builder $q, $v) => $q->where('response_timestamp', '>=', $v))
+            ->when($filters['date_to'] ?? null, fn (Builder $q, $v) => $q->where('response_timestamp', '<=', $v));
 
         return [
             'metrics' => [
@@ -173,14 +197,17 @@ class TableAggregationService
                 'by_brand' => $this->countsBy($base(), 'brand'),
                 'by_month' => $this->monthly($base(), 'response_timestamp'),
             ],
+            'filters' => $filters,
         ];
     }
 
-    private function personnel(?string $region): array
+    private function personnel(?string $region, array $filters = []): array
     {
         $base = fn (): Builder => TechnicalPersonnel::query()
             ->whereNull('archived_at')
-            ->when($region, fn (Builder $query) => $query->where('region', $region));
+            ->when($region, fn (Builder $query) => $query->where('region', $region))
+            ->when($filters['branch'] ?? null, fn (Builder $q, $v) => $q->where('branch', $v))
+            ->when($filters['status'] ?? null, fn (Builder $q, $v) => $q->whereRaw('lower(trim(position)) = ?', [strtolower(trim((string) $v))]));
 
         return [
             'metrics' => [
@@ -191,6 +218,7 @@ class TableAggregationService
                 'by_position' => $this->countsBy($base(), 'position'),
                 'by_branch' => $this->countsBy($base(), 'branch'),
             ],
+            'filters' => $filters,
         ];
     }
 

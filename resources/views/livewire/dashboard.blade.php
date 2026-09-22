@@ -33,14 +33,45 @@
 <div class="mx-auto w-full max-w-none space-y-8 pb-4">
     <header class="border-b border-base-300 pb-6 pt-2">
         <div class="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-            <div class="min-w-0">
-                <p class="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-                    <span class="inline-block h-px w-6 bg-primary/60"></span>
-                    Product Database
-                </p>
-                <h1 class="font-display text-3xl font-semibold tracking-tight text-base-content sm:text-4xl">Home</h1>
-                <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/55">The installed base at a glance — equipment, warranty and contract posture, fleet state, and installation momentum, computed live from the imported Product Database.</p>
-            </div>
+            @if ($dashboard)
+                @if ($editingHeader)
+                    <div class="min-w-0 flex-1 space-y-3">
+                        <input type="text" wire:model="editingName" class="admin-control w-full text-3xl font-semibold tracking-tight sm:text-4xl" placeholder="Dashboard title" autofocus>
+                        <textarea wire:model="editingDescription" rows="2" class="admin-control w-full max-w-2xl text-sm leading-6" placeholder="Subtitle — what this dashboard is for (optional)"></textarea>
+                        <x-input-error :messages="$errors->get('editingName')" />
+                        <x-input-error :messages="$errors->get('editingDescription')" />
+                        <div class="flex items-center gap-2">
+                            <button type="button" wire:click="saveHeader" class="admin-primary-button">Save</button>
+                            <button type="button" wire:click="cancelHeaderEdit" class="admin-secondary-button">Cancel</button>
+                        </div>
+                    </div>
+                @else
+                    <div class="min-w-0">
+                        <p class="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
+                            <span class="inline-block h-px w-6 bg-primary/60"></span>
+                            {{ $canEditDashboard ? 'Dashboard' : 'Dashboard · view only' }}
+                        </p>
+                        <div class="flex items-center gap-3">
+                            <h1 class="font-display text-3xl font-semibold tracking-tight text-base-content sm:text-4xl">{{ $dashboard->name }}</h1>
+                            @if ($canEditDashboard)
+                                <button type="button" wire:click="startHeaderEdit" class="admin-icon-button" aria-label="Edit title and subtitle">
+                                    <x-mary-icon name="o-pencil" class="h-4 w-4" />
+                                </button>
+                            @endif
+                        </div>
+                        <p class="mt-2 max-w-2xl text-sm leading-6 {{ $dashboard->description !== null ? 'text-base-content/55' : 'text-base-content/35' }}">{{ $dashboard->description ?? 'No description — click the pencil to add one.' }}</p>
+                    </div>
+                @endif
+            @else
+                <div class="min-w-0">
+                    <p class="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
+                        <span class="inline-block h-px w-6 bg-primary/60"></span>
+                        Product Database
+                    </p>
+                    <h1 class="font-display text-3xl font-semibold tracking-tight text-base-content sm:text-4xl">Home</h1>
+                    <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/55">The installed base at a glance — equipment, warranty and contract posture, fleet state, and installation momentum, computed live from the imported Product Database.</p>
+                </div>
+            @endif
             <div class="flex shrink-0 flex-wrap items-center gap-2">
                 <button type="button" onclick="window.print()" class="admin-secondary-button no-print">Print report</button>
                 <a href="{{ route('installed-products') }}" wire:navigate class="admin-primary-button no-print">Open Product Database</a>
@@ -73,6 +104,45 @@
             </div>
         </div>
     </header>
+
+    <x-admin.filter-bar>
+        <select wire:model.live="branchFilter" class="admin-control" aria-label="Filter by branch">
+            @foreach ($branchOptions as $branch)
+                <option>{{ $branch }}</option>
+            @endforeach
+        </select>
+        <select wire:model.live="statusFilter" class="admin-control" aria-label="Filter by status">
+            @foreach ($statusOptions as $status)
+                <option>{{ $status }}</option>
+            @endforeach
+        </select>
+        <input type="date" wire:model.live="dateFrom" class="admin-control" aria-label="From date">
+        <input type="date" wire:model.live="dateTo" class="admin-control" aria-label="To date">
+        @if ($hasActiveFilters)
+            <button type="button" wire:click="clearFilters" class="admin-secondary-button">
+                <x-mary-icon name="o-x-mark" class="h-4 w-4" />
+                Clear filters ({{ count($activeFilters) }})
+            </button>
+        @endif
+    </x-admin.filter-bar>
+
+    @if ($hasActiveFilters)
+        <div class="flex flex-wrap items-center gap-2" role="status" aria-label="Active filters">
+            <span class="text-[11px] font-bold uppercase tracking-[0.1em] text-primary">Active filters:</span>
+            @if (!empty($activeFilters['branch']))
+                <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">Branch: {{ $activeFilters['branch'] }}</span>
+            @endif
+            @if (!empty($activeFilters['status']))
+                <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">Status: {{ $activeFilters['status'] }}</span>
+            @endif
+            @if (!empty($activeFilters['from']))
+                <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">From: {{ $activeFilters['from'] }}</span>
+            @endif
+            @if (!empty($activeFilters['to']))
+                <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">To: {{ $activeFilters['to'] }}</span>
+            @endif
+        </div>
+    @endif
 
     {{-- Grid layout engine: registry-driven, expression-powered widget
         grid, customizable per user. Sits between the header and the

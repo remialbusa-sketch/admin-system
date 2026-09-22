@@ -8,6 +8,11 @@ use App\Models\DashboardLayout;
 use App\Models\DashboardShare;
 use App\Models\DashboardSource;
 use App\Models\DynamicTable;
+use App\Models\HistoricalTsmsReport;
+use App\Models\Installation;
+use App\Models\ServiceRequest;
+use App\Models\TechnicalPersonnel;
+use App\Models\TechnicalReport;
 use App\Models\User;
 use App\Services\ProductDashboardService;
 use App\Services\TableAggregationService;
@@ -24,6 +29,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Livewire\Attributes\On;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 
 class Dashboard extends Component
@@ -35,6 +41,19 @@ class Dashboard extends Component
     /** Set when the viewer's role pins the dashboard to their own region. */
     public bool $regionLocked = false;
 
+    /** Global dashboard filters — persisted via URL and applied to every source. */
+    #[Url(as: 'branch')]
+    public string $branchFilter = 'All branches';
+
+    #[Url(as: 'status')]
+    public string $statusFilter = 'All statuses';
+
+    #[Url(as: 'from')]
+    public string $dateFrom = '';
+
+    #[Url(as: 'to')]
+    public string $dateTo = '';
+
     /** The dashboard being viewed (null = Home, the personal product overview). */
     public ?int $dashboardId = null;
 
@@ -42,6 +61,13 @@ class Dashboard extends Component
 
     /** Effective permission from the DB, re-resolved on every render. */
     public string $dashboardPermission = 'edit';
+
+    /** Inline header edit (title + description) on a persisted dashboard. */
+    public bool $editingHeader = false;
+
+    public string $editingName = '';
+
+    public ?string $editingDescription = null;
 
     /** Share modal state. */
     public bool $showShareModal = false;
@@ -188,6 +214,56 @@ class Dashboard extends Component
         return $dashboard === null || $dashboard->canBeEditedBy(auth()->user());
     }
 
+    public function startHeaderEdit(): void
+    {
+        $this->guardEdit();
+
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return;
+        }
+
+        $this->editingHeader = true;
+        $this->editingName = $dashboard->name;
+        $this->editingDescription = $dashboard->description;
+    }
+
+    public function cancelHeaderEdit(): void
+    {
+        $this->editingHeader = false;
+        $this->reset(['editingName', 'editingDescription']);
+    }
+
+    public function saveHeader(): void
+    {
+        $this->guardEdit();
+
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return;
+        }
+
+        $this->validate([
+            'editingName' => ['required', 'string', 'max:100'],
+            'editingDescription' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $name = trim($this->editingName);
+        $description = trim((string) $this->editingDescription);
+        $description = $description !== '' ? $description : null;
+
+        $dashboard->update(['name' => $name, 'description' => $description]);
+
+        DashboardAudit::log($dashboard, 'renamed', ['name' => $name, 'description' => $description]);
+        $this->dispatch('dashboard-list-updated');
+
+        $this->dashboardName = $name;
+        $this->editingHeader = false;
+        $this->reset(['editingName', 'editingDescription']);
+    }
+
     private function guardEdit(): void
     {
         abort_unless($this->canEditDashboard(), 403);
@@ -205,6 +281,71 @@ class Dashboard extends Component
             : $this->region;
 
         return $region === 'All regions' ? null : $region;
+    }
+
+    /**
+     * Global filter bag applied to every source. Empty strings and "All …"
+     * sentinels are normalized to null so services can simply `when($filters['branch'], ...)`.
+     *
+     * @return array{branch: ?string, status: ?string, date_from: ?string, date_to: ?string, region: ?string}
+     */
+    private function filterScope(): array
+    {
+        return [
+            'branch' => $this->branchFilter !== 'All branches' && trim($this->branchFilter) !== '' ? trim($this->branchFilter) : null,
+            'status' => $this->statusFilter !== 'All statuses' && trim($this->statusFilter) !== '' ? trim($this->statusFilter) : null,
+            'date_from' => trim($this->dateFrom) !== '' ? trim($this->dateFrom) : null,
+            'date_to' => trim($this->dateTo) !== '' ? trim($this->dateTo) : null,
+            'region' => $this->regionScope(),
+        ];
+    }
+
+    public function clearFilters(): void
+    {
+        $this->branchFilter = 'All branches';
+        $this->statusFilter = 'All statuses';
+        $this->dateFrom = '';
+        $this->dateTo = '';
+    }
+
+    /** @return array<int, string> */
+    private function branchOptions(): array
+    {
+        $branches = collect()
+            // Installations carry no branch of their own — it lives on the account.
+            ->merge(Installation::query()
+                ->join('accounts', 'accounts.id', '=', 'installations.account_id')
+                ->distinct()
+                ->whereNotNull('accounts.branch')
+                ->where('accounts.branch', '<>', '')
+                ->pluck('accounts.branch'))
+            ->merge(ServiceRequest::query()->distinct()->whereNotNull('branch')->where('branch', '<>', '')->pluck('branch'))
+            ->merge(HistoricalTsmsReport::query()->distinct()->whereNotNull('branch')->where('branch', '<>', '')->pluck('branch'))
+            ->merge(TechnicalPersonnel::query()->distinct()->whereNotNull('branch')->where('branch', '<>', '')->pluck('branch'))
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        return array_merge(['All branches'], $branches);
+    }
+
+    /** @return array<int, string> */
+    private function statusOptions(): array
+    {
+        $statuses = collect()
+            ->merge(Installation::query()->distinct()->whereNotNull('device_status')->where('device_status', '<>', '')->pluck('device_status'))
+            ->merge(ServiceRequest::query()->distinct()->whereNotNull('group_status')->where('group_status', '<>', '')->pluck('group_status'))
+            ->merge(TechnicalReport::query()->distinct()->whereNotNull('service_status')->where('service_status', '<>', '')->pluck('service_status'))
+            ->merge(HistoricalTsmsReport::query()->distinct()->whereNotNull('status')->where('status', '<>', '')->pluck('status'))
+            ->unique()
+            ->map(fn ($s) => trim((string) $s))
+            ->filter()
+            ->sort()
+            ->values()
+            ->all();
+
+        return array_merge(['All statuses'], $statuses);
     }
 
     /**
@@ -240,9 +381,10 @@ class Dashboard extends Component
     /**
      * The connected sources resolved to aggregation summaries, keyed by alias.
      *
+     * @param  array<string, mixed>  $filters
      * @return array<string, array{metrics: array<string, mixed>, datasets: array<string, array<int, array<string, mixed>>>}>
      */
-    private function sourceData(): array
+    private function sourceData(array $filters = []): array
     {
         $dashboard = $this->dashboard();
 
@@ -252,9 +394,11 @@ class Dashboard extends Component
 
         $aggregation = app(TableAggregationService::class);
         $data = [];
+        $region = $this->regionScope();
+        $filtersWithRegion = array_merge($filters, ['region' => $region]);
 
         foreach ($dashboard->sources()->get() as $source) {
-            $data[$source->alias] = $aggregation->summary($source->table_key, $this->regionScope());
+            $data[$source->alias] = $aggregation->summary($source->table_key, $region, $filtersWithRegion);
         }
 
         return $data;
@@ -972,7 +1116,9 @@ class Dashboard extends Component
             ? $user->region
             : $this->region;
 
-        $summary = $service->summary($region === 'All regions' ? null : $region, $this->period);
+        $filters = $this->filterScope();
+
+        $summary = $service->summary($region === 'All regions' ? null : $region, $this->period, $filters);
 
         // Re-resolve the dashboard + permission from the DB (never trust the
         // snapshot): a revoked share or deleted dashboard must fail closed.
@@ -990,16 +1136,31 @@ class Dashboard extends Component
         // Connected tables are resolved into the context so dataset-driven
         // widgets can read any source via "alias.dataset" keys.
         $context = DashboardContext::fromSummary($region, $this->period, $summary)
-            ->withSources($this->sourceData());
+            ->withSources($this->sourceData($filters))
+            ->withFilters($filters);
         $savedLayout = $dashboard?->layout
             ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null);
         $layout = $this->customizing && $this->draftLayout !== []
             ? $this->draftLayout
             : ($savedLayout ?? config('dashboard.default_layout'));
 
+        $hasActiveFilters = $this->branchFilter !== 'All branches'
+            || $this->statusFilter !== 'All statuses'
+            || trim($this->dateFrom) !== ''
+            || trim($this->dateTo) !== '';
+
         return view('livewire.dashboard', [
             'regionLocked' => $this->regionLocked,
             'periodOptions' => array_keys(ProductDashboardService::PERIODS),
+            'branchOptions' => $this->branchOptions(),
+            'statusOptions' => $this->statusOptions(),
+            'hasActiveFilters' => $hasActiveFilters,
+            'activeFilters' => array_filter([
+                'branch' => $filters['branch'] ?? null,
+                'status' => $filters['status'] ?? null,
+                'from' => $filters['date_from'] ?? null,
+                'to' => $filters['date_to'] ?? null,
+            ]),
             'grid' => $engine->build($layout, $context),
             'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
             'metricLabels' => config('dashboard.metric_labels', []),
