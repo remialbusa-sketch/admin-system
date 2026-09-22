@@ -73,6 +73,9 @@
                                 <a
                                     href="{{ route($item['route']) }}"
                                     wire:navigate
+                                    data-sidebar-link
+                                    data-active="bg-primary text-primary-content"
+                                    data-inactive="text-base-content/65 hover:bg-base-200 hover:text-base-content"
                                     @class([
                                         'group flex h-10 items-center rounded-md text-sm font-semibold transition',
                                         'bg-primary text-primary-content' => $active,
@@ -84,7 +87,7 @@
                                 >
                                     <x-mary-icon :name="$item['icon']" class="h-[18px] w-[18px] shrink-0" />
                                     <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">{{ $item['label'] }}</span>
-                                    <span x-show="!sidebarCollapsed && @js($active)" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70"></span>
+                                    <span data-sidebar-indicator x-show="!sidebarCollapsed" @class(['ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70', 'hidden' => !$active])></span>
                                 </a>
                             @endforeach
 
@@ -97,6 +100,10 @@
                             <a
                                 href="{{ route('dashboards.index') }}"
                                 wire:navigate
+                                data-sidebar-link
+                                data-sidebar-prefix
+                                data-active="bg-primary text-primary-content"
+                                data-inactive="text-base-content/65 hover:bg-base-200 hover:text-base-content"
                                 @class([
                                     'group flex h-10 items-center rounded-md text-sm font-semibold transition',
                                     'bg-primary text-primary-content' => $dashboardsActive,
@@ -126,6 +133,9 @@
                                     <a
                                         href="{{ route('dashboards.show', $dashboard) }}"
                                         wire:navigate
+                                        data-sidebar-link
+                                        data-active="text-primary"
+                                        data-inactive="text-base-content/55 hover:bg-base-200 hover:text-base-content"
                                         @class([
                                             'group flex h-8 items-center gap-2 rounded-md pr-3 text-xs font-medium transition',
                                             'text-primary' => $dashboardActive,
@@ -134,7 +144,7 @@
                                         @if($dashboardActive) aria-current="page" @endif
                                         title="{{ $dashboard->name }}"
                                     >
-                                        <span class="h-1 w-1 shrink-0 rounded-full {{ $dashboardActive ? 'bg-primary' : 'bg-base-content/25' }}"></span>
+                                        <span data-sidebar-subdot class="h-1 w-1 shrink-0 rounded-full {{ $dashboardActive ? 'bg-primary' : 'bg-base-content/25' }}"></span>
                                         <span class="truncate">{{ $dashboard->name }}</span>
                                         @if ($dashboard->is_system)
                                             <span class="ml-auto text-[9px] font-bold uppercase tracking-[0.08em] text-base-content/35">Tpl</span>
@@ -159,6 +169,9 @@
                                 <a
                                     href="{{ route($item['route'], $item['params'] ?? []) }}"
                                     wire:navigate
+                                    data-sidebar-link
+                                    data-active="bg-primary text-primary-content"
+                                    data-inactive="text-base-content/65 hover:bg-base-200 hover:text-base-content"
                                     @class([
                                         'group flex h-10 items-center rounded-md text-sm font-semibold transition',
                                         'bg-primary text-primary-content' => $active,
@@ -170,7 +183,7 @@
                                 >
                                     <x-mary-icon :name="$item['icon']" class="h-[18px] w-[18px] shrink-0" />
                                     <span x-show="!sidebarCollapsed" x-transition.opacity class="truncate">{{ $item['label'] }}</span>
-                                    <span x-show="!sidebarCollapsed && @js($active)" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70"></span>
+                                    <span data-sidebar-indicator x-show="!sidebarCollapsed" @class(['ml-auto h-1.5 w-1.5 rounded-full bg-primary-content/70', 'hidden' => !$active])></span>
                                 </a>
                             @empty
                                 <p x-show="!sidebarCollapsed" class="px-3 pt-1 text-xs leading-5 text-base-content/40">
@@ -181,6 +194,9 @@
                             <a
                                 href="{{ route('tables') }}"
                                 wire:navigate
+                                data-sidebar-link
+                                data-active="bg-primary text-primary-content"
+                                data-inactive="text-base-content/65 hover:bg-base-200 hover:text-base-content"
                                 @class([
                                     'group flex h-10 items-center rounded-md text-sm font-semibold transition',
                                     'bg-primary text-primary-content' => request()->routeIs('tables'),
@@ -203,6 +219,9 @@
                     <a
                         href="{{ route($item['route']) }}"
                         wire:navigate
+                        data-sidebar-link
+                        data-active="bg-base-200 text-base-content"
+                        data-inactive="text-base-content/60 hover:bg-base-200 hover:text-base-content"
                         @class([
                             'group flex h-10 items-center rounded-md text-sm font-semibold transition',
                             'bg-base-200 text-base-content' => $active,
@@ -228,6 +247,9 @@
                         <a
                             href="{{ route($item['route']) }}"
                             wire:navigate
+                            data-sidebar-link
+                            data-active="bg-base-200 text-base-content"
+                            data-inactive="text-base-content/60 hover:bg-base-200 hover:text-base-content"
                             @class([
                                 'group flex h-10 items-center rounded-md text-sm font-semibold transition',
                                 'bg-base-200 text-base-content' => $active,
@@ -270,15 +292,4 @@
     </aside>
 </div>
 
-@once
-@push('scripts')
-<script>
-if (!window._sidebarNavBound) {
-    window._sidebarNavBound = true;
-    document.addEventListener('livewire:navigated', () => {
-        if (window.Livewire) window.Livewire.dispatch('refresh-sidebar');
-    });
-}
-</script>
-@endpush
-@endonce
+
