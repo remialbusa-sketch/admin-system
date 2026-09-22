@@ -134,17 +134,17 @@
                                         href="{{ route('dashboards.show', $dashboard) }}"
                                         wire:navigate
                                         data-sidebar-link
-                                        data-active="text-primary"
+                                        data-active="bg-primary/10 text-primary font-semibold"
                                         data-inactive="text-base-content/55 hover:bg-base-200 hover:text-base-content"
                                         @class([
                                             'group flex h-8 items-center gap-2 rounded-md pr-3 text-xs font-medium transition',
-                                            'text-primary' => $dashboardActive,
+                                            'bg-primary/10 text-primary font-semibold' => $dashboardActive,
                                             'text-base-content/55 hover:bg-base-200 hover:text-base-content' => ! $dashboardActive,
                                         ])
                                         @if($dashboardActive) aria-current="page" @endif
                                         title="{{ $dashboard->name }}"
                                     >
-                                        <span data-sidebar-subdot class="h-1 w-1 shrink-0 rounded-full {{ $dashboardActive ? 'bg-primary' : 'bg-base-content/25' }}"></span>
+                                        <span data-sidebar-subdot class="h-1.5 w-1.5 shrink-0 rounded-full {{ $dashboardActive ? 'bg-primary' : 'bg-base-content/25' }}"></span>
                                         <span class="truncate">{{ $dashboard->name }}</span>
                                         @if ($dashboard->is_system)
                                             <span class="ml-auto text-[9px] font-bold uppercase tracking-[0.08em] text-base-content/35">Tpl</span>
