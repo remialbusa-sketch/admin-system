@@ -21,17 +21,22 @@ return new class extends Migration
             return;
         }
 
+        $hasDeletedAt = Schema::hasColumn('dashboards', 'deleted_at');
+
         foreach (SystemDashboards::definitions() as $definition) {
             // DB::table bypasses SoftDeletes: a merely archived template must
             // be restored here, not treated as missing (which would duplicate
             // it) and not skipped (which would leave no visible template).
+            // On a fresh database the deleted_at column does not exist yet
+            // (added by 2026_09_19_000001), so handle both cases.
+            $columns = $hasDeletedAt ? ['id', 'deleted_at'] : ['id'];
             $existing = DB::table('dashboards')
                 ->where('is_system', true)
                 ->where('name', $definition['name'])
-                ->first(['id', 'deleted_at']);
+                ->first($columns);
 
             if ($existing !== null) {
-                if ($existing->deleted_at !== null) {
+                if ($hasDeletedAt && isset($existing->deleted_at) && $existing->deleted_at !== null) {
                     DB::table('dashboards')->where('id', $existing->id)->update([
                         'deleted_at' => null,
                         'updated_at' => now(),
