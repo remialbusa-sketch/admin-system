@@ -68,9 +68,9 @@
 
                 {{-- Preview --}}
                 <div x-show="preview && !result" x-cloak class="space-y-4">
-                    <div x-show="analysis && analysis.sheets && analysis.sheets.length > 1" class="max-w-xs">
+                    <div x-show="analysis && analysis.sheets && analysis.sheets.length >= 1" class="max-w-xs">
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Sheet</label>
-                        <select x-model="sheet" @change="reAnalyze()" class="admin-control w-full">
+                        <select x-model="sheet" @change="reAnalyze()" :disabled="(analysis?.sheets || []).length < 2" class="admin-control w-full">
                             <template x-for="s in (analysis?.sheets || [])" :key="s.name">
                                 <option :value="s.name" x-text="s.name"></option>
                             </template>
@@ -80,7 +80,7 @@
                     <div class="flex flex-wrap items-end gap-4">
                         <div>
                             <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Header row</label>
-                            <input type="number" min="1" x-model.number="headerRow" @change="reAnalyze()" class="admin-control w-24 tabular-nums">
+                            <input type="number" min="1" x-model.number="headerRow" @change="headerChanged()" class="admin-control w-24 tabular-nums">
                         </div>
                         <div>
                             <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">First data row</label>
@@ -91,6 +91,7 @@
                             <span class="rounded-full bg-base-200 px-3 py-1 text-base-content/60 tabular-nums" x-text="`${preview?.totalColumns || 0} columns`"></span>
                         </div>
                     </div>
+                    <p class="text-xs text-base-content/50">Tip: click a row number below to use that row as the header — data starts on the next row.</p>
 
                     <div class="overflow-x-auto rounded-md border border-base-300">
                         <table class="min-w-full border-collapse text-left text-xs">
@@ -111,7 +112,9 @@
                             <tbody class="divide-y divide-base-300">
                                 <template x-for="row in (preview?.sampleRows || [])" :key="row.rowNumber">
                                     <tr class="hover:bg-base-200/50">
-                                        <td class="px-3 py-1.5 tabular-nums text-base-content/40" x-text="row.rowNumber"></td>
+                                        <td class="px-1 py-1.5 tabular-nums">
+                                            <button type="button" @click="setHeaderRow(row.rowNumber)" :title="`Use row ${row.rowNumber} as the header`" class="rounded px-2 py-0.5 text-base-content/50 hover:bg-primary/10 hover:text-primary" x-text="row.rowNumber"></button>
+                                        </td>
                                         <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
                                             <td class="max-w-[150px] truncate px-3 py-1.5 text-base-content/80" :title="row.cells[col.letter] || ''" x-text="row.cells[col.letter] || ''"></td>
                                         </template>
@@ -376,6 +379,23 @@
                 async reAnalyze() {
                     if (!this.preview) return;
                     try { await this.analyze(); } catch {}
+                },
+
+                /** Header row picked by clicking a preview row: data follows it. */
+                async setHeaderRow(rowNumber) {
+                    this.headerRow = rowNumber;
+                    if (!this.dataStart || this.dataStart <= rowNumber) {
+                        this.dataStart = rowNumber + 1;
+                    }
+                    await this.reAnalyze();
+                },
+
+                /** Manual header edit: keep data start below the header. */
+                async headerChanged() {
+                    if (!this.dataStart || this.dataStart <= this.headerRow) {
+                        this.dataStart = (this.headerRow || 0) + 1;
+                    }
+                    await this.reAnalyze();
                 },
 
                 visibleFields() {
