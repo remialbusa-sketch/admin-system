@@ -290,7 +290,7 @@ class ClassicImportController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        app(ImportMappingService::class)->rememberMapping($table, $mapping);
+        app(ImportMappingService::class)->rememberMapping($table, $mapping, $this->columnSignature($request));
 
         return response()->json([
             'status' => $batch->status,
@@ -409,6 +409,28 @@ class ClassicImportController extends Controller
             'failed' => $batch->failed_rows,
             'batchId' => $batch->id,
         ]);
+    }
+
+    /**
+     * Header signature (letter => label) accompanying an execute call, so a
+     * later recall only applies to same-layout workbooks. Capped: it is a
+     * matching key, not data.
+     *
+     * @return array<string, string>
+     */
+    private function columnSignature(Request $request): array
+    {
+        $signature = [];
+
+        foreach (array_slice((array) $request->input('columnSignature', []), 0, 120, true) as $letter => $label) {
+            $letter = strtoupper(trim((string) $letter));
+
+            if (preg_match('/^[A-Z]{1,3}$/', $letter) && is_string($label)) {
+                $signature[$letter] = mb_substr(trim($label), 0, 255);
+            }
+        }
+
+        return $signature;
     }
 
     /**

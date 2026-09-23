@@ -270,15 +270,29 @@ class ImportMappingService
      * column the current file does not have are dropped; everything else is
      * pre-filled so repeat imports of the same template start mostly done.
      *
+     * Recall is signature-gated: the stored header layout must match the
+     * current file's, otherwise a same-letter-different-content workbook
+     * would inherit a wrong mapping.
+     *
      * @param  array<int, array{letter: string, label: string|null}>  $columns
      * @return array<string, string> target key => column letter ('' when unmapped)
      */
     public function recallMapping(string $tableKey, array $columns): array
     {
         $stored = session()->get('import-mapping:'.$tableKey, []);
+        $mapping = $stored['mapping'] ?? $stored;
+
+        if (! is_array($mapping)) {
+            return $this->blankMapping($tableKey);
+        }
+
+        if (array_key_exists('signature', $stored) && ! $this->signatureMatches($stored['signature'] ?? [], $columns)) {
+            return $this->blankMapping($tableKey);
+        }
+
         $validLetters = collect($columns)->pluck('letter')->flip();
 
-        $recalled = collect($stored)
+        $recalled = collect($mapping)
             ->filter(fn ($letter, $target): bool => is_string($letter)
                 && $letter !== ''
                 && $this->knownTarget($tableKey, (string) $target)
@@ -289,9 +303,41 @@ class ImportMappingService
     }
 
     /** Persist the mapping the user just imported with (scoped per table). */
-    public function rememberMapping(string $tableKey, array $mapping): void
+    public function rememberMapping(string $tableKey, array $mapping, array $signature = []): void
     {
-        session()->put('import-mapping:'.$tableKey, $mapping);
+        session()->put('import-mapping:'.$tableKey, ['mapping' => $mapping, 'signature' => $signature]);
+    }
+
+    /**
+     * Normalize a header signature (letter => label) for comparison.
+     *
+     * @param  array<int, array{letter: string, label: string|null}>|array<string, string>  $columns
+     * @return array<string, string>
+     */
+    public function headerSignature(array $columns): array
+    {
+        $signature = [];
+
+        foreach ($columns as $key => $column) {
+            if (is_array($column)) {
+                $letter = strtoupper(trim((string) ($column['letter'] ?? '')));
+                $label = $this->normalizeLabel((string) ($column['label'] ?? ''));
+            } else {
+                $letter = strtoupper(trim((string) $key));
+                $label = $this->normalizeLabel((string) $column);
+            }
+
+            if ($letter !== '') {
+                $signature[$letter] = $label;
+            }
+        }
+
+        return $signature;
+    }
+
+    private function signatureMatches(mixed $stored, array $columns): bool
+    {
+        return is_array($stored) && $stored === $this->headerSignature($columns);
     }
 
     /**
@@ -306,10 +352,20 @@ class ImportMappingService
     public function recallFor(array $fields, string $tableKey, array $columns): array
     {
         $stored = session()->get('import-mapping:'.$tableKey, []);
+        $mapping = $stored['mapping'] ?? $stored;
+
+        if (! is_array($mapping)) {
+            return [];
+        }
+
+        if (array_key_exists('signature', $stored) && ! $this->signatureMatches($stored['signature'] ?? [], $columns)) {
+            return [];
+        }
+
         $validLetters = collect($columns)->pluck('letter')->flip();
         $known = collect($fields)->pluck('key')->flip();
 
-        return collect($stored)
+        return collect($mapping)
             ->filter(fn ($letter, $target): bool => is_string($letter)
                 && $letter !== ''
                 && $known->has((string) $target)

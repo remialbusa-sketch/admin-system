@@ -144,23 +144,48 @@ class ImportMappingTest extends TestCase
     public function test_recall_mapping_keeps_only_valid_targets_and_columns(): void
     {
         $service = app(ImportMappingService::class);
+        $columns = [
+            ['letter' => 'A', 'label' => 'SR Number', 'samples' => []],
+            ['letter' => 'B', 'label' => 'Client', 'samples' => []],
+            ['letter' => 'C', 'label' => 'State', 'samples' => []],
+        ];
         $service->rememberMapping('service-requests', [
             'customer_name' => 'B',
             'ticket_status' => 'C',
             'not_a_target' => 'A',
             'service_request_no' => 'Q', // column does not exist in the preview
-        ]);
+        ], $service->headerSignature($columns));
 
-        $recalled = $service->recallMapping('service-requests', [
-            ['letter' => 'A', 'label' => 'SR Number', 'samples' => []],
-            ['letter' => 'B', 'label' => 'Client', 'samples' => []],
-            ['letter' => 'C', 'label' => 'State', 'samples' => []],
-        ]);
+        $recalled = $service->recallMapping('service-requests', $columns);
 
         $this->assertSame('B', $recalled['customer_name']);
         $this->assertSame('C', $recalled['ticket_status']);
         $this->assertSame('', $recalled['service_request_no']);
         $this->assertArrayNotHasKey('not_a_target', $recalled);
+    }
+
+    public function test_recall_mapping_rejects_same_letter_different_content_workbooks(): void
+    {
+        $service = app(ImportMappingService::class);
+        $service->rememberMapping('service-requests', [
+            'customer_name' => 'B',
+        ], ['A' => 'sr number', 'B' => 'client']);
+
+        // Same letters, different headers: nothing is recalled.
+        $recalled = $service->recallMapping('service-requests', [
+            ['letter' => 'A', 'label' => 'Totally Different', 'samples' => []],
+            ['letter' => 'B', 'label' => 'Other Stuff', 'samples' => []],
+        ]);
+
+        $this->assertSame('', $recalled['customer_name']);
+
+        // Same layout again: recall works.
+        $recalled = $service->recallMapping('service-requests', [
+            ['letter' => 'A', 'label' => 'SR Number', 'samples' => []],
+            ['letter' => 'B', 'label' => 'Client', 'samples' => []],
+        ]);
+
+        $this->assertSame('B', $recalled['customer_name']);
     }
 
     public function test_preview_sheet_reanchors_when_header_row_moves(): void

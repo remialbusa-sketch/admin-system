@@ -78,7 +78,7 @@
 
                     <div x-show="analysis && analysis.sheets && analysis.sheets.length >= 1" class="max-w-xs">
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Sheet</label>
-                        <select x-model="sheet" @change="reAnalyze()" :disabled="(analysis?.sheets || []).length < 2" class="admin-control w-full">
+                        <select x-model="sheet" @change="sheetChanged()" :disabled="(analysis?.sheets || []).length < 2" class="admin-control w-full">
                             <template x-for="s in (analysis?.sheets || [])" :key="s.name">
                                 <option :value="s.name" x-text="s.name"></option>
                             </template>
@@ -297,6 +297,12 @@
                 async onFile(file) {
                     this.globalError = '';
                     this.result = null;
+                    // Fresh file, fresh mapping: stale letters from a previous
+                    // workbook must never leak into this one.
+                    this.mapping = {};
+                    this.mappingSource = {};
+                    this.titleColumn = '';
+                    this.importCols = {};
                     if (!file) return;
                     const ext = (file.name.split('.').pop() || '').toLowerCase();
                     if (!['xlsx','xls','csv','txt'].includes(ext)) {
@@ -428,6 +434,15 @@
                             this.mappingSource[key] = 'auto';
                         }
                     });
+                },
+
+                /** Sheet switch: the new sheet gets a clean mapping slate. */
+                async sheetChanged() {
+                    this.mapping = {};
+                    this.mappingSource = {};
+                    this.titleColumn = '';
+                    this.importCols = {};
+                    await this.reAnalyze();
                 },
 
                 async reAnalyze() {
@@ -585,6 +600,9 @@
                                 mapping: this.mapping,
                                 titleLetter: this.titleColumn || '',
                                 columns: this.importColumnsPayload(),
+                                columnSignature: Object.fromEntries(
+                                    (this.preview?.columns || []).map((col) => [col.letter, col.label || '']),
+                                ),
                             }),
                         });
                         const data = await this.readJson(resp);
