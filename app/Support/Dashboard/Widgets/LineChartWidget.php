@@ -5,6 +5,7 @@ namespace App\Support\Dashboard\Widgets;
 use App\Support\Dashboard\Contracts\DashboardWidget;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\ExpressionEngine;
+use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\SvgTrend;
 
 /**
@@ -75,7 +76,13 @@ final class LineChartWidget implements DashboardWidget
         $delta = null;
 
         if (isset($props['delta_metric']) && trim((string) $props['delta_metric']) !== '') {
-            $evaluated = $this->expressions->evaluate((string) $props['delta_metric'], $ctx->variables());
+            try {
+                $evaluated = $this->expressions->evaluate((string) $props['delta_metric'], $ctx->variables());
+            } catch (ExpressionSyntaxError) {
+                // Decorative delta only: a value the engine cannot parse
+                // drops the delta instead of breaking the widget.
+                $evaluated = null;
+            }
 
             if (is_numeric($evaluated)) {
                 $delta = ['direction' => $evaluated >= 0 ? 'up' : 'down', 'value' => (float) $evaluated];

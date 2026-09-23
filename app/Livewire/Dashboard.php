@@ -743,15 +743,17 @@ class Dashboard extends Component
         $props = $definition['defaultProps'] ?? [];
 
         // New widgets on a source-connected dashboard measure the connected
-        // table, not the Product Database: seed bare metric defaults to the
-        // first connected source's metric. Sourceless boards keep the PDB
-        // factory defaults.
+        // table, not the Product Database: seed the primary metric to the
+        // first connected source's metric. Momentum fields (trend_metric,
+        // delta_metric) are evaluated by the expression engine, whose
+        // identifiers are PDB-scoped, so they keep the factory default.
+        // Sourceless boards keep the PDB factory defaults.
         if (($firstSourceMetric = $this->firstSourceMetricKey()) !== null) {
             foreach ($definition['settings'] ?? [] as $field) {
                 $fieldKey = $field['key'] ?? '';
 
                 if (($field['type'] ?? '') === 'metric'
-                    && $fieldKey !== ''
+                    && $fieldKey === 'metric'
                     && is_string($props[$fieldKey] ?? null)
                     && ! str_contains($props[$fieldKey], '.')
                 ) {
@@ -826,10 +828,11 @@ class Dashboard extends Component
         }
 
         // A widget opened on a source-connected dashboard should not keep a
-        // PDB default it can no longer explain: when the seeded metric is
-        // outside the live vocabulary, fall back to the first connected
-        // source's metric. Saved values already in the vocabulary are left
-        // untouched.
+        // PDB default it can no longer explain: when the seeded primary
+        // metric is outside the live vocabulary, fall back to the first
+        // connected source's metric. Momentum fields stay expression-scoped
+        // (PDB identifiers); saved values already in the vocabulary are
+        // left untouched.
         $sourceMetricKeys = array_values(array_filter(
             array_keys($metricOptions),
             fn (string $key): bool => str_contains($key, '.'),
@@ -840,7 +843,7 @@ class Dashboard extends Component
                 $key = $field['key'] ?? '';
 
                 if (($field['type'] ?? '') === 'metric'
-                    && $key !== ''
+                    && $key === 'metric'
                     && ! array_key_exists((string) ($props[$key] ?? ''), $metricOptions)
                 ) {
                     $props[$key] = $sourceMetricKeys[0];

@@ -91,7 +91,14 @@ final class KpiCardWidget implements DashboardWidget
         $trend = null;
 
         if (isset($props['trend_metric']) && trim((string) $props['trend_metric']) !== '') {
-            $delta = $this->expressions->evaluate((string) $props['trend_metric'], $variables);
+            try {
+                $delta = $this->expressions->evaluate((string) $props['trend_metric'], $variables);
+            } catch (ExpressionSyntaxError) {
+                // Decorative arrow only: a value the engine cannot parse
+                // (e.g. a namespaced source metric) drops the arrow instead
+                // of breaking the widget.
+                $delta = null;
+            }
 
             if (is_numeric($delta)) {
                 $trend = ['direction' => $delta >= 0 ? 'up' : 'down', 'value' => (float) $delta];

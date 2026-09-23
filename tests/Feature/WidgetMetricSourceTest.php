@@ -181,4 +181,57 @@ class WidgetMetricSourceTest extends TestCase
                 return ($grid['widgets'][0]['data']['value'] ?? null) === 3;
             });
     }
+
+    public function test_new_widget_keeps_expression_scoped_trend_metric(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        // Trend/momentum fields are evaluated by the expression engine
+        // (PDB-scoped identifiers only) — they must not be seeded with a
+        // namespaced source metric.
+        $component = Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->call('toggleCustomizing')
+            ->call('addWidget', 'kpi_card')
+            ->assertHasNoErrors();
+
+        $props = $component->get('draftLayout')['widgets'][0]['props'];
+
+        $this->assertSame('t.rows', $props['metric']);
+        $this->assertSame('install_delta', $props['trend_metric']);
+    }
+
+    public function test_namespaced_trend_metric_drops_the_arrow_instead_of_breaking(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        // Props as produced by "Add widget" before the trend-seeding fix:
+        // the momentum field carried a namespaced metric the expression
+        // engine cannot tokenize.
+        $dashboard->update([
+            'layout' => [
+                'version' => 1,
+                'widgets' => [[
+                    'id' => 'kpi-1',
+                    'type' => 'kpi_card',
+                    'w' => 4,
+                    'h' => 2,
+                    'props' => ['label' => 'Test rows', 'metric' => 't.rows', 'trend_metric' => 't.rows'],
+                ]],
+            ],
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->assertViewHas('grid', function (array $grid): bool {
+                $widget = $grid['widgets'][0];
+
+                return ($widget['view'] ?? null) !== 'components.dashboard.widgets.error'
+                    && ($widget['data']['value'] ?? null) === 3
+                    && array_key_exists('trend', $widget['data'] ?? [])
+                    && $widget['data']['trend'] === null;
+            });
+    }
 }
