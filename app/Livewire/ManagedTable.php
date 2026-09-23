@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Exports\ManagedTableExport;
+use App\Livewire\Concerns\HasTableFilters;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
 use App\Models\RecordEditLog;
@@ -17,7 +18,6 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
-use App\Livewire\Concerns\HasTableFilters;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -62,6 +62,11 @@ abstract class ManagedTable extends Component
     public string $newColumnName = '';
 
     public string $newColumnType = 'text';
+
+    /** Insert slot for the next added column (overflow menu Insert left/right). */
+    public ?string $insertNeighborKey = null;
+
+    public string $insertSide = 'right';
 
     public ?int $renamingColumnId = null;
 
@@ -596,13 +601,50 @@ abstract class ManagedTable extends Component
 
     /*
     |--------------------------------------------------------------------------
-    | Custom column management (add / rename / delete)
+    | Custom column management (add / rename / delete / duplicate / move / clear)
     |--------------------------------------------------------------------------
     */
 
     public function availableColumnTypes(): array
     {
         return array_keys(app(ColumnTypeRegistry::class)->all());
+    }
+
+    /**
+     * Prefill an insert position for the next added column (overflow menu
+     * "Insert left/right"). Nothing is created until the user submits the
+     * Manage-columns form.
+     */
+    public function prefillAddColumn(string $neighborKey, string $side): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        $keys = array_column($this->orderedColumns(), 'key');
+
+        if (! in_array($neighborKey, $keys, true) || ! in_array($side, ['left', 'right'], true)) {
+            return;
+        }
+
+        $this->insertNeighborKey = $neighborKey;
+        $this->insertSide = $side;
+    }
+
+    public function clearInsertPosition(): void
+    {
+        $this->reset(['insertNeighborKey']);
+        $this->insertSide = 'right';
+    }
+
+    /** Label of the column the next insert is anchored to, if any. */
+    public function insertTargetLabel(): ?string
+    {
+        if ($this->insertNeighborKey === null) {
+            return null;
+        }
+
+        $column = collect($this->orderedColumns())->firstWhere('key', $this->insertNeighborKey);
+
+        return $column['label'] ?? $this->insertNeighborKey;
     }
 
     public function addCustomColumn(): void
@@ -627,9 +669,10 @@ abstract class ManagedTable extends Component
             return;
         }
 
-        $position = (int) CustomTableColumn::query()->where('table_key', $this->tableKey())->max('position') + 1;
+        $slot = $this->insertSlot();
+        $position = $this->resolveInsertPosition($slot);
 
-        CustomTableColumn::create([
+        $column = CustomTableColumn::create([
             'table_key' => $this->tableKey(),
             'name' => $name,
             'type' => $this->newColumnType,
@@ -638,8 +681,269 @@ abstract class ManagedTable extends Component
             'created_by' => auth()->id(),
         ]);
 
+        $this->placeInsertedColumn($column->columnKey(), $slot);
+
         $this->reset(['newColumnName']);
         $this->newColumnType = 'text';
+        $this->clearInsertPosition();
+    }
+
+    /**
+     * Effective-order slot for the pending insert, or null to append.
+     * Computed BEFORE the create so prefills resolve against the order the
+     * user actually saw.
+     */
+    private function insertSlot(): ?int
+    {
+        if ($this->insertNeighborKey === null) {
+            return null;
+        }
+
+        $keys = array_column($this->orderedColumns(), 'key');
+        $index = array_search($this->insertNeighborKey, $keys, true);
+
+        if ($index === false) {
+            return null;
+        }
+
+        return $this->insertSide === 'left' ? $index : $index + 1;
+    }
+
+    /**
+     * Structural position for a pending insert. A custom neighbor anchors
+     * directly (left = its position, right = one past, shifting later
+     * customs right) so every user sees the same slot. Core columns carry
+     * no structural position, so they anchor via the acting user's slot:
+     * one past the highest custom position before it.
+     */
+    private function resolveInsertPosition(?int $slot): int
+    {
+        $tableKey = $this->tableKey();
+
+        $neighbor = $this->insertNeighborKey !== null
+            ? CustomTableColumn::query()->where('table_key', $tableKey)->get()
+                ->firstWhere(fn (CustomTableColumn $column): bool => $column->columnKey() === $this->insertNeighborKey)
+            : null;
+
+        if ($neighbor !== null) {
+            $position = $this->insertSide === 'left' ? $neighbor->position : $neighbor->position + 1;
+
+            CustomTableColumn::query()
+                ->where('table_key', $tableKey)
+                ->where('position', '>=', $position)
+                ->increment('position');
+
+            return $position;
+        }
+
+        $maxPosition = (int) CustomTableColumn::query()->where('table_key', $tableKey)->max('position');
+
+        if ($slot === null) {
+            return $maxPosition + 1;
+        }
+
+        $keys = array_column($this->orderedColumns(), 'key');
+        $beforeKeys = array_slice($keys, 0, $slot);
+        $byKey = $this->customColumnModels()->keyBy(fn (CustomTableColumn $column): string => $column->columnKey());
+
+        $reference = -1;
+
+        foreach ($beforeKeys as $key) {
+            $position = $byKey->get($key)?->position;
+
+            if ($position !== null && $position > $reference) {
+                $reference = $position;
+            }
+        }
+
+        $position = $reference + 1;
+
+        CustomTableColumn::query()
+            ->where('table_key', $tableKey)
+            ->where('position', '>=', $position)
+            ->increment('position');
+
+        return $position;
+    }
+
+    /**
+     * Place an inserted column in the acting user's order. Users without
+     * prefs already see the structural slot, so only explicit personal
+     * orders are rewritten (width/hidden/frozen preserved).
+     *
+     * @param  array<int, string>  $keys  effective order before the insert
+     */
+    private function placeInsertedColumn(string $newKey, ?int $slot, ?array $keys = null): void
+    {
+        if ($slot === null) {
+            return;
+        }
+
+        $userId = auth()->id();
+
+        if (! $userId) {
+            return;
+        }
+
+        $hasPrefs = TableColumnPreference::query()
+            ->where('user_id', $userId)
+            ->where('table_key', $this->tableKey())
+            ->exists();
+
+        if (! $hasPrefs) {
+            return;
+        }
+
+        $keys ??= array_column($this->orderedColumns(), 'key');
+        $keys = array_values(array_filter($keys, fn (string $key): bool => $key !== $newKey));
+        array_splice($keys, min($slot, count($keys)), 0, [$newKey]);
+
+        $this->resequenceUserColumnPositions($keys);
+    }
+
+    /**
+     * Rewrite the acting user's column order, preserving width/hidden/frozen
+     * per column. Personal only — other users are untouched.
+     *
+     * @param  array<int, string>  $orderedKeys
+     */
+    private function resequenceUserColumnPositions(array $orderedKeys): void
+    {
+        $userId = auth()->id();
+
+        if (! $userId) {
+            return;
+        }
+
+        $existing = TableColumnPreference::query()
+            ->where('user_id', $userId)
+            ->where('table_key', $this->tableKey())
+            ->get()
+            ->keyBy('column_key');
+
+        foreach (array_values($orderedKeys) as $index => $key) {
+            $pref = $existing->get($key);
+
+            TableColumnPreference::query()->updateOrCreate(
+                ['user_id' => $userId, 'table_key' => $this->tableKey(), 'column_key' => $key],
+                [
+                    'position' => $index,
+                    'width' => $pref?->width,
+                    'hidden' => (bool) ($pref?->hidden ?? false),
+                    'frozen' => (bool) ($pref?->frozen ?? false),
+                ],
+            );
+        }
+    }
+
+    /**
+     * Duplicate a custom column (definition + values) directly right of its
+     * source. Non-destructive, so no confirm needed.
+     */
+    public function duplicateCustomColumn(int $id): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        $tableKey = $this->tableKey();
+        $source = CustomTableColumn::query()->where('table_key', $tableKey)->findOrFail($id);
+
+        CustomTableColumn::query()
+            ->where('table_key', $tableKey)
+            ->where('position', '>', $source->position)
+            ->increment('position');
+
+        $copy = CustomTableColumn::create([
+            'table_key' => $tableKey,
+            'name' => $this->uniqueColumnName($source->name),
+            'type' => $source->type,
+            'settings' => $source->settings,
+            'position' => $source->position + 1,
+            'created_by' => auth()->id(),
+        ]);
+
+        foreach (CustomTableColumnValue::query()->where('custom_column_id', $source->id)->cursor() as $value) {
+            CustomTableColumnValue::create([
+                'custom_column_id' => $copy->id,
+                'row_id' => $value->row_id,
+                'value' => $value->value,
+                'value_text' => $value->value_text,
+                'value_number' => $value->value_number,
+                'value_date' => $value->value_date,
+            ]);
+        }
+
+        $this->placeInsertedColumn($copy->columnKey(), $this->copySlot($source->columnKey(), $copy->columnKey()));
+    }
+
+    /**
+     * Effective-order slot directly after the source column (computed on a
+     * copy-free key list), or null when the source is gone.
+     */
+    private function copySlot(string $sourceKey, string $copyKey): ?int
+    {
+        $keys = array_values(array_filter(
+            array_column($this->orderedColumns(), 'key'),
+            fn (string $key): bool => $key !== $copyKey,
+        ));
+        $index = array_search($sourceKey, $keys, true);
+
+        return $index === false ? null : $index + 1;
+    }
+
+    private function uniqueColumnName(string $base): string
+    {
+        $candidate = mb_substr($base.' (copy)', 0, 100);
+        $suffix = 2;
+
+        while (CustomTableColumn::query()->where('table_key', $this->tableKey())->where('name', $candidate)->exists()) {
+            $label = " (copy {$suffix})";
+            $candidate = mb_substr($base, 0, 100 - mb_strlen($label)).$label;
+            $suffix++;
+        }
+
+        return $candidate;
+    }
+
+    /**
+     * Move any column to the start/end of the acting user's order
+     * (drag-reorder parity: personal, no structural change, auth only).
+     */
+    public function moveColumnToEdge(string $columnKey, string $edge): void
+    {
+        $userId = auth()->id();
+
+        if (! $userId || ! in_array($edge, ['start', 'end'], true)) {
+            return;
+        }
+
+        $keys = array_column($this->orderedColumns(), 'key');
+        $index = array_search($columnKey, $keys, true);
+
+        if ($index === false) {
+            return;
+        }
+
+        array_splice($keys, $index, 1);
+
+        if ($edge === 'start') {
+            array_unshift($keys, $columnKey);
+        } else {
+            $keys[] = $columnKey;
+        }
+
+        $this->resequenceUserColumnPositions($keys);
+    }
+
+    /** Empty every cell of a custom column, keeping the column itself. */
+    public function clearCustomColumnValues(int $id): void
+    {
+        abort_unless($this->canEdit(), 403);
+
+        $column = CustomTableColumn::query()
+            ->where('table_key', $this->tableKey())
+            ->findOrFail($id);
+
+        CustomTableColumnValue::query()->where('custom_column_id', $column->id)->delete();
     }
 
     public function startRenamingColumn(int $id, string $currentName): void

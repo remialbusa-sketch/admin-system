@@ -364,6 +364,12 @@
         <div>
             <p class="mb-2 text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Custom columns</p>
             @if ($editable)
+                @if ($insertNeighborKey)
+                    <p class="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-base-content/75" role="status">
+                        <span>Inserting <strong>{{ $insertSide }}</strong> of <strong>{{ $this->insertTargetLabel() }}</strong>.</span>
+                        <button type="button" wire:click="clearInsertPosition" class="font-bold text-primary hover:underline">Add to the end instead</button>
+                    </p>
+                @endif
                 <form wire:submit="addCustomColumn" class="mb-3 flex flex-wrap items-end gap-3 rounded-md border border-base-300 p-3">
                     <div class="min-w-[180px] flex-1">
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Column name</label>

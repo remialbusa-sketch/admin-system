@@ -429,6 +429,7 @@ document.addEventListener('alpine:init', () => {
             // Livewire.hook has no unregister API; mountOrRefresh() is idempotent
             // and readPayload() returns null once this component is detached, so
             // the callback is inert after this component is gone.
+            this.closeColumnMenu();
             this.table?.destroy();
         },
 
@@ -452,6 +453,10 @@ document.addEventListener('alpine:init', () => {
             if (!payload || !Array.isArray(payload.columns)) {
                 return;
             }
+
+            // A Livewire morph rebuilds headers from scratch — never leave a
+            // menu pointing at a detached header button.
+            this.closeColumnMenu();
 
             // Mirror the server's archive view so the row menu / action bar
             // offer Restore instead of Archive when in the archive view.
@@ -959,6 +964,10 @@ document.addEventListener('alpine:init', () => {
                     visible: !column.hidden,
                     sorter: () => 0,
                     headerClick: (_event, col) => this.callWire('sortBy', col.getField()),
+                    // Overflow (⋮) menu: the discoverable, touch-friendly twin
+                    // of the right-click header menu. The button stops
+                    // propagation so opening the menu never sorts the column.
+                    titleFormatter: (cell) => this.headerTitleWithMenu(cell),
                     headerContextMenu: (_event, col) => [
                         {
                             label: col.isVisible() ? 'Hide column' : 'Show column',
@@ -1006,6 +1015,237 @@ document.addEventListener('alpine:init', () => {
             mapped.forEach((def) => defs.push(def));
 
             return defs;
+        },
+
+        /** Header title + overflow (⋮) button. Returns a live DOM node. */
+        headerTitleWithMenu(cell) {
+            const col = cell.getColumn();
+            const title = col.getDefinition().title || '';
+
+            const wrapper = document.createElement('span');
+            wrapper.className = 'grid-col-title';
+
+            const label = document.createElement('span');
+            label.className = 'grid-col-title-label';
+            label.textContent = title;
+            wrapper.appendChild(label);
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'grid-col-menu-btn no-print';
+            btn.title = `Column actions for ${title}`;
+            btn.setAttribute('aria-label', `Column actions for ${title}`);
+            btn.setAttribute('aria-haspopup', 'menu');
+            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm0 5.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM10 14a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z"/></svg>';
+            btn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                event.preventDefault();
+                this.openColumnMenu(col, btn);
+            });
+            btn.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.stopPropagation();
+                    event.preventDefault();
+                    this.openColumnMenu(col, btn);
+                }
+            });
+            wrapper.appendChild(btn);
+
+            return wrapper;
+        },
+
+        closeColumnMenu() {
+            if (this._colMenu) {
+                this._colMenu.remove();
+                this._colMenu = null;
+            }
+
+            if (this._colMenuCleanup) {
+                this._colMenuCleanup();
+                this._colMenuCleanup = null;
+            }
+        },
+
+        /** Build + position the overflow menu for one header column. */
+        openColumnMenu(column, anchor) {
+            this.closeColumnMenu();
+
+            const field = column.getField();
+
+            if (field === '_select') {
+                return;
+            }
+
+            const info = this.columnDefs.find((c) => c.key === field) || {};
+            const canEdit = !!this.editable;
+            const isCustom = !!info.custom;
+            const label = column.getDefinition().title || field;
+            const typeLabel = info.type ? info.type.replace(/_/g, ' ') : '';
+            const structureLocked = !canEdit || !isCustom;
+
+            const menu = document.createElement('div');
+            menu.className = 'grid-col-menu no-print';
+            menu.setAttribute('role', 'menu');
+            menu.setAttribute('aria-label', `Column actions for ${label}`);
+
+            const header = document.createElement('p');
+            header.className = 'grid-col-menu-head';
+            const name = document.createElement('span');
+            name.className = 'grid-col-menu-name';
+            name.textContent = label;
+            header.appendChild(name);
+
+            if (typeLabel) {
+                const badge = document.createElement('span');
+                badge.className = 'grid-col-menu-badge';
+                badge.textContent = `${typeLabel}${isCustom ? ' · custom' : ' · built-in'}`;
+                header.appendChild(badge);
+            }
+
+            menu.appendChild(header);
+
+            const addItem = (text, run, { danger = false, disabled = false } = {}) => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'grid-col-menu-item';
+                item.setAttribute('role', 'menuitem');
+                item.textContent = text;
+
+                if (danger) {
+                    item.classList.add('grid-col-menu-danger');
+                }
+
+                if (disabled) {
+                    item.disabled = true;
+                    item.classList.add('grid-col-menu-disabled');
+                    item.title = 'Needs edit access';
+                } else {
+                    item.addEventListener('click', () => {
+                        this.closeColumnMenu();
+                        run();
+                    });
+                }
+
+                menu.appendChild(item);
+            };
+
+            const addDivider = () => {
+                const divider = document.createElement('div');
+                divider.className = 'grid-col-menu-divider';
+                divider.setAttribute('aria-hidden', 'true');
+                menu.appendChild(divider);
+            };
+
+            const openManageModal = () => {
+                window.dispatchEvent(new CustomEvent('open-modal', { detail: { name: 'manage-columns' } }));
+
+                window.setTimeout(() => {
+                    document.querySelector('[wire\\:model="newColumnName"], [wire\\:model="renamingColumnName"]')?.focus();
+                }, 200);
+            };
+
+            // Insert group: needs a follow-up in Manage columns, so prefill
+            // the slot first, then open the modal once the server roundtrip
+            // (and its morph) has landed.
+            addItem('Insert column left', () => {
+                this.callWire('prefillAddColumn', field, 'left').then(openManageModal).catch(() => undefined);
+            }, { disabled: structureLocked });
+            addItem('Insert column right', () => {
+                this.callWire('prefillAddColumn', field, 'right').then(openManageModal).catch(() => undefined);
+            }, { disabled: structureLocked });
+
+            addDivider();
+
+            addItem(column.isVisible() ? 'Hide column' : 'Show column', () => {
+                column.toggle();
+                this.persistLayout();
+            });
+            addItem(column.getDefinition().frozen ? 'Unfreeze column' : 'Freeze column', () => {
+                column.updateDefinition({ frozen: !column.getDefinition().frozen });
+                this.persistLayout();
+            });
+            addItem('Move to start', () => {
+                this.callWire('moveColumnToEdge', field, 'start').catch(() => undefined);
+            });
+            addItem('Move to end', () => {
+                this.callWire('moveColumnToEdge', field, 'end').catch(() => undefined);
+            });
+            addItem('Copy column (this page)', () => this.copyColumnValues(column));
+
+            if (isCustom) {
+                addDivider();
+
+                addItem('Rename column', () => {
+                    this.callWire('startRenamingColumn', info.customId, label).then(openManageModal).catch(() => undefined);
+                }, { disabled: !canEdit });
+                addItem('Duplicate column', () => {
+                    this.callWire('duplicateCustomColumn', info.customId).catch(() => undefined);
+                }, { disabled: !canEdit });
+                addItem('Clear all values', () => {
+                    if (window.confirm(`Clear every value in "${label}"? The column itself stays.`)) {
+                        this.callWire('clearCustomColumnValues', info.customId).catch(() => undefined);
+                    }
+                }, { disabled: !canEdit });
+                addItem('Delete column', () => {
+                    if (window.confirm(`Delete "${label}" and all of its values? This cannot be undone.`)) {
+                        this.callWire('deleteCustomColumn', info.customId).catch(() => undefined);
+                    }
+                }, { disabled: !canEdit, danger: true });
+            }
+
+            document.body.appendChild(menu);
+            this._colMenu = menu;
+
+            const rect = anchor.getBoundingClientRect();
+            const menuRect = menu.getBoundingClientRect();
+            const margin = 8;
+
+            menu.style.top = `${Math.min(rect.bottom + 4, Math.max(margin, window.innerHeight - menuRect.height - margin))}px`;
+            menu.style.left = `${Math.min(rect.left, Math.max(margin, window.innerWidth - menuRect.width - margin))}px`;
+
+            const onPointerDown = (event) => {
+                if (!menu.contains(event.target) && event.target !== anchor && !anchor.contains(event.target)) {
+                    this.closeColumnMenu();
+                }
+            };
+            const onKeyDown = (event) => {
+                if (event.key === 'Escape') {
+                    this.closeColumnMenu();
+                    anchor.focus();
+                }
+            };
+            const onScroll = () => this.closeColumnMenu();
+
+            document.addEventListener('pointerdown', onPointerDown, true);
+            document.addEventListener('keydown', onKeyDown, true);
+            window.addEventListener('scroll', onScroll, true);
+
+            this._colMenuCleanup = () => {
+                document.removeEventListener('pointerdown', onPointerDown, true);
+                document.removeEventListener('keydown', onKeyDown, true);
+                window.removeEventListener('scroll', onScroll, true);
+            };
+
+            menu.querySelector('.grid-col-menu-item:not(:disabled)')?.focus();
+        },
+
+        /** Copy one column's current-page values as TSV. */
+        copyColumnValues(column) {
+            if (!this.table) {
+                return;
+            }
+
+            const field = column.getField();
+            const text = this.table.getRows('visible')
+                .map((row) => {
+                    const value = row.getData()?.[field];
+                    return value === null || value === undefined ? '' : String(value).replace(/\t/g, ' ').replace(/\r?\n/g, ' ');
+                })
+                .join('\n');
+
+            if (navigator.clipboard?.writeText) {
+                navigator.clipboard.writeText(text).catch(() => undefined);
+            }
         },
 
         applyRemoteSort(meta) {
