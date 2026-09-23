@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Models\CustomTableColumn;
+use App\Models\CustomTableColumnValue;
 use App\Models\DynamicTable;
 use App\Models\HistoricalTsmsReport;
 use App\Models\ImportBatch;
@@ -13,10 +14,12 @@ use App\Models\TablePin;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use App\Services\ColumnTypeRegistry;
+use App\Services\ImportUndoService;
 use App\Support\TableCatalog;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Str;
 use Livewire\Component;
+use RuntimeException;
 
 class TablesList extends Component
 {
@@ -184,7 +187,7 @@ class TablesList extends Component
 
         // Hard delete values first via columns.
         foreach ($table->columns()->withTrashed()->get() as $col) {
-            \App\Models\CustomTableColumnValue::where('custom_column_id', $col->id)->forceDelete();
+            CustomTableColumnValue::where('custom_column_id', $col->id)->forceDelete();
             $col->forceDelete();
         }
         $table->rows()->withTrashed()->forceDelete();
@@ -197,6 +200,91 @@ class TablesList extends Component
     {
         return $table->created_by === auth()->id()
             || (bool) auth()->user()?->isSuperadmin();
+    }
+
+    /**
+     * Undo an import batch: delete rows it created, report rows it merely
+     * updated (re-import the correct file over those).
+     */
+    public function undoImport(int $batchId): void
+    {
+        $batch = ImportBatch::findOrFail($batchId);
+
+        abort_unless($this->mayUndoImport($batch), 403);
+
+        try {
+            $result = app(ImportUndoService::class)->undo($batch);
+        } catch (RuntimeException $exception) {
+            session()->flash('importsMessage', $exception->getMessage());
+
+            return;
+        }
+
+        $parts = [];
+
+        foreach ($result['tables'] as $tableKey => $counts) {
+            $parts[] = "{$tableKey}: {$counts['deleted']} removed"
+                .($counts['updated'] > 0 ? ", {$counts['updated']} updated earlier (re-import to fix)" : '');
+        }
+
+        session()->flash(
+            'importsMessage',
+            'Undid batch #'.$batch->id.($parts === [] ? ' — no rows were touched by it.' : ' — '.implode('; ', $parts).'.'),
+        );
+    }
+
+    private function mayUndoImport(ImportBatch $batch): bool
+    {
+        $user = auth()->user();
+
+        if ($user?->isSuperadmin()) {
+            return true;
+        }
+
+        if ($batch->run_by === $user?->id) {
+            return true;
+        }
+
+        $target = is_array($batch->metadata) ? ($batch->metadata['target_table'] ?? null) : null;
+
+        if (is_string($target)) {
+            $table = DynamicTable::where('key', $target)->first();
+
+            if ($table && $this->mayManageTable($table)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Empty a table: remove every record, keep the structure (columns for
+     * dynamic tables, schema for core tables). Core purges are superadmin
+     * only — the table itself can never be deleted.
+     */
+    public function emptyTable(string $tableKey): void
+    {
+        $dynamic = DynamicTable::where('key', $tableKey)->first();
+
+        if ($dynamic) {
+            abort_unless($this->mayManageTable($dynamic), 403);
+        } else {
+            abort_unless(auth()->user()?->isSuperadmin(), 403);
+            abort_unless(array_key_exists($tableKey, ImportUndoService::CORE_TABLES), 404);
+        }
+
+        try {
+            $removed = app(ImportUndoService::class)->purgeTable($tableKey);
+        } catch (RuntimeException $exception) {
+            session()->flash('tablesMessage', $exception->getMessage());
+
+            return;
+        }
+
+        $count = $removed[$tableKey] ?? 0;
+
+        session()->flash('tablesMessage', "Emptied '{$tableKey}' — {$count} records removed. Structure and columns kept.");
     }
 
     /*
@@ -349,6 +437,11 @@ class TablesList extends Component
             'tables' => $tables,
             'pinnedCount' => count($this->pinnedKeys),
             'imports' => $imports,
+            'undoableImports' => $imports->mapWithKeys(fn (ImportBatch $batch): array => [
+                $batch->id => $batch->status !== 'undone'
+                    && in_array($batch->status, ImportUndoService::UNDOABLE_STATUSES, true)
+                    && $this->mayUndoImport($batch),
+            ])->all(),
             'recentEdits' => $recentEdits,
             'columnTypeOptions' => app(ColumnTypeRegistry::class)->all(),
             'archivedTables' => $archivedTables,

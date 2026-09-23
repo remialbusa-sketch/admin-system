@@ -25,6 +25,9 @@
     </div>
 
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        @if (session('tablesMessage'))
+            <p class="rounded-md bg-info/10 px-3 py-2 text-xs font-semibold text-info md:col-span-2 xl:col-span-3" role="status">{{ session('tablesMessage') }}</p>
+        @endif
         @foreach ($tables as $table)
             <article class="admin-surface flex min-h-[200px] flex-col p-5 transition hover:-translate-y-0.5 hover:border-primary/40">
                 <div class="flex items-start justify-between gap-4">
@@ -63,6 +66,15 @@
                         <x-mary-icon name="o-archive-box" class="h-4 w-4" />
                         Archive table
                     </button>
+                    <button type="button" wire:click="emptyTable('{{ $table['key'] }}')" wire:confirm="Remove every record from this table? Columns stay, records are gone. This cannot be undone." class="admin-secondary-button mt-2 w-full justify-center text-xs">
+                        <x-mary-icon name="o-trash" class="h-4 w-4" />
+                        Empty table
+                    </button>
+                @elseif (! ($table['is_dynamic'] ?? false) && ($isSuperadmin ?? false))
+                    <button type="button" wire:click="emptyTable('{{ $table['key'] }}')" wire:confirm="Remove every record from this core table? The table itself stays. This cannot be undone." class="admin-secondary-button mt-2 w-full justify-center text-xs">
+                        <x-mary-icon name="o-trash" class="h-4 w-4" />
+                        Empty table
+                    </button>
                 @endif
             </article>
         @endforeach
@@ -96,6 +108,9 @@
     <section class="admin-surface p-5 sm:p-6">
         <h2 class="text-base font-bold text-base-content">Recent imports</h2>
         <p class="mt-1 text-xs text-base-content/55">Every Excel/CSV import is tracked with a batch ID and row counts.</p>
+        @if (session('importsMessage'))
+            <p class="mt-3 rounded-md bg-info/10 px-3 py-2 text-xs font-semibold text-info" role="status">{{ session('importsMessage') }}</p>
+        @endif
         <div class="mt-4 divide-y divide-base-300">
             @forelse ($imports as $import)
                 <div class="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
@@ -103,9 +118,16 @@
                         <p class="truncate text-sm font-semibold text-base-content">{{ $import->source_name }}</p>
                         <p class="text-xs text-base-content/50">{{ $import->source_sheet }} · batch #{{ $import->id }}</p>
                     </div>
-                    <div class="text-right">
-                        <p class="text-sm font-semibold text-base-content">{{ number_format($import->processed_rows) }} rows</p>
-                        <p class="text-xs text-base-content/50">{{ $import->status }} · {{ optional($import->completed_at)->diffForHumans() ?? 'pending' }}</p>
+                    <div class="flex shrink-0 items-center gap-3">
+                        <div class="text-right">
+                            <p class="text-sm font-semibold text-base-content">{{ number_format($import->processed_rows) }} rows</p>
+                            <p class="text-xs text-base-content/50">{{ $import->status }} · {{ optional($import->completed_at)->diffForHumans() ?? 'pending' }}</p>
+                        </div>
+                        @if ($undoableImports[$import->id] ?? false)
+                            <button type="button" wire:click="undoImport({{ $import->id }})" wire:confirm="Undo batch #{{ $import->id }}? Records it created will be deleted." class="admin-secondary-button" aria-label="Undo batch {{ $import->id }}">
+                                Undo
+                            </button>
+                        @endif
                     </div>
                 </div>
             @empty
