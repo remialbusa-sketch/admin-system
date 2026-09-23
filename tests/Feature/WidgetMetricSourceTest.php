@@ -234,4 +234,116 @@ class WidgetMetricSourceTest extends TestCase
                     && $widget['data']['trend'] === null;
             });
     }
+
+    public function test_settings_dropdown_groups_metrics_by_source(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        $component = Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->call('toggleCustomizing')
+            ->call('addWidget', 'kpi_card')
+            ->assertHasNoErrors();
+
+        $widgetId = $component->get('draftLayout')['widgets'][0]['id'];
+        $component->call('editWidget', $widgetId);
+
+        $metricField = collect($component->get('settingsSchema'))
+            ->firstWhere('key', 'metric');
+
+        $this->assertSame('Installed products', $metricField['grouped_options']['Product Database']['installed'] ?? null);
+        $this->assertSame('PDB Testing · Rows', $metricField['grouped_options']['PDB Testing']['t.rows'] ?? null);
+    }
+
+    public function test_grid_flags_widget_provenance(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        $dashboard->update([
+            'layout' => [
+                'version' => 1,
+                'widgets' => [
+                    [
+                        'id' => 'kpi-1',
+                        'type' => 'kpi_card',
+                        'w' => 4,
+                        'h' => 2,
+                        'props' => ['label' => 'Test rows', 'metric' => 't.rows'],
+                    ],
+                    [
+                        'id' => 'kpi-2',
+                        'type' => 'kpi_card',
+                        'w' => 4,
+                        'h' => 2,
+                        'props' => ['label' => 'Installed', 'metric' => 'installed'],
+                    ],
+                    [
+                        'id' => 'bar-1',
+                        'type' => 'bar_chart',
+                        'w' => 6,
+                        'h' => 3,
+                        'props' => ['label' => 'Empty chart', 'dataset' => ''],
+                    ],
+                ],
+            ],
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->assertViewHas('grid', function (array $grid): bool {
+                $byId = collect($grid['widgets'])->keyBy('id');
+
+                return ($byId['kpi-1']['provenance'] ?? null) === ['label' => 'PDB Testing', 'kind' => 'source']
+                    && ($byId['kpi-2']['provenance'] ?? null) === ['label' => 'Product Database', 'kind' => 'pdb']
+                    && ($byId['bar-1']['provenance'] ?? null) === ['label' => 'Not configured', 'kind' => 'none'];
+            });
+    }
+
+    public function test_empty_widget_settings_show_no_data_hint(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        $dashboard->update([
+            'layout' => [
+                'version' => 1,
+                'widgets' => [[
+                    'id' => 'bar-1',
+                    'type' => 'bar_chart',
+                    'w' => 6,
+                    'h' => 3,
+                    'props' => ['label' => 'Empty chart', 'dataset' => ''],
+                ]],
+            ],
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->call('toggleCustomizing')
+            ->call('editWidget', 'bar-1')
+            ->assertSee('No data selected');
+    }
+
+    public function test_add_widget_modal_notes_sourceless_dashboards(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+
+        $bare = DashboardModel::create([
+            'owner_id' => $owner->id,
+            'name' => 'No sources',
+            'layout' => ['version' => 1, 'widgets' => []],
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $bare])
+            ->assertSee('No tables connected');
+
+        $sourced = $this->sourcedDashboardFor($owner);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $sourced])
+            ->assertDontSee('No tables connected');
+    }
 }

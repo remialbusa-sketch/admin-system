@@ -413,6 +413,98 @@ class Dashboard extends Component
     }
 
     /**
+     * Group a flat key=>label vocabulary for <optgroup> display: shipped
+     * PDB entries under "Product Database", connected-source entries under
+     * their table label.
+     *
+     * @param  array<string, string>  $flat
+     * @return array<string, array<string, string>> group => (key => label)
+     */
+    private function groupedOptions(array $flat): array
+    {
+        $sourceLabels = [];
+
+        foreach ($this->dashboard()?->sources()->get() ?? [] as $source) {
+            $sourceLabels[$source->alias] = app(TableCatalog::class)->resolve($source->table_key)['label'] ?? $source->table_key;
+        }
+
+        $grouped = [];
+
+        foreach ($flat as $key => $label) {
+            if (str_contains($key, '.')) {
+                [$alias] = explode('.', $key, 2);
+                $group = $sourceLabels[$alias] ?? $alias;
+            } else {
+                $group = 'Product Database';
+            }
+
+            $grouped[$group][$key] = $label;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Data-provenance flag for a widget card: which table its contents come
+     * from. Editorial only — it never connects anything.
+     *
+     * @param  array<string, mixed>  $widget
+     * @return array{label: string, kind: string}|null
+     */
+    private function widgetProvenance(array $widget): ?array
+    {
+        $props = $widget['props'] ?? [];
+
+        if (! is_array($props)) {
+            return null;
+        }
+
+        $primary = $props['metric'] ?? $props['dataset'] ?? null;
+
+        if (is_string($primary) && str_contains($primary, '.')) {
+            [$alias] = explode('.', $primary, 2);
+
+            return ['label' => $this->sourceLabel($alias) ?? $alias, 'kind' => 'source'];
+        }
+
+        if ((is_string($primary) && $primary !== '')
+            || trim((string) ($props['formula'] ?? '')) !== ''
+            || trim((string) ($props['current'] ?? '')) !== ''
+            || trim((string) ($props['goal'] ?? '')) !== ''
+            || (is_array($props['columns'] ?? null) && ($props['columns'] ?? []) !== [])
+        ) {
+            // Bare keys and hand-written expressions resolve against the
+            // PDB-scoped vocabulary.
+            return ['label' => 'Product Database', 'kind' => 'pdb'];
+        }
+
+        try {
+            $settings = app(WidgetRegistry::class)->make($widget['type'] ?? '')->definition()['settings'] ?? [];
+        } catch (\Throwable) {
+            return null;
+        }
+
+        foreach ($settings as $field) {
+            if (in_array($field['type'] ?? '', ['metric', 'dataset'], true)) {
+                return ['label' => 'Not configured', 'kind' => 'none'];
+            }
+        }
+
+        return null;
+    }
+
+    private function sourceLabel(string $alias): ?string
+    {
+        $source = $this->dashboard()?->sources()->where('alias', $alias)->first();
+
+        if ($source === null) {
+            return null;
+        }
+
+        return app(TableCatalog::class)->resolve($source->table_key)['label'] ?? $source->table_key;
+    }
+
+    /**
      * First connected-source metric key ("alias.metric"), or null when this
      * dashboard has no sources. New widgets default here instead of the
      * shipped PDB metric so source-connected boards stop opening on the
@@ -808,8 +900,10 @@ class Dashboard extends Component
         foreach ($this->settingsSchema as $index => $field) {
             if (($field['type'] ?? '') === 'dataset') {
                 $this->settingsSchema[$index]['options'] = array_keys($datasetOptions);
+                $this->settingsSchema[$index]['grouped_options'] = $this->groupedOptions($datasetOptions);
             } elseif (($field['type'] ?? '') === 'metric') {
                 $this->settingsSchema[$index]['options'] = array_keys($metricOptions);
+                $this->settingsSchema[$index]['grouped_options'] = $this->groupedOptions($metricOptions);
             }
         }
 
@@ -1267,6 +1361,13 @@ class Dashboard extends Component
                 || trim($this->dateFrom) !== ''
                 || trim($this->dateTo) !== '';
 
+            // Flag every widget with its data provenance (connected source,
+            // Product Database, or not configured) for the edit-mode chips.
+            // Editorial only — nothing is connected here.
+            foreach ($grid['widgets'] as $index => $widget) {
+                $grid['widgets'][$index]['provenance'] = $this->widgetProvenance($widget);
+            }
+
             return view('livewire.dashboard', [
                 'regionLocked' => $this->regionLocked,
                 'periodOptions' => array_keys(ProductDashboardService::PERIODS),
@@ -1337,6 +1438,15 @@ class Dashboard extends Component
             || trim($this->dateFrom) !== ''
             || trim($this->dateTo) !== '';
 
+        // Flag every widget with its data provenance (connected source,
+        // Product Database, or not configured) for the edit-mode chips.
+        // Editorial only — nothing is connected here.
+        $grid = $engine->build($layout, $context);
+
+        foreach ($grid['widgets'] as $index => $widget) {
+            $grid['widgets'][$index]['provenance'] = $this->widgetProvenance($widget);
+        }
+
         return view('livewire.dashboard', [
             'regionLocked' => $this->regionLocked,
             'periodOptions' => array_keys(ProductDashboardService::PERIODS),
@@ -1349,7 +1459,7 @@ class Dashboard extends Component
                 'from' => $filters['date_from'] ?? null,
                 'to' => $filters['date_to'] ?? null,
             ]),
-            'grid' => $engine->build($layout, $context),
+            'grid' => $grid,
             'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
             'metricLabels' => config('dashboard.metric_labels', []),
             'metricValues' => array_filter(is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], 'is_numeric'),

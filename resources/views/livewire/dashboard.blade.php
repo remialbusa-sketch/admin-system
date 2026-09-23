@@ -237,15 +237,35 @@
                             </select>
                         @elseif (($field['type'] ?? '') === 'metric')
                             <select id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
-                                @foreach (($field['options'] ?? array_keys($metricLabels)) as $option)
-                                    <option value="{{ $option }}">{{ $metricOptions[$option] ?? $metricLabels[$option] ?? ucfirst($option) }}</option>
-                                @endforeach
+                                @if (isset($field['grouped_options']))
+                                    @foreach ($field['grouped_options'] as $group => $grouped)
+                                        <optgroup label="{{ $group }}">
+                                            @foreach ($grouped as $value => $label)
+                                                <option value="{{ $value }}">{{ $label }}</option>
+                                            @endforeach
+                                        </optgroup>
+                                    @endforeach
+                                @else
+                                    @foreach (($field['options'] ?? array_keys($metricLabels)) as $option)
+                                        <option value="{{ $option }}">{{ $metricOptions[$option] ?? $metricLabels[$option] ?? ucfirst($option) }}</option>
+                                    @endforeach
+                                @endif
                             </select>
                         @elseif (($field['type'] ?? '') === 'dataset')
                             <select id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
-                                @foreach (($field['options'] ?? array_keys($datasetOptions)) as $option)
-                                    <option value="{{ $option }}">{{ $datasetOptions[$option] ?? ucfirst($option) }}</option>
-                                @endforeach
+                                @if (isset($field['grouped_options']))
+                                    @foreach ($field['grouped_options'] as $group => $grouped)
+                                        <optgroup label="{{ $group }}">
+                                            @foreach ($grouped as $value => $label)
+                                                <option value="{{ $value }}">{{ $label }}</option>
+                                            @endforeach
+                                        </optgroup>
+                                    @endforeach
+                                @else
+                                    @foreach (($field['options'] ?? array_keys($datasetOptions)) as $option)
+                                        <option value="{{ $option }}">{{ $datasetOptions[$option] ?? ucfirst($option) }}</option>
+                                    @endforeach
+                                @endif
                             </select>
                         @elseif (($field['type'] ?? '') === 'boolean')
                             <label class="flex cursor-pointer items-center gap-2 text-sm">
@@ -278,6 +298,17 @@
                     </div>
                 @endforeach
             </div>
+            {{-- Guidance for an empty widget: pick data above, or connect a
+                table under Data sources. Nothing is connected automatically. --}}
+            @php
+                $settingsNeedData = collect($settingsSchema)->contains(fn ($f) => in_array($f['type'] ?? '', ['metric', 'dataset'], true));
+                $settingsHasData = filled($settingsProps['metric'] ?? null) || filled($settingsProps['dataset'] ?? null) || filled(trim((string) ($settingsProps['formula'] ?? '')));
+            @endphp
+            @if ($settingsNeedData && ! $settingsHasData)
+                <p class="rounded-md bg-warning/10 px-3 py-2 text-xs font-semibold text-warning" role="status">
+                    No data selected — pick a value above, or connect a table under Data sources. Nothing is connected automatically.
+                </p>
+            @endif
             {{-- Sticky action row: stays visible at the bottom of the
                 modal's scroll area on any screen size. Apply keeps the
                 modal open so the canvas blocks stay editable, and passes
@@ -305,6 +336,12 @@
                     </button>
                 @endforeach
             </div>
+            @if ($dashboard && ($sources ?? collect())->isEmpty())
+                <div class="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-base-300 bg-base-200/50 px-3 py-2 text-xs text-base-content/65">
+                    <span>No tables connected — new widgets read the Product Database until you connect one.</span>
+                    <button type="button" x-on:click="$dispatch('close-modal', { name: 'add-widget' }); $dispatch('open-modal', { name: 'dashboard-sources' })" class="font-bold text-primary hover:underline">Connect a table</button>
+                </div>
+            @endif
         </x-admin.modal>
     @endif
 
