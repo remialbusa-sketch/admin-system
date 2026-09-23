@@ -125,11 +125,11 @@
                     </div>
                 </div>
 
-                {{-- Title column (dynamic tables): "What is your first column?" --}}
-                <div x-show="preview && !result && phase === 'title' && isDynamic" x-cloak class="space-y-4">
+                {{-- Title column: "What is your first column?" --}}
+                <div x-show="preview && !result && phase === 'title'" x-cloak class="space-y-4">
                     <div>
                         <h3 class="text-lg font-bold text-base-content">What is your first column?</h3>
-                        <p class="mt-0.5 text-xs text-base-content/55">This will become the title of each row. Click a column to select it.</p>
+                        <p class="mt-0.5 text-xs text-base-content/55" x-text="titleHint()"></p>
                     </div>
 
                     <div class="overflow-x-auto rounded-md border border-base-300">
@@ -184,7 +184,7 @@
                                     <select :value="columnTarget(col.letter)" @change="onColumnTarget(col.letter, $el.value, col.label)" class="admin-control w-full font-mono text-xs" :aria-label="`Target for column ${col.letter}`">
                                         <option value="">-- not imported --</option>
                                         <template x-for="field in (targets?.fields || [])" :key="field.key">
-                                            <option :value="field.key" x-text="field.label"></option>
+                                            <option :value="field.key" x-text="`${field.label} (${field.kind})`"></option>
                                         </template>
                                         <template x-if="isDynamic">
                                             <option value="__new__">＋ New column…</option>
@@ -437,31 +437,40 @@
                     }
                 },
 
-                /** Next: analyze with the chosen rows, then title column (dynamic) or customize step. */
+                /** Next: analyze with the chosen rows, then the title column step. */
                 async goMap() {
                     try {
                         await this.analyze();
                         this.newColumns = {};
-                        this.titleColumn = this.mapping['__identity__'] || this.mapping['name'] || '';
-                        this.phase = this.isDynamic ? 'title' : 'columns';
+                        this.titleColumn = this.mapping['__identity__'] || this.mapping['name'] || this.mapping[this.titleFieldKey()] || '';
+                        this.phase = 'title';
                         this.step = 2;
                     } catch {}
                 },
 
-                stepLabels() {
+                /** This table's title field (identity for dynamic tables). */
+                titleFieldKey() {
+                    if (this.isDynamic) {
+                        return '__identity__';
+                    }
+                    return (targets && targets.title) || '';
+                },
+
+                titleHint() {
+                    const field = (targets?.fields || []).find((entry) => entry.key === this.titleFieldKey());
+                    const name = field ? field.label : 'each row';
                     return this.isDynamic
-                        ? ['Source file', 'First column', 'Customize columns']
-                        : ['Source file', 'Customize columns', 'Import'];
+                        ? 'This will become the title of each row. Click a column to select it.'
+                        : `This will become the ${name} of each row. Click a column to select it.`;
+                },
+
+                stepLabels() {
+                    return ['Source file', 'First column', 'Customize columns'];
                 },
 
                 columnsBack() {
-                    if (this.isDynamic) {
-                        this.phase = 'title';
-                        this.step = 2;
-                    } else {
-                        this.phase = 'header';
-                        this.step = 1;
-                    }
+                    this.phase = 'title';
+                    this.step = 2;
                 },
 
                 columnsMappedCount() {
@@ -476,13 +485,17 @@
                     return (targets?.fields || []).filter((field) => field.required && !mappedKeys.has(field.key)).map((field) => field.label);
                 },
 
-                /** Title column pick: the stable identity. Name falls back to
-                    it automatically when unmapped, so one click titles rows
-                    without tripping the one-column-per-field rule. */
+                /** Title column pick: identity for dynamic tables, the title
+                    field for managed ones. Name falls back automatically when
+                    unmapped, so one click never trips the one-column rule. */
                 pickTitleColumn(letter) {
+                    const key = this.titleFieldKey();
+                    if (!key) {
+                        return;
+                    }
                     this.titleColumn = letter;
-                    this.mapping['__identity__'] = letter;
-                    this.mappingSource['__identity__'] = 'manual';
+                    this.mapping[key] = letter;
+                    this.mappingSource[key] = 'manual';
                 },
 
                 columnSample(col) {

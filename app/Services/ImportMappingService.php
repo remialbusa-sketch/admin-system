@@ -22,6 +22,7 @@ class ImportMappingService
         'installed-products' => [
             'label' => 'Product Database',
             'sheet' => 'PDB Data',
+            'title' => 'customer_name',
             'fields' => [
                 ['key' => 'customer_name', 'label' => 'Customer Name', 'required' => true, 'kind' => 'text'],
                 ['key' => 'device_description', 'label' => 'Device Description', 'required' => true, 'kind' => 'text'],
@@ -53,6 +54,7 @@ class ImportMappingService
         'service-requests' => [
             'label' => 'Service Requests',
             'sheet' => 'Service Requests',
+            'title' => 'service_request_no',
             'fields' => [
                 ['key' => 'service_request_no', 'label' => 'Service Request No.', 'required' => true, 'kind' => 'text'],
                 ['key' => 'service_request', 'label' => 'Service Request Code', 'required' => false, 'kind' => 'text'],
@@ -85,6 +87,7 @@ class ImportMappingService
         'technical-reports' => [
             'label' => 'Technical Reports',
             'sheet' => 'Technical Reports',
+            'title' => 'reference_number',
             'fields' => [
                 ['key' => 'reference_number', 'label' => 'Reference Number', 'required' => true, 'kind' => 'text'],
                 ['key' => 'service_request_number', 'label' => 'Service Request Number', 'required' => false, 'kind' => 'text'],
@@ -109,6 +112,7 @@ class ImportMappingService
         'history-reports' => [
             'label' => 'History Reports',
             'sheet' => 'MCBTSi TSMS',
+            'title' => 'timestamp',
             'fields' => [
                 ['key' => 'timestamp', 'label' => 'Timestamp', 'required' => true, 'kind' => 'datetime'],
                 ['key' => 'csr', 'label' => 'CSR No.', 'required' => false, 'kind' => 'text'],
@@ -139,6 +143,7 @@ class ImportMappingService
         'personnel' => [
             'label' => 'Technical Personnel',
             'sheet' => null,
+            'title' => 'name',
             'fields' => [
                 ['key' => 'name', 'label' => 'Name', 'required' => true, 'kind' => 'text'],
                 ['key' => 'position', 'label' => 'Position', 'required' => false, 'kind' => 'text'],
