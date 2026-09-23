@@ -957,7 +957,7 @@
 .grid-col-menu-btn {
     display: none;
     position: absolute;
-    right: 18px;
+    right: 8px;
     top: 50%;
     transform: translateY(-50%);
     flex: none;

@@ -229,6 +229,27 @@ class TableColumnOverflowTest extends TestCase
         $this->assertDatabaseMissing('table_custom_column_values', ['custom_column_id' => $brand->id]);
     }
 
+    public function test_overflow_menu_sort_sets_direction_explicitly_and_clears(): void
+    {
+        $table = $this->createTable();
+
+        Livewire::actingAs($this->superadmin())
+            ->test(DynamicTable::class, ['table' => $table->key])
+            ->call('setSort', $this->customKey($table, 'Brand'), 'desc')
+            ->assertSet('sortField', $this->customKey($table, 'Brand'))
+            ->assertSet('sortDirection', 'desc')
+            ->call('setSort', $this->customKey($table, 'Brand'), 'sideways')
+            ->assertSet('sortDirection', 'asc')
+            ->call('clearSort')
+            ->assertSet('sortField', null);
+
+        // Sorting is view state: viewers may sort too.
+        Livewire::actingAs(User::factory()->president()->create())
+            ->test(DynamicTable::class, ['table' => $table->key])
+            ->call('setSort', $this->customKey($table, 'Brand'), 'asc')
+            ->assertHasNoErrors();
+    }
+
     public function test_viewers_cannot_use_structural_column_actions(): void
     {
         $table = $this->createTable();

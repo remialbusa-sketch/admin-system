@@ -454,6 +454,9 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
 
+            // Sort state for the overflow menu's checked direction.
+            this._sortMeta = payload.meta || null;
+
             // A Livewire morph rebuilds headers from scratch — never leave a
             // menu pointing at a detached header button.
             this.closeColumnMenu();
@@ -963,7 +966,9 @@ document.addEventListener('alpine:init', () => {
                     frozen: !!column.frozen,
                     visible: !column.hidden,
                     sorter: () => 0,
-                    headerClick: (_event, col) => this.callWire('sortBy', col.getField()),
+                    // No sorter arrow and no header-click sort: sorting lives
+                    // in the overflow (⋮) menu.
+                    headerSort: false,
                     // Overflow (⋮) menu: the discoverable, touch-friendly twin
                     // of the right-click header menu. The button stops
                     // propagation so opening the menu never sorts the column.
@@ -1143,6 +1148,28 @@ document.addEventListener('alpine:init', () => {
                     document.querySelector('[wire\\:model="newColumnName"], [wire\\:model="renamingColumnName"]')?.focus();
                 }, 200);
             };
+
+            // Sort group replaces the sorter arrow: explicit direction, with
+            // the active direction checked.
+            const sort = this._sortMeta || {};
+            const sortedAsc = sort.sortField === field && sort.sortDirection === 'asc';
+            const sortedDesc = sort.sortField === field && sort.sortDirection === 'desc';
+
+            addItem(`${sortedAsc ? '✓ ' : ''}Sort ascending`, () => {
+                if (!sortedAsc) {
+                    this.callWire('setSort', field, 'asc').catch(() => undefined);
+                }
+            });
+            addItem(`${sortedDesc ? '✓ ' : ''}Sort descending`, () => {
+                if (!sortedDesc) {
+                    this.callWire('setSort', field, 'desc').catch(() => undefined);
+                }
+            });
+            addItem('Clear sort', () => {
+                this.callWire('clearSort').catch(() => undefined);
+            }, { disabled: sort.sortField !== field });
+
+            addDivider();
 
             // Insert group: needs a follow-up in Manage columns, so prefill
             // the slot first, then open the modal once the server roundtrip

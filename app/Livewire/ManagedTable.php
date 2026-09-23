@@ -151,6 +151,23 @@ abstract class ManagedTable extends Component
         $this->resetPage();
     }
 
+    /** Explicit sort used by the header overflow menu (no toggle guessing). */
+    public function setSort(string $field, string $direction = 'asc'): void
+    {
+        $this->sortField = $field;
+        $this->sortDirection = $direction === 'desc' ? 'desc' : 'asc';
+
+        $this->resetPage();
+    }
+
+    public function clearSort(): void
+    {
+        $this->sortField = null;
+        $this->sortDirection = 'asc';
+
+        $this->resetPage();
+    }
+
     public function setColumnFilter(string $field, ?string $value): void
     {
         $value = trim((string) $value);
