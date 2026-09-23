@@ -66,8 +66,13 @@
                     </span>
                 </div>
 
-                {{-- Preview --}}
-                <div x-show="preview && !result" x-cloak class="space-y-4">
+                {{-- Preview: "What is your first row?" picker, then mapping --}}
+                <div x-show="preview && !result && phase === 'header'" x-cloak class="space-y-4">
+                    <div>
+                        <h3 class="text-lg font-bold text-base-content">What is your first row?</h3>
+                        <p class="mt-0.5 text-xs text-base-content/55">This will become the column titles. Click a row to select it.</p>
+                    </div>
+
                     <div x-show="analysis && analysis.sheets && analysis.sheets.length >= 1" class="max-w-xs">
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Sheet</label>
                         <select x-model="sheet" @change="reAnalyze()" :disabled="(analysis?.sheets || []).length < 2" class="admin-control w-full">
@@ -77,57 +82,48 @@
                         </select>
                     </div>
 
-                    <div class="flex flex-wrap items-end gap-4">
-                        <div>
-                            <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Header row</label>
-                            <input type="number" min="1" x-model.number="headerRow" @change="headerChanged()" class="admin-control w-24 tabular-nums">
-                        </div>
-                        <div>
-                            <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">First data row</label>
-                            <input type="number" :min="headerRow+1" x-model.number="dataStart" @change="reAnalyze()" class="admin-control w-24 tabular-nums">
-                        </div>
-                        <div class="ml-auto flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.08em]">
-                            <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums" x-text="`${Number(preview?.totalRows || 0).toLocaleString()} data rows`"></span>
-                            <span class="rounded-full bg-base-200 px-3 py-1 text-base-content/60 tabular-nums" x-text="`${preview?.totalColumns || 0} columns`"></span>
-                        </div>
-                    </div>
-                    <p class="text-xs text-base-content/50">Tip: click a row number below to use that row as the header — data starts on the next row.</p>
-
                     <div class="overflow-x-auto rounded-md border border-base-300">
                         <table class="min-w-full border-collapse text-left text-xs">
                             <thead>
                                 <tr class="border-b border-base-300 bg-base-200/60">
-                                    <th class="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-base-content/45">Row</th>
+                                    <th class="w-12 px-3 py-2"></th>
                                     <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
-                                        <th class="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-base-content/45" x-text="col.letter"></th>
-                                    </template>
-                                </tr>
-                                <tr class="border-b border-base-300">
-                                    <th class="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-primary">Header</th>
-                                    <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
-                                        <th class="max-w-[150px] truncate px-3 py-2 font-semibold text-base-content" :title="col.label || '(untitled)'" x-text="col.label || '(untitled)'"></th>
+                                        <th class="px-3 py-2 text-center text-[10px] font-bold uppercase tracking-[0.08em] text-base-content/45" x-text="col.letter"></th>
                                     </template>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-base-300">
-                                <template x-for="row in (preview?.sampleRows || [])" :key="row.rowNumber">
-                                    <tr class="hover:bg-base-200/50">
-                                        <td class="px-1 py-1.5 tabular-nums">
-                                            <button type="button" @click="setHeaderRow(row.rowNumber)" :title="`Use row ${row.rowNumber} as the header`" class="rounded px-2 py-0.5 text-base-content/50 hover:bg-primary/10 hover:text-primary" x-text="row.rowNumber"></button>
-                                        </td>
+                                <template x-for="row in (preview?.topRows || [])" :key="row.rowNumber">
+                                    <tr @click="pickHeaderRow(row.rowNumber)" class="cursor-pointer transition-colors hover:bg-base-200/50" :class="row.rowNumber === headerRow ? 'bg-primary/15 hover:bg-primary/20' : ''">
+                                        <td class="px-3 py-1.5 tabular-nums text-base-content/40" x-text="row.rowNumber"></td>
                                         <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
-                                            <td class="max-w-[150px] truncate px-3 py-1.5 text-base-content/80" :title="row.cells[col.letter] || ''" x-text="row.cells[col.letter] || ''"></td>
+                                            <td class="max-w-[150px] truncate px-3 py-1.5" :class="row.rowNumber === headerRow ? 'font-semibold text-base-content' : 'text-base-content/70'" :title="row.cells[col.letter] || ''" x-text="row.cells[col.letter] || ''"></td>
                                         </template>
                                     </tr>
                                 </template>
                             </tbody>
                         </table>
                     </div>
-                    <p class="text-xs text-base-content/50" x-text="`Showing the first ${Math.min(12, preview?.totalColumns || 0)} of ${preview?.totalColumns || 0} columns and up to 4 sample rows.`"></p>
+
+                    <div class="flex flex-wrap items-end justify-between gap-3">
+                        <div>
+                            <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">First data row</label>
+                            <input type="number" :min="headerRow+1" x-model.number="dataStart" class="admin-control w-24 tabular-nums">
+                        </div>
+                        <div class="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.08em]">
+                            <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums" x-text="`Header: row ${headerRow}`"></span>
+                            <span class="rounded-full bg-base-200 px-3 py-1 text-base-content/60 tabular-nums" x-text="`${preview?.totalColumns || 0} columns`"></span>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-3 border-t border-base-300 pt-4">
+                        <span class="text-xs text-base-content/50" x-text="`File: ${originalName || ''}`"></span>
+                        <button type="button" @click="goMap()" :disabled="analyzing" class="admin-primary-button">Next</button>
+                    </div>
                 </div>
 
                 {{-- Mapping --}}
-                <div x-show="preview && !result" x-cloak class="rounded-md border border-base-300">
+                <div x-show="preview && !result && phase === 'map'" x-cloak class="rounded-md border border-base-300">
                     <div class="flex flex-wrap items-center gap-3 border-b border-base-300 bg-base-200/40 px-4 py-3">
                         <p class="text-xs font-bold uppercase tracking-[0.08em] text-base-content/60" x-text="`Map columns — ${targets?.label || tableKey}`"></p>
                         <span class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-primary tabular-nums" x-text="`${mappedCount()} / ${(targets?.fields || []).length} mapped`"></span>
@@ -172,10 +168,13 @@
 
                     <div class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 px-4 py-3">
                         <span class="text-xs text-base-content/50">Only mapped columns are imported; existing records are updated by stable identifiers.</span>
-                        <button type="button" @click="execute()" :disabled="executing" class="admin-primary-button">
-                            <span x-show="!executing" x-text="`Start import (${Number(preview?.totalRows || 0).toLocaleString()} rows)`"></span>
-                            <span x-show="executing">Importing...</span>
-                        </button>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" @click="phase = 'header'" class="admin-secondary-button">Back</button>
+                            <button type="button" @click="execute()" :disabled="executing" class="admin-primary-button">
+                                <span x-show="!executing" x-text="`Start import (${Number(preview?.totalRows || 0).toLocaleString()} rows)`"></span>
+                                <span x-show="executing">Importing...</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -193,6 +192,7 @@
                 tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets,
                 backUrl: @js($backUrl),
                 step: 1,
+                phase: 'header',
                 uploading: false,
                 analyzing: false,
                 executing: false,
@@ -340,6 +340,7 @@
                         this.sheet = this.preview.sheet || this.sheet;
                         this.headerRow = this.preview.headerRow || 1;
                         this.dataStart = this.preview.dataStart || this.headerRow + 1;
+                        this.phase = 'header';
                         this.seedMapping(data.recalled || {}, data.suggested || {});
                     } catch (e) {
                         this.globalError = e.message || 'The workbook could not be analyzed.';
@@ -381,21 +382,20 @@
                     try { await this.analyze(); } catch {}
                 },
 
-                /** Header row picked by clicking a preview row: data follows it. */
-                async setHeaderRow(rowNumber) {
+                /** Header row picked by clicking a preview row — local only. */
+                pickHeaderRow(rowNumber) {
                     this.headerRow = rowNumber;
                     if (!this.dataStart || this.dataStart <= rowNumber) {
                         this.dataStart = rowNumber + 1;
                     }
-                    await this.reAnalyze();
                 },
 
-                /** Manual header edit: keep data start below the header. */
-                async headerChanged() {
-                    if (!this.dataStart || this.dataStart <= this.headerRow) {
-                        this.dataStart = (this.headerRow || 0) + 1;
-                    }
-                    await this.reAnalyze();
+                /** Next: analyze with the chosen rows, then show mapping. */
+                async goMap() {
+                    try {
+                        await this.analyze();
+                        this.phase = 'map';
+                    } catch {}
                 },
 
                 visibleFields() {
@@ -472,6 +472,7 @@
                     this.unmappedOnly = false;
                     (targets?.fields || []).forEach(f => { this.mapping[f.key] = ''; });
                     this.step = 1;
+                    this.phase = 'header';
                     this.uploadId = null;
                     this.originalName = null;
                     this.progress = 0;

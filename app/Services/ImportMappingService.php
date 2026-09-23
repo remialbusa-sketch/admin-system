@@ -525,6 +525,18 @@ class ImportMappingService
             $sampleRows[] = ['rowNumber' => $rowNumber, 'cells' => $rows[$rowNumber]];
         }
 
+        // Raw top rows for the "What is your first row?" picker — physical
+        // rows 1–12 regardless of the detected header, so title/junk rows
+        // above the header stay visible and clickable.
+        $topRows = [];
+        for ($rowNumber = 1; $rowNumber <= 12; $rowNumber++) {
+            if (! isset($rows[$rowNumber])) {
+                continue;
+            }
+
+            $topRows[] = ['rowNumber' => $rowNumber, 'cells' => $rows[$rowNumber]];
+        }
+
         return [
             'sheet' => $sheetName,
             'headerRow' => $headerRow,
@@ -533,6 +545,7 @@ class ImportMappingService
             'totalColumns' => $totalColumns,
             'columns' => $columns,
             'sampleRows' => $sampleRows,
+            'topRows' => $topRows,
         ];
     }
 

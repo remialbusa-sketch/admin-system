@@ -38,6 +38,10 @@ class ImportMappingTest extends TestCase
             $this->assertSame('SR No', $analysis['preview']['columns'][0]['label']);
             $this->assertSame('SR-1001', $analysis['preview']['columns'][0]['samples'][0]);
             $this->assertSame(2, $analysis['preview']['totalRows']);
+            // Picker rows: physical rows from the top, header included.
+            $this->assertSame([1, 2, 3, 4, 5, 6], array_column($analysis['preview']['topRows'], 'rowNumber'));
+            $this->assertSame('MCBTSi Executive Dashboard', $analysis['preview']['topRows'][0]['cells']['A']);
+            $this->assertSame('SR No', $analysis['preview']['topRows'][3]['cells']['A']);
         } finally {
             @unlink($path);
         }
