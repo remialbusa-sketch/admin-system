@@ -194,17 +194,22 @@
                                     </div>
                                 </template>
                                 <template x-if="!isDynamic">
-                                    <div class="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:gap-3">
+                                    <div class="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,220px)] sm:gap-3">
                                         <div class="min-w-0">
                                             <p class="truncate text-sm font-semibold text-base-content"><span class="mr-1.5 font-mono text-xs text-base-content/45" x-text="col.letter"></span><span x-text="col.label || '(untitled)'"></span></p>
                                             <p class="truncate text-xs text-base-content/50" x-text="columnSample(col)"></p>
                                         </div>
-                                        <select :value="columnTarget(col.letter)" @change="onColumnTarget(col.letter, $el.value)" class="admin-control w-full font-mono text-xs" :aria-label="`Target for column ${col.letter}`">
-                                            <option value="">-- not imported --</option>
-                                            <template x-for="field in (targets?.fields || [])" :key="field.key">
-                                                <option :value="field.key" x-text="`${field.label} (${field.kind})`"></option>
+                                        <div>
+                                            <template x-if="mappedTarget(col.letter)">
+                                                <p class="truncate rounded-md border border-base-300 bg-base-200/50 px-3 py-2 font-mono text-xs text-base-content" :title="`Feeds ${mappedTarget(col.letter).label}`">
+                                                    → <span x-text="mappedTarget(col.letter).label"></span>
+                                                    <span class="text-base-content/50" x-text="`(${mappedTarget(col.letter).kind})`"></span>
+                                                </p>
                                             </template>
-                                        </select>
+                                            <template x-if="!mappedTarget(col.letter)">
+                                                <p class="rounded-md border border-dashed border-base-300 px-3 py-2 font-mono text-xs text-base-content/40">skipped</p>
+                                            </template>
+                                        </div>
                                     </div>
                                 </template>
                             </div>
@@ -549,16 +554,13 @@
                 },
 
                 /** Field key currently fed by this letter, '__new__', or ''. */
-                columnTarget(letter) {
+                /** Field definition fed by this letter, if any (read-only). */
+                mappedTarget(letter) {
                     const found = Object.entries(this.mapping || {}).find(([, mapped]) => mapped === letter);
-                    return found ? found[0] : '';
-                },
-
-                onColumnTarget(letter, value) {
-                    if (value) {
-                        this.mapping[value] = letter;
-                        this.mappingSource[value] = 'manual';
+                    if (!found) {
+                        return null;
                     }
+                    return (targets?.fields || []).find((field) => field.key === found[0]) || null;
                 },
 
                 /** Included file columns for a replacing dynamic import, in file order. */
