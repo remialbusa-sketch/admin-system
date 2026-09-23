@@ -3,11 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\CustomTableColumn;
+use App\Models\CustomTableColumnValue;
+use App\Models\DynamicRow;
 use App\Models\DynamicTable;
 use App\Models\ImportBatch;
 use App\Services\ColumnTypeRegistry;
 use App\Services\DynamicTableImportService;
 use App\Services\ImportMappingService;
+use App\Services\ImportUndoService;
 use App\Services\SourceWorkbookImportService;
 use App\Support\ImportFatalCapture;
 use App\Support\ImportTargetResolver;
@@ -15,6 +18,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Throwable;
 
 class ClassicImportController extends Controller
@@ -167,83 +171,6 @@ class ClassicImportController extends Controller
     }
 
     /**
-     * Create user-requested columns from unmapped file columns (dynamic
-     * tables only) and fold them into the mapping + field catalog, so the
-     * required/duplicates/unknown checks below cover them like natives.
-     * Returns the extended mapping.
-     *
-     * @param  array<string, string>  $mapping
-     * @return array<string, string>
-     */
-    private function createImportColumns(Request $request, string $table, array &$targets, array $mapping): array
-    {
-        $entries = collect($request->input('newColumns', []))->values();
-
-        if ($entries->isEmpty()) {
-            return $mapping;
-        }
-
-        if (! $targets['dynamic']) {
-            abort(response()->json(['message' => 'Only user-created tables accept new columns during import.'], 422));
-        }
-
-        abort_unless($request->user()?->canEditRecords(), 403);
-
-        $allowedTypes = array_keys($this->importableColumnTypes());
-        $existingNames = CustomTableColumn::query()->where('table_key', $table)->pluck('name')->all();
-        $validated = [];
-
-        foreach ($entries as $index => $entry) {
-            $position = $index + 1;
-            $letter = strtoupper(trim((string) ($entry['letter'] ?? '')));
-            $name = trim((string) ($entry['name'] ?? ''));
-            $type = trim((string) ($entry['type'] ?? ''));
-
-            if (! preg_match('/^[A-Z]{1,3}$/', $letter)) {
-                abort(response()->json(['message' => "New column #{$position}: invalid source column."], 422));
-            }
-
-            if ($name === '' || mb_strlen($name) > 100) {
-                abort(response()->json(['message' => "New column #{$position}: give it a name (max 100 characters)."], 422));
-            }
-
-            if (in_array($name, $existingNames, true)) {
-                abort(response()->json(['message' => "A column named '{$name}' already exists on this table."], 422));
-            }
-
-            if (! in_array($type, $allowedTypes, true)) {
-                abort(response()->json(['message' => "New column '{$name}': unknown column type."], 422));
-            }
-
-            $existingNames[] = $name;
-            $validated[] = ['letter' => $letter, 'name' => $name, 'type' => $type];
-        }
-
-        $position = (int) CustomTableColumn::query()->where('table_key', $table)->max('position') + 1;
-
-        foreach ($validated as $entry) {
-            $column = CustomTableColumn::create([
-                'table_key' => $table,
-                'name' => $entry['name'],
-                'type' => $entry['type'],
-                'settings' => $this->defaultColumnSettings($entry['type']),
-                'position' => $position++,
-                'created_by' => $request->user()?->id,
-            ]);
-
-            $mapping[$column->columnKey()] = $entry['letter'];
-            $targets['fields'][] = [
-                'key' => $column->columnKey(),
-                'label' => $column->name,
-                'required' => false,
-                'kind' => $column->type,
-            ];
-        }
-
-        return $mapping;
-    }
-
-    /**
      * Starter settings for import-created columns — mirrors
      * ManagedTable::defaultColumnSettings so imported values validate.
      */
@@ -264,9 +191,9 @@ class ClassicImportController extends Controller
     }
 
     /**
-     * Execute the import with the user's column mapping. Managed tables go
-     * through SourceWorkbookImportService; dynamic (user-created) tables go
-     * through DynamicTableImportService.
+     * Execute the import. Dynamic tables are REPLACED wholesale (columns +
+     * rows become the file); managed tables keep their fixed columns while
+     * their rows are replaced. Nothing upserts onto old content anymore.
      */
     public function execute(Request $request, string $table)
     {
@@ -281,7 +208,9 @@ class ClassicImportController extends Controller
             'sheet' => ['required', 'string', 'max:255'],
             'headerRow' => ['required', 'integer', 'min:1', 'max:200'],
             'dataStart' => ['required', 'integer', 'min:1', 'max:500'],
-            'mapping' => ['required', 'array'],
+            // Optional: dynamic replace flows send columns + titleLetter
+            // instead of a field mapping (emptiness is checked below).
+            'mapping' => ['array'],
         ]);
 
         $targets = ImportTargetResolver::for($table);
@@ -300,7 +229,9 @@ class ClassicImportController extends Controller
             ->map(fn ($letter): string => strtoupper(trim((string) $letter)))
             ->all();
 
-        $mapping = $this->createImportColumns($request, $table, $targets, $mapping);
+        if ($targets['dynamic']) {
+            return $this->executeDynamicReplace($request, $table, $uploadId, $originalName, $sheet, $headerRow, $dataStart);
+        }
 
         $missing = collect($targets['fields'])
             ->filter(fn (array $field): bool => $field['required'] && ($mapping[$field['key']] ?? '') === '')
@@ -338,25 +269,21 @@ class ClassicImportController extends Controller
         }
 
         try {
-            $batch = $targets['dynamic']
-                ? app(DynamicTableImportService::class)->import(
-                    $absolute,
-                    $table,
-                    $sheet,
-                    $mapping,
-                    $headerRow,
-                    max($headerRow + 1, $dataStart),
-                    $request->user()?->id,
-                )
-                : app(SourceWorkbookImportService::class)->importMapped(
-                    $absolute,
-                    $table,
-                    $sheet,
-                    $mapping,
-                    $headerRow,
-                    max($headerRow + 1, $dataStart),
-                    $request->user()?->id,
-                );
+            app(ImportUndoService::class)->purgeTable($table);
+        } catch (RuntimeException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        try {
+            $batch = app(SourceWorkbookImportService::class)->importMapped(
+                $absolute,
+                $table,
+                $sheet,
+                $mapping,
+                $headerRow,
+                max($headerRow + 1, $dataStart),
+                $request->user()?->id,
+            );
         } catch (Throwable $e) {
             report($e);
 
@@ -364,6 +291,117 @@ class ClassicImportController extends Controller
         }
 
         app(ImportMappingService::class)->rememberMapping($table, $mapping);
+
+        return response()->json([
+            'status' => $batch->status,
+            'processed' => $batch->processed_rows,
+            'failed' => $batch->failed_rows,
+            'batchId' => $batch->id,
+        ]);
+    }
+
+    /**
+     * Replace a dynamic table wholesale: drop its columns, values and rows,
+     * recreate the columns from the step-3 selection, then import every row
+     * fresh. Structural, so editors and up only.
+     */
+    private function executeDynamicReplace(Request $request, string $table, string $uploadId, string $originalName, string $sheet, int $headerRow, int $dataStart)
+    {
+        abort_unless($request->user()?->canEditRecords(), 403);
+
+        $entries = collect($request->input('columns', []))->values();
+        $titleLetter = strtoupper(trim((string) $request->input('titleLetter', '')));
+
+        if ($entries->isEmpty()) {
+            return response()->json(['message' => 'Select at least one column to import.'], 422);
+        }
+
+        $allowedTypes = array_keys($this->importableColumnTypes());
+        $seenNames = [];
+        $validated = [];
+
+        foreach ($entries as $index => $entry) {
+            $position = $index + 1;
+            $letter = strtoupper(trim((string) ($entry['letter'] ?? '')));
+            $name = trim((string) ($entry['name'] ?? ''));
+            $type = trim((string) ($entry['type'] ?? ''));
+
+            if (! preg_match('/^[A-Z]{1,3}$/', $letter)) {
+                return response()->json(['message' => "Column #{$position}: invalid source column."], 422);
+            }
+
+            if ($name === '' || mb_strlen($name) > 100) {
+                return response()->json(['message' => "Column #{$position}: give it a name (max 100 characters)."], 422);
+            }
+
+            if (in_array(mb_strtolower($name), $seenNames, true)) {
+                return response()->json(['message' => "Column name '{$name}' is used twice."], 422);
+            }
+
+            if (! in_array($type, $allowedTypes, true)) {
+                return response()->json(['message' => "Column '{$name}': unknown column type."], 422);
+            }
+
+            $seenNames[] = mb_strtolower($name);
+            $validated[] = ['letter' => $letter, 'name' => $name, 'type' => $type];
+        }
+
+        $letters = array_column($validated, 'letter');
+
+        if (! in_array($titleLetter, $letters, true)) {
+            return response()->json(['message' => 'Pick the title column from the imported columns.'], 422);
+        }
+
+        try {
+            app(ImportUndoService::class)->assertSyncPaused($table);
+        } catch (RuntimeException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        $relative = ImportStreamController::storedPathFor($uploadId, $extension);
+        $absolute = Storage::disk(config('filesystems.default'))->path($relative);
+
+        if (! is_file($absolute)) {
+            return response()->json(['message' => 'The uploaded file is no longer on the server. Re-upload it.'], 422);
+        }
+
+        $columnIds = CustomTableColumn::query()->where('table_key', $table)->pluck('id');
+
+        CustomTableColumnValue::query()->whereIn('custom_column_id', $columnIds)->delete();
+        DynamicRow::query()->where('table_key', $table)->forceDelete();
+        CustomTableColumn::query()->where('table_key', $table)->forceDelete();
+
+        $mapping = ['__identity__' => $titleLetter, 'name' => $titleLetter];
+
+        foreach ($validated as $position => $entry) {
+            $column = CustomTableColumn::create([
+                'table_key' => $table,
+                'name' => $entry['name'],
+                'type' => $entry['type'],
+                'settings' => $this->defaultColumnSettings($entry['type']),
+                'position' => $position,
+                'created_by' => $request->user()?->id,
+            ]);
+
+            $mapping[$column->columnKey()] = $entry['letter'];
+        }
+
+        try {
+            $batch = app(DynamicTableImportService::class)->import(
+                $absolute,
+                $table,
+                $sheet,
+                $mapping,
+                $headerRow,
+                max($headerRow + 1, $dataStart),
+                $request->user()?->id,
+            );
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         return response()->json([
             'status' => $batch->status,

@@ -226,9 +226,11 @@ class ImportStreamTest extends TestCase
             'sheet' => $analysis['preview']['sheet'],
             'headerRow' => $analysis['preview']['headerRow'],
             'dataStart' => $analysis['preview']['dataStart'],
-            'mapping' => [
-                'name' => 'A',
-                'custom_'.$siteColumn->id => 'B',
+            'mapping' => [],
+            'titleLetter' => 'A',
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+                ['letter' => 'B', 'name' => 'Site', 'type' => 'text'],
             ],
         ])
             ->assertOk()
@@ -243,6 +245,7 @@ class ImportStreamTest extends TestCase
             'name' => 'North Clinic',
         ]);
 
+        $siteColumn = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', 'Site')->firstOrFail();
         $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->value('id');
 
         $this->assertDatabaseHas('table_custom_column_values', [
@@ -256,18 +259,40 @@ class ImportStreamTest extends TestCase
     }
 
     /**
-     * Dynamic tables accept brand-new columns mid-import: unmapped file
-     * columns arrive with a name + type, are created, then import normally.
+     * Dynamic imports replace the table: existing columns, values and rows
+     * go away, the file's columns arrive fresh, every row is new.
      */
-    public function test_classic_execute_creates_new_columns_from_unmapped_file_columns(): void
+    public function test_classic_execute_replaces_dynamic_table_columns_and_rows(): void
     {
         $user = User::factory()->superadmin()->create();
         $this->actingAs($user);
 
         $dynamic = DynamicTable::create([
-            'key' => 'newcol-sites',
-            'name' => 'Newcol Sites',
+            'key' => 'replace-sites',
+            'name' => 'Replace Sites',
             'created_by' => $user->id,
+        ]);
+
+        $oldColumn = CustomTableColumn::create([
+            'table_key' => $dynamic->key,
+            'name' => 'Old Column',
+            'type' => 'text',
+            'position' => 0,
+            'created_by' => $user->id,
+        ]);
+
+        $oldRow = DynamicRow::create([
+            'table_key' => $dynamic->key,
+            'name' => 'Old Row',
+            'source_system' => 'dynamic:'.$dynamic->key,
+            'source_record_id' => 'old-1',
+        ]);
+
+        CustomTableColumnValue::create([
+            'custom_column_id' => $oldColumn->id,
+            'row_id' => $oldRow->id,
+            'value' => ['text' => 'stale'],
+            'value_text' => 'stale',
         ]);
 
         $spreadsheet = new Spreadsheet;
@@ -277,7 +302,7 @@ class ImportStreamTest extends TestCase
         $sheet->setCellValue('B1', 'Town');
         $sheet->setCellValue('A2', 'North Clinic');
         $sheet->setCellValue('B2', 'Bacolod');
-        $path = tempnam(sys_get_temp_dir(), 'newcol-').'.xlsx';
+        $path = tempnam(sys_get_temp_dir(), 'replace-').'.xlsx';
         (new Xlsx($spreadsheet))->save($path);
 
         $uploadId = str_repeat('7c', 16);
@@ -296,8 +321,12 @@ class ImportStreamTest extends TestCase
             'sheet' => 'Sites',
             'headerRow' => 1,
             'dataStart' => 2,
-            'mapping' => ['name' => 'A'],
-            'newColumns' => [['letter' => 'B', 'name' => 'Town', 'type' => 'text']],
+            'mapping' => [],
+            'titleLetter' => 'A',
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+                ['letter' => 'B', 'name' => 'Town', 'type' => 'text'],
+            ],
         ])
             ->assertOk()
             ->json();
@@ -305,13 +334,13 @@ class ImportStreamTest extends TestCase
         $this->assertSame('completed', $execution['status'], json_encode($execution));
         $this->assertSame(1, $execution['processed'], json_encode($execution));
 
-        $column = CustomTableColumn::query()
-            ->where('table_key', $dynamic->key)
-            ->where('name', 'Town')
-            ->firstOrFail();
+        // Old structure and content are gone; the file's columns arrived.
+        $this->assertDatabaseMissing('table_custom_columns', ['id' => $oldColumn->id]);
+        $this->assertDatabaseMissing('dynamic_rows', ['id' => $oldRow->id]);
+        $this->assertDatabaseMissing('table_custom_column_values', ['row_id' => $oldRow->id]);
+        $this->assertSame(['Name', 'Town'], CustomTableColumn::query()->where('table_key', $dynamic->key)->orderBy('position')->pluck('name')->all());
 
-        $this->assertSame('text', $column->type);
-
+        $column = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', 'Town')->firstOrFail();
         $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->value('id');
 
         $this->assertDatabaseHas('table_custom_column_values', [
@@ -319,27 +348,38 @@ class ImportStreamTest extends TestCase
             'row_id' => $rowId,
             'value_text' => 'Bacolod',
         ]);
+        $this->assertSame('North Clinic', DynamicRow::query()->where('table_key', $dynamic->key)->value('name'));
+
+        // Importing again replaces instead of accumulating.
+        $execution2 = $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'sites.xlsx',
+            'sheet' => 'Sites',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => [],
+            'titleLetter' => 'A',
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+            ],
+        ])->assertOk()->json();
+
+        $this->assertSame('completed', $execution2['status'], json_encode($execution2));
+        $this->assertSame(1, DynamicRow::query()->where('table_key', $dynamic->key)->count());
+        $this->assertSame(['Name'], CustomTableColumn::query()->where('table_key', $dynamic->key)->orderBy('position')->pluck('name')->all());
 
         Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
         @unlink($path);
     }
 
-    public function test_classic_execute_rejects_bad_new_columns(): void
+    public function test_classic_execute_rejects_bad_replacement_columns(): void
     {
         $user = User::factory()->superadmin()->create();
         $this->actingAs($user);
 
         $dynamic = DynamicTable::create([
-            'key' => 'newcol-reject',
-            'name' => 'Newcol Reject',
-            'created_by' => $user->id,
-        ]);
-
-        CustomTableColumn::create([
-            'table_key' => $dynamic->key,
-            'name' => 'Town',
-            'type' => 'text',
-            'position' => 0,
+            'key' => 'replace-reject',
+            'name' => 'Replace Reject',
             'created_by' => $user->id,
         ]);
 
@@ -349,25 +389,35 @@ class ImportStreamTest extends TestCase
             'sheet' => 'Sites',
             'headerRow' => 1,
             'dataStart' => 2,
-            'mapping' => ['name' => 'A'],
+            'mapping' => [],
+            'titleLetter' => 'A',
         ];
+
+        // Empty column set.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'columns' => [],
+        ])->assertStatus(422);
 
         // Duplicate name.
         $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
-            'newColumns' => [['letter' => 'B', 'name' => 'Town', 'type' => 'text']],
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Town', 'type' => 'text'],
+                ['letter' => 'B', 'name' => 'town', 'type' => 'text'],
+            ],
         ])->assertStatus(422);
 
         // Unknown type.
         $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
-            'newColumns' => [['letter' => 'B', 'name' => 'Fresh', 'type' => 'nope']],
+            'columns' => [['letter' => 'A', 'name' => 'Town', 'type' => 'nope']],
         ])->assertStatus(422);
 
-        // Managed tables never accept new columns.
-        $this->postJson('/tables/service-requests/import-classic/execute', $payload + [
-            'newColumns' => [['letter' => 'B', 'name' => 'Fresh', 'type' => 'text']],
+        // Title must be an imported column.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'titleLetter' => 'Z',
+            'columns' => [['letter' => 'A', 'name' => 'Town', 'type' => 'text']],
         ])->assertStatus(422);
 
-        $this->assertDatabaseMissing('table_custom_columns', ['table_key' => $dynamic->key, 'name' => 'Fresh']);
+        $this->assertDatabaseMissing('table_custom_columns', ['table_key' => $dynamic->key]);
     }
 
     /**
@@ -433,9 +483,12 @@ class ImportStreamTest extends TestCase
             'sheet' => $analysis['preview']['sheet'],
             'headerRow' => $analysis['preview']['headerRow'],
             'dataStart' => $analysis['preview']['dataStart'],
-            'mapping' => [
-                'name' => 'A',
-                'custom_'.$totalColumn->id => 'C',
+            'mapping' => [],
+            'titleLetter' => 'A',
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+                ['letter' => 'B', 'name' => 'Base', 'type' => 'number'],
+                ['letter' => 'C', 'name' => 'Total', 'type' => 'number'],
             ],
         ])
             ->assertOk()
@@ -445,6 +498,7 @@ class ImportStreamTest extends TestCase
         $this->assertSame(1, $execution['processed'], json_encode($execution));
         $this->assertSame(0, $execution['failed'], json_encode($execution));
 
+        $totalColumn = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', 'Total')->firstOrFail();
         $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->value('id');
         $stored = CustomTableColumnValue::query()
             ->where('custom_column_id', $totalColumn->id)

@@ -116,9 +116,7 @@ class ImportUndoService
      */
     public function purgeTable(string $tableKey): array
     {
-        if ($blocker = $this->blockingSyncDomainForTables([$tableKey])) {
-            throw new RuntimeException("Pause the monday.com sync for '{$blocker}' first — it would re-add the removed rows.");
-        }
+        $this->assertSyncPaused($tableKey);
 
         $removed = [];
 
@@ -230,6 +228,14 @@ class ImportUndoService
     private function blockingSyncDomain(ImportBatch $batch): ?string
     {
         return $this->blockingSyncDomainForTables(array_keys($this->stampedTables($batch)));
+    }
+
+    /** @throws RuntimeException when the table's monday sync is still on */
+    public function assertSyncPaused(string $tableKey): void
+    {
+        if ($blocker = $this->blockingSyncDomainForTables([$tableKey])) {
+            throw new RuntimeException("Pause the monday.com sync for '{$blocker}' first — it would re-add the removed rows.");
+        }
     }
 
     /** @param array<int, string> $tableKeys */
