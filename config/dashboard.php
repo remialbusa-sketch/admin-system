@@ -33,6 +33,8 @@ return [
     // by GridLayoutNormalizer so saved layouts survive the rename.
     'widgets' => [
         'kpi_card' => App\Support\Dashboard\Widgets\KpiCardWidget::class,
+        'headline_kpi' => App\Support\Dashboard\Widgets\HeadlineKpiWidget::class,
+        'supporting_kpi' => App\Support\Dashboard\Widgets\SupportingKpiWidget::class,
         'stat' => App\Support\Dashboard\Widgets\StatWidget::class,
         'progress' => App\Support\Dashboard\Widgets\ProgressWidget::class,
         'gauge' => App\Support\Dashboard\Widgets\GaugeWidget::class,

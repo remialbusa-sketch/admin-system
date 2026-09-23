@@ -153,6 +153,16 @@ class TechnicalServiceAnalysisService
                 'avg_response_hours' => round($avgResponse, 2),
                 'window_completed' => $trendTotal,
             ],
+            // Status colors keyed by metric for headline widgets.
+            'metric_rag' => [
+                'reports_total' => 'green',
+                'completed' => 'green',
+                'assigned_tsp' => $unassigned > 0 ? 'amber' : 'green',
+                'avg_repair_hours' => 'green',
+                'avg_response_hours' => 'green',
+                'window_completed' => 'green',
+                'unassigned' => $unassigned > 0 ? 'amber' : 'green',
+            ],
             'statusDonut' => $statusDonut,
             'statusTotal' => $statusTotal,
             'byStatus' => $byStatus,

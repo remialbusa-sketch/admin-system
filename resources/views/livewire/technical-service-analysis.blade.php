@@ -22,12 +22,6 @@
 
         return $segment;
     })->all();
-
-    $headlineKeys = ['Technical reports', 'Completed', 'Assigned TSP', 'Avg repair time'];
-    $primary = collect($kpis)->filter(fn ($k) => in_array($k['label'], $headlineKeys))->values()->all();
-    $secondaryKpis = collect($kpis)->filter(fn ($k) => ! in_array($k['label'], $headlineKeys))->values()->all();
-    $lead = $primary[0] ?? null;
-    $rest = array_slice($primary, 1);
 @endphp
 
 <div class="mx-auto w-full max-w-none space-y-8 pb-4">
@@ -43,9 +37,6 @@
             </div>
             <div class="flex shrink-0 flex-wrap items-center gap-2">
                 <button type="button" onclick="window.print()" class="admin-secondary-button no-print">Print report</button>
-                @if (! $hasTsaWidgets && $canCustomizeTsa)
-                    <button type="button" wire:click="convertHeadlinesToWidgets" wire:confirm="Convert the headline cards into customizable widgets? You can tune, reorder or delete them afterwards; Reset restores the curated cards." class="admin-secondary-button no-print">Convert to widgets</button>
-                @endif
                 <a href="{{ route('technical-reports') }}" wire:navigate class="admin-primary-button no-print">Open Technical Reports</a>
             </div>
         </div>
@@ -66,62 +57,8 @@
         </div>
     </header>
 
-    @if (! $hasTsaWidgets)
-    <section aria-label="Headline metrics" class="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        @if ($lead)
-        <div class="admin-surface relative overflow-hidden p-6 transition duration-200 hover:border-primary/40 sm:p-8 xl:col-span-1">
-            <div class="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-primary/[0.07] blur-2xl"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between gap-3">
-                    <p class="text-xs font-bold uppercase tracking-[0.16em] text-base-content/50">{{ $lead['label'] }}</p>
-                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full {{ $ragBg[$lead['rag']] }}/15 text-[10px] font-black {{ $ragText[$lead['rag']] }}" title="{{ $ragLabel[$lead['rag']] }}">{{ $ragGlyph[$lead['rag']] }}</span>
-                </div>
-                <p class="mt-5 font-display text-6xl font-semibold leading-none tracking-tight tabular-nums text-base-content sm:text-7xl">{{ number_format($lead['value'], $lead['decimals'] ?? 0) }}</p>
-                <p class="mt-2 text-xs uppercase tracking-[0.1em] text-base-content/40">reports on file</p>
-                <div class="mt-6 flex flex-wrap gap-2">
-                    <span class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">{{ $lead['context'] }}</span>
-                    @if ($lead['href'] ?? null)
-                        <a href="{{ $lead['href'] }}" wire:navigate class="inline-flex items-center gap-1 text-[11px] font-semibold text-base-content/50 underline-offset-2 hover:text-primary hover:underline">Open table <x-mary-icon name="o-arrow-right" class="h-3.5 w-3.5" /></a>
-                    @endif
-                </div>
-            </div>
-        </div>
-        @endif
-        <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:col-span-2">
-            @foreach ($rest as $kpi)
-                <a href="{{ $kpi['href'] }}" wire:navigate
-                     class="admin-surface group flex cursor-pointer flex-col justify-between p-6 transition duration-200 hover:-translate-y-1 hover:bg-base-200/40 hover:shadow-lg hover:shadow-primary/10">
-                    <div class="flex items-start justify-between gap-3">
-                        <p class="min-w-0 truncate text-[11px] font-bold uppercase tracking-[0.14em] text-base-content/45">{{ $kpi['label'] }}</p>
-                        <span class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full {{ $ragBg[$kpi['rag']] }} text-[9px] font-black text-base-100" title="{{ $ragLabel[$kpi['rag']] }}">{{ $ragGlyph[$kpi['rag']] }}</span>
-                    </div>
-                    <div class="mt-3 flex flex-wrap items-baseline gap-x-2">
-                        <span class="font-display text-4xl font-semibold leading-none tracking-tight tabular-nums">{{ number_format($kpi['value'], $kpi['decimals'] ?? 0) }}{{ $kpi['suffix'] ?? '' }}</span>
-                    </div>
-                    <div class="mt-3 flex items-end justify-between gap-2">
-                        <p class="truncate text-[11px] text-base-content/40">{{ $kpi['context'] }}</p>
-                        <x-mary-icon name="o-arrow-right" class="h-3.5 w-3.5 shrink-0 text-primary opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
-                    </div>
-                </a>
-            @endforeach
-        </div>
-    </section>
-
-    <section aria-label="Supporting metrics" class="admin-surface grid grid-cols-1 divide-y divide-base-300 sm:grid-cols-3 sm:divide-y-0 sm:divide-x">
-        @foreach ($secondary as $kpi)
-            <a href="{{ $kpi['href'] }}" wire:navigate class="group flex items-center gap-4 px-6 py-4 transition duration-200 hover:bg-base-200/40">
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full {{ $ragBg[$kpi['rag']] }}/15 text-sm font-black {{ $ragText[$kpi['rag']] }}" aria-hidden="true">{{ $ragGlyph[$kpi['rag']] }}</div>
-                <div class="min-w-0">
-                    <p class="truncate text-[11px] font-bold uppercase tracking-[0.12em] text-base-content/45">{{ $kpi['label'] }}</p>
-                    <p class="mt-1 font-display text-xl font-semibold leading-none tabular-nums">{{ number_format($kpi['value'], $kpi['decimals'] ?? 0) }}{{ $kpi['suffix'] ?? '' }}</p>
-                    <p class="mt-1 truncate text-[10px] text-base-content/35">{{ $kpi['context'] }}</p>
-                </div>
-                <x-mary-icon name="o-arrow-right" class="ml-auto h-3.5 w-3.5 shrink-0 text-primary opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
-            </a>
-        @endforeach
-    </section>
-    @elseif ($hasTsaWidgets || $tsaCustomizing)
-    {{-- Owned widget grid: the curated cards above step aside once converted. --}}
+    {{-- Headline + supporting cards as widgets: same cards, same numbers,
+         fully customizable. --}}
     <section aria-label="Technical reports widgets">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -129,12 +66,12 @@
                     <span class="inline-block h-px w-6 bg-primary/60"></span>
                     Technical reports grid
                 </p>
-                <p class="mt-1 text-xs text-base-content/50">Your widgets — every value computed live from the imported reports. Nothing below is fixed.</p>
+                <p class="mt-1 text-xs text-base-content/50">Live widgets, not fixed cards — gear to configure, drag to reorder.</p>
             </div>
             <div class="no-print flex flex-wrap items-center gap-2">
                 @if ($tsaCustomizing)
                     <span class="hidden text-[11px] font-semibold text-base-content/45 sm:inline">Drag to reorder · corner to resize · gear to configure — saved on Done</span>
-                    <button type="button" wire:click="resetWidgetGrid('tsa')" wire:confirm="Reset this grid to the curated cards? Your widgets will be removed." class="admin-secondary-button">Reset</button>
+                    <button type="button" wire:click="resetWidgetGrid('tsa')" wire:confirm="Reset this grid to the shipped cards? Your changes will be removed." class="admin-secondary-button">Reset</button>
                     <button type="button" wire:click="toggleCustomizingFor('tsa')" class="admin-secondary-button">Cancel</button>
                     <button type="button" data-grid-done="tsa" class="admin-primary-button">Done</button>
                 @elseif ($canCustomizeTsa)
@@ -156,7 +93,6 @@
         'wsCancel' => "cancelWidgetSettingsFor('tsa')",
         'wsHint' => 'No data selected — pick a metric above.',
     ])
-    @endif
 
     <section aria-label="Status mix and completion trend" class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.35fr)]">
         <div class="admin-surface flex h-full flex-col p-6 sm:p-7" x-data="{ active: null }">

@@ -201,9 +201,6 @@
                         @endif
                     @endif
                     @if ($canEditDashboard)
-                        @if (! $dashboard && $isSuperadmin && ! $hasPersonalHomeLayout && $allowAddWidgets)
-                            <button type="button" wire:click="convertHeadlinesToWidgets" wire:confirm="Convert the headline cards into customizable widgets? You can tune, reorder or delete them afterwards; Reset layout restores the curated cards." class="admin-secondary-button">Convert to widgets</button>
-                        @endif
                         <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Customize grid</button>
                     @endif
                 @endif
@@ -449,72 +446,6 @@
             </div>
         </x-admin.modal>
     @endif
-
-    {{-- The curated Product Database overview is the Home dashboard only,
-         and only until the user takes ownership with widgets. User-created
-         / shared dashboards render just the widget grid. --}}
-    @if (! $dashboard && ! $hasPersonalHomeLayout)
-    @php
-        $headlineKeys = ['Installed products', 'Active products', 'Warranty covered', 'Service contracts', 'Annual BU charges'];
-        $primary = collect($kpis)->filter(fn ($k) => in_array($k['label'], $headlineKeys))->values()->all();
-        $secondary = collect($kpis)->filter(fn ($k) => ! in_array($k['label'], $headlineKeys))->values()->all();
-        $lead = $primary[0] ?? null;
-        $rest = array_slice($primary, 1);
-    @endphp
-    <section aria-label="Headline metrics" class="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        @if ($lead)
-        <div class="admin-surface relative overflow-hidden p-6 transition duration-200 hover:border-primary/40 sm:p-8 xl:col-span-1">
-            <div class="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-primary/[0.07] blur-2xl"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between gap-3">
-                    <p class="text-xs font-bold uppercase tracking-[0.16em] text-base-content/50">{{ $lead['label'] }}</p>
-                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-success/15 text-[10px] font-black text-success" title="{{ $ragLabel[$lead['rag']] }}">{{ $ragGlyph[$lead['rag']] }}</span>
-                </div>
-                <p class="mt-5 font-display text-6xl font-semibold leading-none tracking-tight tabular-nums text-base-content sm:text-7xl">{{ number_format($lead['value'], $lead['decimals'] ?? 0) }}</p>
-                <p class="mt-2 text-xs uppercase tracking-[0.1em] text-base-content/40">units installed</p>
-                <div class="mt-6 flex flex-wrap gap-2">
-                    <span class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">{{ $lead['context'] }}</span>
-                    @if ($lead['href'] ?? null)
-                        <a href="{{ $lead['href'] }}" wire:navigate class="inline-flex items-center gap-1 text-[11px] font-semibold text-base-content/50 underline-offset-2 hover:text-primary hover:underline">Open table <x-mary-icon name="o-arrow-right" class="h-3.5 w-3.5" /></a>
-                    @endif
-                </div>
-            </div>
-        </div>
-        @endif
-        <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:col-span-2">
-            @foreach ($rest as $kpi)
-                @php $kpiHref = $kpi['href'] ?? null; $kpiTag = $kpiHref ? 'a' : 'div'; @endphp
-                <{{ $kpiTag }} @if ($kpiHref) href="{{ $kpiHref }}" wire:navigate @endif
-                     class="admin-surface group flex flex-col justify-between p-6 {{ $kpiHref ? 'cursor-pointer transition duration-200 hover:-translate-y-1 hover:bg-base-200/40 hover:shadow-lg hover:shadow-primary/10' : '' }}">
-                    <div class="flex items-start justify-between gap-3">
-                        <p class="min-w-0 truncate text-[11px] font-bold uppercase tracking-[0.14em] text-base-content/45">{{ $kpi['label'] }}</p>
-                        <span class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full {{ $ragBg[$kpi['rag']] }} text-[9px] font-black text-base-100" title="{{ $ragLabel[$kpi['rag']] }}">{{ $ragGlyph[$kpi['rag']] }}</span>
-                    </div>
-                    <div class="mt-3 flex flex-wrap items-baseline gap-x-2">
-                        <span class="font-display text-4xl font-semibold leading-none tracking-tight tabular-nums">{{ number_format($kpi['value'], $kpi['decimals'] ?? 0) }}{{ $kpi['suffix'] ?? '' }}</span>
-                    </div>
-                    <div class="mt-3 flex items-end justify-between gap-2">
-                        <p class="truncate text-[11px] text-base-content/40">{{ $kpi['context'] }}</p>
-                    </div>
-                </{{ $kpiTag }}>
-            @endforeach
-        </div>
-    </section>
-
-    <section aria-label="Supporting metrics" class="admin-surface grid grid-cols-1 divide-y divide-base-300 sm:grid-cols-3 sm:divide-y-0 sm:divide-x">
-        @foreach ($secondary as $kpi)
-            @php $kpiHref = $kpi['href'] ?? null; $kpiTag = $kpiHref ? 'a' : 'div'; @endphp
-            <{{ $kpiTag }} @if ($kpiHref) href="{{ $kpiHref }}" wire:navigate @endif
-                 class="group flex items-center gap-4 px-6 py-4 {{ $kpiHref ? 'cursor-pointer transition hover:bg-base-200/50' : '' }}">
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full {{ $ragBg[$kpi['rag']] }}/15 text-sm font-black {{ $ragText[$kpi['rag']] }}" aria-hidden="true">{{ $ragGlyph[$kpi['rag']] }}</div>
-                <div class="min-w-0">
-                    <p class="truncate text-[11px] font-bold uppercase tracking-[0.12em] text-base-content/45">{{ $kpi['label'] }}</p>
-                    <p class="mt-1 font-display text-xl font-semibold leading-none tabular-nums">{{ number_format($kpi['value'], $kpi['decimals'] ?? 0) }}{{ $kpi['suffix'] ?? '' }}</p>
-                    <p class="mt-1 truncate text-[10px] text-base-content/35">{{ $kpi['context'] }}</p>
-                </div>
-            </{{ $kpiTag }}>
-        @endforeach
-    </section>
 
     <section aria-label="Regional position" class="admin-surface p-6 sm:p-7">
         <p class="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">01 · Regions</p>
@@ -791,6 +722,7 @@
         </div>
     </section>
 
+    @if (! $dashboard)
     <footer class="flex flex-col gap-2 px-1 text-[11px] text-base-content/35 sm:flex-row sm:items-center sm:justify-between">
         <span>Product Database overview · click any card, segment, or point to open the records behind it — the grid arrives pre-filtered, with a one-click clear.</span>
         <span>All metrics computed live from the imported installed-base records — never hardcoded.</span>

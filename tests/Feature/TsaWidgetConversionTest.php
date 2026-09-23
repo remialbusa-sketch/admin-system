@@ -45,56 +45,67 @@ class TsaWidgetConversionTest extends TestCase
         return User::factory()->superadmin()->create();
     }
 
-    public function test_conversion_seeds_customizable_headline_widgets(): void
+    public function test_tsa_renders_widgets_by_default_with_no_curated_markup(): void
+    {
+        $owner = $this->superadmin();
+
+        Livewire::actingAs($owner)
+            ->test(TechnicalServiceAnalysis::class)
+            ->assertViewHas('tsaGrid', function (array $grid): bool {
+                $widgets = $grid['widgets'];
+
+                if (count($widgets) !== 7) {
+                    return false;
+                }
+
+                foreach ($widgets as $widget) {
+                    if (($widget['view'] ?? null) === 'components.dashboard.widgets.error') {
+                        return false;
+                    }
+                }
+
+                $byId = collect($widgets)->keyBy('id');
+
+                return ($byId['tsa-reports']['props']['metric'] ?? null) === 'reports_total'
+                    && ($byId['tsa-window']['props']['metric'] ?? null) === 'window_completed'
+                    && collect($widgets)->every(fn (array $widget): bool => in_array($widget['type'], ['headline_kpi', 'supporting_kpi'], true));
+            })
+            ->assertDontSee('Headline metrics');
+    }
+
+    public function test_tsa_widgets_are_fully_customizable(): void
     {
         $owner = $this->superadmin();
 
         $component = Livewire::actingAs($owner)
             ->test(TechnicalServiceAnalysis::class)
-            ->assertSee('Convert to widgets')
-            ->call('convertHeadlinesToWidgets')
-            ->assertHasNoErrors();
-
-        $widgets = $component->get('widgetGrids')['tsa']['draftLayout']['widgets'];
-
-        $this->assertCount(7, $widgets);
-        $this->assertSame(
-            ['reports_total', 'completed', 'assigned_tsp', 'avg_repair_hours', 'avg_response_hours', 'window_completed', 'unassigned'],
-            array_column(array_column($widgets, 'props'), 'metric'),
-        );
+            ->call('toggleCustomizingFor', 'tsa');
 
         $component
-            ->call('editWidgetFor', 'tsa', $widgets[0]['id'])
+            ->call('editWidgetFor', 'tsa', 'tsa-reports')
             ->set('widgetGrids.tsa.settingsProps.label', 'My reports')
             ->call('applyWidgetSettingsFor', 'tsa')
             ->assertSet('widgetGrids.tsa.settingsError', null);
 
         $this->assertSame(
             'My reports',
-            collect($component->get('widgetGrids')['tsa']['draftLayout']['widgets'])->firstWhere('id', $widgets[0]['id'])['props']['label'],
+            collect($component->get('widgetGrids')['tsa']['draftLayout']['widgets'])->firstWhere('id', 'tsa-reports')['props']['label'],
         );
+
+        $component->call('saveWidgetGrid', [], 'tsa')->assertHasNoErrors();
+
+        $this->assertTrue(PageWidgetLayout::query()->where('user_id', $owner->id)->where('page', 'tsa')->exists());
     }
 
-    public function test_curated_cards_hide_once_converted_and_reset_restores_them(): void
+    public function test_tsa_reset_restores_the_shipped_cards(): void
     {
         $owner = $this->superadmin();
 
         Livewire::actingAs($owner)
             ->test(TechnicalServiceAnalysis::class)
-            ->assertSee('reports on file');
-
-        $component = Livewire::actingAs($owner)
-            ->test(TechnicalServiceAnalysis::class)
-            ->call('convertHeadlinesToWidgets');
-
-        $component->call('saveWidgetGrid', [], 'tsa')->assertHasNoErrors();
-
-        $this->assertTrue(PageWidgetLayout::query()->where('user_id', $owner->id)->where('page', 'tsa')->exists());
-
-        Livewire::actingAs($owner)
-            ->test(TechnicalServiceAnalysis::class)
-            ->assertDontSee('reports on file')
-            ->assertDontSee('Convert to widgets');
+            ->call('toggleCustomizingFor', 'tsa')
+            ->call('saveWidgetGrid', [], 'tsa')
+            ->assertHasNoErrors();
 
         Livewire::actingAs($owner)
             ->test(TechnicalServiceAnalysis::class)
@@ -105,28 +116,17 @@ class TsaWidgetConversionTest extends TestCase
 
         Livewire::actingAs($owner)
             ->test(TechnicalServiceAnalysis::class)
-            ->assertSee('reports on file');
+            ->assertViewHas('tsaGrid', fn (array $grid): bool => count($grid['widgets']) === 7);
     }
 
-    public function test_conversion_requires_edit_access_and_is_single_shot(): void
+    public function test_tsa_customizing_requires_edit_access(): void
     {
         $viewer = User::factory()->president()->create();
 
         Livewire::actingAs($viewer)
             ->test(TechnicalServiceAnalysis::class)
-            ->assertDontSee('Convert to widgets')
-            ->call('convertHeadlinesToWidgets')
+            ->assertDontSee('Customize grid')
+            ->call('toggleCustomizingFor', 'tsa')
             ->assertForbidden();
-
-        $owner = $this->superadmin();
-
-        PageWidgetLayout::create(['user_id' => $owner->id, 'page' => 'tsa', 'layout' => ['version' => 1, 'widgets' => []]]);
-
-        $component = Livewire::actingAs($owner)
-            ->test(TechnicalServiceAnalysis::class)
-            ->call('convertHeadlinesToWidgets')
-            ->assertHasNoErrors();
-
-        $this->assertFalse($component->get('widgetGrids')['tsa']['customizing'] ?? false);
     }
 }

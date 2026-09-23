@@ -33,57 +33,68 @@ class TspWidgetConversionTest extends TestCase
         return User::factory()->superadmin()->create();
     }
 
-    public function test_conversion_seeds_customizable_kpi_widgets(): void
+    public function test_tsp_renders_widgets_by_default_with_no_curated_markup(): void
+    {
+        $owner = $this->superadmin();
+
+        Livewire::actingAs($owner)
+            ->test(TspAnalytics::class)
+            ->assertViewHas('tspGrid', function (array $grid): bool {
+                $widgets = $grid['widgets'];
+
+                if (count($widgets) !== 4) {
+                    return false;
+                }
+
+                foreach ($widgets as $widget) {
+                    if (($widget['view'] ?? null) === 'components.dashboard.widgets.error') {
+                        return false;
+                    }
+                }
+
+                $byId = collect($widgets)->keyBy('id');
+
+                return ($byId['tsp-completion']['props']['metric'] ?? null) === 'completion_rate'
+                    && ($byId['tsp-completion']['props']['suffix'] ?? null) === '%'
+                    && ($byId['tsp-filtered']['props']['metric'] ?? null) === 'filtered_reports'
+                    && collect($widgets)->every(fn (array $widget): bool => ($widget['type'] ?? null) === 'supporting_kpi');
+            })
+            ->assertDontSee('TSP KPI summary');
+    }
+
+    public function test_tsp_widgets_are_fully_customizable(): void
     {
         $owner = $this->superadmin();
 
         $component = Livewire::actingAs($owner)
             ->test(TspAnalytics::class)
-            ->assertSee('Convert to widgets')
-            ->call('convertHeadlinesToWidgets')
-            ->assertHasNoErrors();
-
-        $widgets = $component->get('widgetGrids')['tsp']['draftLayout']['widgets'];
-
-        $this->assertCount(4, $widgets);
-        $this->assertSame(
-            ['active_tsps', 'open_records', 'resolution_rate', 'total_reports'],
-            array_column(array_column($widgets, 'props'), 'metric'),
-        );
-        $this->assertSame('%', $widgets[2]['props']['suffix']);
+            ->call('toggleCustomizingFor', 'tsp');
 
         $component
-            ->call('editWidgetFor', 'tsp', $widgets[0]['id'])
-            ->set('widgetGrids.tsp.settingsProps.label', 'My TSPs')
+            ->call('editWidgetFor', 'tsp', 'tsp-filtered')
+            ->set('widgetGrids.tsp.settingsProps.label', 'My filtered')
             ->call('applyWidgetSettingsFor', 'tsp')
             ->assertSet('widgetGrids.tsp.settingsError', null);
 
         $this->assertSame(
-            'My TSPs',
-            collect($component->get('widgetGrids')['tsp']['draftLayout']['widgets'])->firstWhere('id', $widgets[0]['id'])['props']['label'],
+            'My filtered',
+            collect($component->get('widgetGrids')['tsp']['draftLayout']['widgets'])->firstWhere('id', 'tsp-filtered')['props']['label'],
         );
+
+        $component->call('saveWidgetGrid', [], 'tsp')->assertHasNoErrors();
+
+        $this->assertTrue(PageWidgetLayout::query()->where('user_id', $owner->id)->where('page', 'tsp')->exists());
     }
 
-    public function test_curated_strip_hides_once_converted_and_reset_restores_it(): void
+    public function test_tsp_reset_restores_the_shipped_cards(): void
     {
         $owner = $this->superadmin();
 
         Livewire::actingAs($owner)
             ->test(TspAnalytics::class)
-            ->assertSee('TSP KPI summary');
-
-        $component = Livewire::actingAs($owner)
-            ->test(TspAnalytics::class)
-            ->call('convertHeadlinesToWidgets');
-
-        $component->call('saveWidgetGrid', [], 'tsp')->assertHasNoErrors();
-
-        $this->assertTrue(PageWidgetLayout::query()->where('user_id', $owner->id)->where('page', 'tsp')->exists());
-
-        Livewire::actingAs($owner)
-            ->test(TspAnalytics::class)
-            ->assertDontSee('TSP KPI summary')
-            ->assertDontSee('Convert to widgets');
+            ->call('toggleCustomizingFor', 'tsp')
+            ->call('saveWidgetGrid', [], 'tsp')
+            ->assertHasNoErrors();
 
         Livewire::actingAs($owner)
             ->test(TspAnalytics::class)
@@ -92,28 +103,17 @@ class TspWidgetConversionTest extends TestCase
 
         Livewire::actingAs($owner)
             ->test(TspAnalytics::class)
-            ->assertSee('TSP KPI summary');
+            ->assertViewHas('tspGrid', fn (array $grid): bool => count($grid['widgets']) === 4);
     }
 
-    public function test_conversion_requires_edit_access_and_is_single_shot(): void
+    public function test_tsp_customizing_requires_edit_access(): void
     {
         $viewer = User::factory()->president()->create();
 
         Livewire::actingAs($viewer)
             ->test(TspAnalytics::class)
-            ->assertDontSee('Convert to widgets')
-            ->call('convertHeadlinesToWidgets')
+            ->assertDontSee('Customize grid')
+            ->call('toggleCustomizingFor', 'tsp')
             ->assertForbidden();
-
-        $owner = $this->superadmin();
-
-        PageWidgetLayout::create(['user_id' => $owner->id, 'page' => 'tsp', 'layout' => ['version' => 1, 'widgets' => []]]);
-
-        $component = Livewire::actingAs($owner)
-            ->test(TspAnalytics::class)
-            ->call('convertHeadlinesToWidgets')
-            ->assertHasNoErrors();
-
-        $this->assertFalse($component->get('widgetGrids')['tsp']['customizing'] ?? false);
     }
 }

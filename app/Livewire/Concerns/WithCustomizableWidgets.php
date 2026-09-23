@@ -8,7 +8,6 @@ use App\Support\Dashboard\ExpressionEngine;
 use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\GridLayoutNormalizer;
 use App\Support\Dashboard\WidgetRegistry;
-use Illuminate\Support\Str;
 use Livewire\Attributes\On;
 
 /**
@@ -192,64 +191,6 @@ trait WithCustomizableWidgets
         }
 
         return ['version' => 1, 'widgets' => $merged];
-    }
-
-    /** Seed converted headline cards into the draft and enter edit mode. */
-    protected function seedWidgetDraft(string $grid, array $widgets): void
-    {
-        $this->putWidgetGridState($grid, [...$this->widgetGridState($grid), ...[
-            'customizing' => true,
-            'draftLayout' => ['version' => 1, 'widgets' => $widgets],
-        ]]);
-    }
-
-    /**
-     * Convert curated KPI arrays into kpi_card widgets: same numbers, fully
-     * customizable. $map is KPI label => conversion spec (metric or formula,
-     * plus suffix/decimals overrides). Context lines snapshot at conversion.
-     *
-     * @param  array<int, array<string, mixed>>  $kpis
-     * @param  array<string, array<string, mixed>>  $map
-     * @return array<int, array<string, mixed>>
-     */
-    protected function buildKpiWidgets(array $kpis, array $map): array
-    {
-        $byLabel = collect($kpis)->keyBy('label');
-        $tones = config('dashboard.tones', ['primary']);
-        $widgets = [];
-        $lead = true;
-
-        foreach ($map as $label => $spec) {
-            $kpi = $byLabel->get($label);
-
-            if ($kpi === null) {
-                continue;
-            }
-
-            $widgets[] = [
-                'id' => $this->newWidgetId('kpi'),
-                'type' => 'kpi_card',
-                'w' => 4,
-                'h' => $lead ? 3 : 2,
-                'props' => [
-                    'label' => $kpi['label'],
-                    'metric' => $spec['metric'] ?? '',
-                    'formula' => $spec['formula'] ?? '',
-                    'suffix' => $spec['suffix'] ?? ($kpi['suffix'] ?? ''),
-                    'decimals' => $spec['decimals'] ?? (int) ($kpi['decimals'] ?? 0),
-                    'context' => (string) ($kpi['context'] ?? ''),
-                    'href' => (string) ($kpi['href'] ?? ''),
-                    'green_above' => null,
-                    'amber_above' => null,
-                    'sparkline' => false,
-                    'trend_metric' => '',
-                    'tone' => in_array($kpi['tone'] ?? 'primary', $tones, true) ? $kpi['tone'] : 'primary',
-                ],
-            ];
-            $lead = false;
-        }
-
-        return $widgets;
     }
 
     /** Open the settings modal for one widget in the draft. */
@@ -612,10 +553,5 @@ trait WithCustomizableWidgets
         }
 
         return $built;
-    }
-
-    protected function newWidgetId(string $type): string
-    {
-        return $type.'-'.strtolower(Str::random(6));
     }
 }

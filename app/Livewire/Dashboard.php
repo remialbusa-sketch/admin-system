@@ -722,9 +722,11 @@ class Dashboard extends Component
         $dashboard = $this->dashboard();
 
         // Deep-copy so the draft never aliases the config default.
+        // Home starts from its headline widgets; owned boards without a
+        // saved layout fall back to the shipped default.
         $source = $dashboard?->layout
             ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null)
-            ?? config('dashboard.default_layout');
+            ?? ($this->dashboardId === null ? $this->homeFallbackLayout() : config('dashboard.default_layout'));
 
         $this->draftLayout = json_decode(json_encode($source), true)
             ?: ['version' => 1, 'widgets' => []];
@@ -801,83 +803,114 @@ class Dashboard extends Component
     }
 
     /**
-     * Headline KPI label => conversion spec for take-ownership widgets.
-     * Annual BU charges render in millions on the curated cards, so they
-     * convert to a formula rather than the raw metric.
+     * The shipped Home headlines as real widgets: same cards, same numbers,
+     * fully customizable. Used until the user saves a personal layout
+     * (Reset returns here). Live route() links keep drill-downs working.
+     *
+     * @return array{version: int, widgets: array<int, array<string, mixed>>}
      */
-    private const HEADLINE_WIDGET_MAP = [
-        'Installed products' => ['metric' => 'installed'],
-        'Active products' => ['metric' => 'active'],
-        'Warranty covered' => ['metric' => 'warranty_covered'],
-        'Service contracts' => ['metric' => 'contracts'],
-        'Annual BU charges' => ['formula' => 'round(annual_bu_charges / 1000000, 1)', 'suffix' => 'M', 'decimals' => 1],
-    ];
+    private function defaultHomeWidgets(): array
+    {
+        return ['version' => 1, 'widgets' => [
+            [
+                'id' => 'home-installed', 'type' => 'headline_kpi', 'w' => 4, 'h' => 3,
+                'props' => [
+                    'label' => 'Installed products', 'variant' => 'lead', 'metric' => 'installed',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => '', 'context_metric' => 'accounts', 'context_prefix' => '',
+                    'context_suffix' => ' accounts on file', 'context_decimals' => 0,
+                    'caption' => 'units installed', 'href' => route('installed-products'),
+                ],
+            ],
+            [
+                'id' => 'home-active', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
+                'props' => [
+                    'label' => 'Active products', 'variant' => 'card', 'metric' => 'active',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => '', 'context_metric' => 'active_ratio', 'context_prefix' => '',
+                    'context_suffix' => '% of installed', 'context_decimals' => 1,
+                    'caption' => '', 'href' => route('installed-products', ['status' => 'Active']),
+                ],
+            ],
+            [
+                'id' => 'home-warranty', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
+                'props' => [
+                    'label' => 'Warranty covered', 'variant' => 'card', 'metric' => 'warranty_covered',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => '', 'context_metric' => 'warranty_ratio', 'context_prefix' => '',
+                    'context_suffix' => '% of installed', 'context_decimals' => 1,
+                    'caption' => '', 'href' => route('installed-products', ['warranty' => 'covered']),
+                ],
+            ],
+            [
+                'id' => 'home-contracts', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
+                'props' => [
+                    'label' => 'Service contracts', 'variant' => 'card', 'metric' => 'contracts',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => 'active + renewal',
+                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
+                    'caption' => '', 'href' => route('installed-products', ['contract' => '1']),
+                ],
+            ],
+            [
+                'id' => 'home-annual', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
+                'props' => [
+                    'label' => 'Annual BU charges', 'variant' => 'card', 'metric' => '',
+                    'formula' => 'round(annual_bu_charges / 1000000, 1)', 'suffix' => 'M', 'decimals' => 1,
+                    'context' => 'sum of annual charges on file',
+                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
+                    'caption' => '', 'href' => route('installed-products'),
+                ],
+            ],
+            [
+                'id' => 'home-missing-pms', 'type' => 'supporting_kpi', 'w' => 4, 'h' => 1,
+                'props' => [
+                    'label' => 'Missing PMS frequency', 'metric' => 'missing_pms',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => '', 'context_metric' => 'missing_pms_ratio', 'context_prefix' => '',
+                    'context_suffix' => '% of installed', 'context_decimals' => 1,
+                    'href' => route('installed-products', ['pms' => 'missing']), 'icon' => '', 'tone' => 'error',
+                ],
+            ],
+            [
+                'id' => 'home-warranty-expiring', 'type' => 'supporting_kpi', 'w' => 4, 'h' => 1,
+                'props' => [
+                    'label' => 'Warranties expiring (90 days)', 'metric' => 'warranty_expiring_90d',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => '', 'context_metric' => 'warranty_expired', 'context_prefix' => '',
+                    'context_suffix' => ' already past end date', 'context_decimals' => 0,
+                    'href' => route('installed-products', ['warranty' => 'expiring_90d']), 'icon' => '', 'tone' => 'warning',
+                ],
+            ],
+            [
+                'id' => 'home-pulled-out', 'type' => 'supporting_kpi', 'w' => 4, 'h' => 1,
+                'props' => [
+                    'label' => 'Pulled out', 'metric' => 'pulled_out',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => 'removed from service',
+                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
+                    'href' => route('installed-products', ['status' => 'Pulledout']), 'icon' => '', 'tone' => 'primary',
+                ],
+            ],
+        ]];
+    }
 
     /**
-     * Convert the curated Home headline cards into real kpi_card widgets:
-     * same numbers, fully customizable. Explicit opt-in (button),
-     * superadmin only, Home only, and only until a personal layout exists.
-     * Done persists; Reset layout restores the curated cards.
+     * Home fallback: the headline widgets first, then the full shipped
+     * operations grid. Nothing is dropped — users delete what they don't
+     * want (Reset returns here).
+     *
+     * @return array{version: int, widgets: array<int, array<string, mixed>>}
      */
-    public function convertHeadlinesToWidgets(ProductDashboardService $service): void
+    private function homeFallbackLayout(): array
     {
-        $user = auth()->user();
+        $widgets = $this->defaultHomeWidgets()['widgets'];
 
-        abort_unless($user?->isSuperadmin() ?? false, 403);
-
-        if ($this->dashboardId !== null) {
-            return;
+        foreach (config('dashboard.default_layout.widgets', []) as $widget) {
+            $widgets[] = $widget;
         }
 
-        if (DashboardLayout::query()->where('user_id', $user->id)->exists()) {
-            return;
-        }
-
-        $region = $this->regionLocked && $user?->role === UserRole::RegionalManager
-            ? $user->region
-            : $this->region;
-        $filters = $this->filterScope();
-        $summary = $service->summary($region === 'All regions' ? null : $region, $this->period, $filters);
-
-        $byLabel = collect($summary['kpis'] ?? [])->keyBy('label');
-        $tones = config('dashboard.tones', ['primary']);
-        $widgets = [];
-        $lead = true;
-
-        foreach (self::HEADLINE_WIDGET_MAP as $label => $spec) {
-            $kpi = $byLabel->get($label);
-
-            if ($kpi === null) {
-                continue;
-            }
-
-            $widgets[] = [
-                'id' => 'kpi-'.strtolower(Str::random(6)),
-                'type' => 'kpi_card',
-                'w' => 4,
-                'h' => $lead ? 3 : 2,
-                'props' => [
-                    'label' => $kpi['label'],
-                    'metric' => $spec['metric'] ?? '',
-                    'formula' => $spec['formula'] ?? '',
-                    'suffix' => $spec['suffix'] ?? ($kpi['suffix'] ?? ''),
-                    'decimals' => $spec['decimals'] ?? (int) ($kpi['decimals'] ?? 0),
-                    // Snapshot of the curated context line — editable text
-                    // afterwards, not a live value.
-                    'context' => (string) ($kpi['context'] ?? ''),
-                    'href' => (string) ($kpi['href'] ?? ''),
-                    'green_above' => null,
-                    'amber_above' => null,
-                    'sparkline' => false,
-                    'trend_metric' => '',
-                    'tone' => in_array($kpi['tone'] ?? 'primary', $tones, true) ? $kpi['tone'] : 'primary',
-                ],
-            ];
-            $lead = false;
-        }
-
-        $this->draftLayout = ['version' => 1, 'widgets' => $widgets];
-        $this->customizing = true;
+        return ['version' => 1, 'widgets' => $widgets];
     }
 
     /** Back to the shipped default layout: drop the saved one and exit. */
@@ -1462,11 +1495,6 @@ class Dashboard extends Component
                 $grid['widgets'][$index]['provenance'] = $this->widgetProvenance($widget);
             }
 
-            // Home takes ownership via widgets: once the user has a personal
-            // layout, the curated hardcoded cards step aside for the grid.
-            $hasPersonalHomeLayout = $this->dashboardId === null && $user !== null
-                && DashboardLayout::query()->where('user_id', $user->id)->exists();
-
             return view('livewire.dashboard', [
                 'regionLocked' => $this->regionLocked,
                 'periodOptions' => array_keys(ProductDashboardService::PERIODS),
@@ -1486,8 +1514,6 @@ class Dashboard extends Component
                 'datasetOptions' => $this->datasetOptions(),
                 'metricOptions' => $this->metricOptions(),
                 'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
-                'hasPersonalHomeLayout' => $hasPersonalHomeLayout,
-                'isSuperadmin' => (bool) $user?->isSuperadmin(),
                 'dashboard' => null,
                 'canEditDashboard' => false,
                 'shares' => collect(),
@@ -1522,7 +1548,8 @@ class Dashboard extends Component
             ->withSources($this->sourceData($filters))
             ->withFilters($filters);
         $savedLayout = $dashboard?->layout
-            ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null);
+            ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null)
+            ?? ($this->dashboardId === null ? $this->homeFallbackLayout() : null);
 
         // Owned dashboards created via Branch A start empty (no PDB default).
         // A null layout on an owned board means empty, not Home's default.
@@ -1548,11 +1575,6 @@ class Dashboard extends Component
             $grid['widgets'][$index]['provenance'] = $this->widgetProvenance($widget);
         }
 
-        // Home takes ownership via widgets: once the user has a personal
-        // layout, the curated hardcoded cards step aside for the grid.
-        $hasPersonalHomeLayout = $this->dashboardId === null && $user !== null
-            && DashboardLayout::query()->where('user_id', $user->id)->exists();
-
         return view('livewire.dashboard', [
             'regionLocked' => $this->regionLocked,
             'periodOptions' => array_keys(ProductDashboardService::PERIODS),
@@ -1572,8 +1594,6 @@ class Dashboard extends Component
             'datasetOptions' => $this->datasetOptions(),
             'metricOptions' => $this->metricOptions(),
             'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
-            'hasPersonalHomeLayout' => $hasPersonalHomeLayout,
-            'isSuperadmin' => (bool) $user?->isSuperadmin(),
             'dashboard' => $dashboard,
             'canEditDashboard' => $this->canEditDashboard(),
             'shares' => $dashboard?->shares()->with('user')->orderBy('id')->get() ?? collect(),

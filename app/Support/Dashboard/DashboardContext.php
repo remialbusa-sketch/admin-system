@@ -20,6 +20,7 @@ final class DashboardContext
      * @param  array<string, mixed>  $metrics
      * @param  array<string, array<int, array<string, mixed>>>  $datasets
      * @param  array<string, array{metrics: array<string, mixed>, datasets: array<string, array<int, array<string, mixed>>>}>  $sources
+     * @param  array<string, string>  $metricRag  metric key => green|amber|red
      */
     public function __construct(
         public readonly string $region,
@@ -28,6 +29,7 @@ final class DashboardContext
         private readonly array $datasets,
         private readonly array $sources = [],
         public readonly array $filters = [],
+        private readonly array $metricRag = [],
     ) {}
 
     /**
@@ -51,7 +53,15 @@ final class DashboardContext
             $datasets[$key] = is_array($summary[$summaryKey] ?? null) ? $summary[$summaryKey] : [];
         }
 
-        return new self($region, $period, is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], $datasets, $summary['filters'] ?? []);
+        return new self(
+            $region,
+            $period,
+            is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [],
+            $datasets,
+            [],
+            $summary['filters'] ?? [],
+            is_array($summary['metric_rag'] ?? null) ? $summary['metric_rag'] : [],
+        );
     }
 
     /**
@@ -61,12 +71,17 @@ final class DashboardContext
      */
     public function withSources(array $sources): self
     {
-        return new self($this->region, $this->period, $this->metrics, $this->datasets, $sources, $this->filters);
+        return new self($this->region, $this->period, $this->metrics, $this->datasets, $sources, $this->filters, $this->metricRag);
     }
 
     public function withFilters(array $filters): self
     {
-        return new self($this->region, $this->period, $this->metrics, $this->datasets, $this->sources, $filters);
+        return new self($this->region, $this->period, $this->metrics, $this->datasets, $this->sources, $filters, $this->metricRag);
+    }
+
+    public function withMetricRag(array $metricRag): self
+    {
+        return new self($this->region, $this->period, $this->metrics, $this->datasets, $this->sources, $this->filters, $metricRag);
     }
 
     public function metric(string $key, mixed $default = null): mixed
@@ -78,6 +93,16 @@ final class DashboardContext
         }
 
         return $this->metrics[$key] ?? $default;
+    }
+
+    /** Status color for a metric: green|amber|red. */
+    public function rag(string $key, mixed $default = 'green'): mixed
+    {
+        if (str_contains($key, '.')) {
+            return $default;
+        }
+
+        return $this->metricRag[$key] ?? $default;
     }
 
     /**

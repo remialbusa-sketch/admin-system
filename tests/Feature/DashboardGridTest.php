@@ -305,7 +305,7 @@ class DashboardGridTest extends TestCase
             ->set('settingsProps.current', '((active / installed) * 100)')
             ->call('applyWidgetSettings')
             ->assertSet('settingsError', null)
-            ->assertSet('draftLayout.widgets.9.props.current', '((active / installed) * 100)')
+            ->assertSet('draftLayout.widgets.17.props.current', '((active / installed) * 100)')
             ->call('saveLayout', []);
 
         $this->assertDatabaseHas('dashboard_layouts', ['user_id' => $user->id]);
@@ -349,7 +349,7 @@ class DashboardGridTest extends TestCase
             ->call('applyWidgetSettings', ['settingsProps.current_tree' => $graph])
             ->assertSet('settingsError', null)
             // The canvas graph lands in the widget props next to the string.
-            ->assertSet('draftLayout.widgets.9.props.current_tree.nodes.2.value', '*')
+            ->assertSet('draftLayout.widgets.17.props.current_tree.nodes.2.value', '*')
             // Reopening re-seeds the EXACT canvas the user left behind —
             // same blocks, same positions — ready to edit, change, delete.
             ->call('editWidget', 'progress-warranty')
@@ -418,7 +418,7 @@ class DashboardGridTest extends TestCase
             ->call('applyWidgetSettings')
             ->assertSet('settingsError', null)
             // Only the whitelisted node survives; junk is dropped.
-            ->assertSet('draftLayout.widgets.9.props.current_tree.nodes', function ($nodes) {
+            ->assertSet('draftLayout.widgets.17.props.current_tree.nodes', function ($nodes) {
                 return is_array($nodes) && count($nodes) === 1 && $nodes[0]['id'] === 'ok';
             });
     }
@@ -541,3 +541,4 @@ class DashboardGridTest extends TestCase
             ->assertSee('NCR Hospital');
     }
 }
+

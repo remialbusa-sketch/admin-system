@@ -36,10 +36,10 @@ class TspAnalytics extends Component
     private const GRID = 'tsp';
 
     private const METRIC_LABELS = [
-        'active_tsps' => 'Active TSPs',
-        'open_records' => 'Open records',
-        'resolution_rate' => 'Resolution rate',
-        'total_reports' => 'Total reports',
+        'filtered_reports' => 'Reports (filtered)',
+        'distinct_tsps' => 'Distinct TSPs',
+        'completion_rate' => 'Completion rate',
+        'avg_repair_hours' => 'Avg repair time',
     ];
 
     public function applyPeriod(): void
@@ -65,7 +65,8 @@ class TspAnalytics extends Component
         return PageWidgetLayout::query()
             ->where('user_id', auth()->id())
             ->where('page', self::GRID)
-            ->first()?->layout;
+            ->first()?->layout
+            ?? $this->defaultTspWidgets();
     }
 
     protected function storeWidgetLayout(string $grid, array $layout): void
@@ -100,30 +101,56 @@ class TspAnalytics extends Component
     }
 
     /**
-     * Convert the curated KPI strip into real kpi_card widgets: same
-     * numbers, fully customizable. Explicit opt-in, editors and up,
-     * single-shot per user.
+     * The shipped TSP cards as real widgets: same cards, same numbers,
+     * fully customizable. Used until the user saves a personal layout
+     * (Reset returns here).
+     *
+     * @return array{version: int, widgets: array<int, array<string, mixed>>}
      */
-    public function convertHeadlinesToWidgets(TspAnalyticsService $service): void
+    private function defaultTspWidgets(): array
     {
-        abort_unless($this->canCustomizeWidgets(), 403);
-
-        $userId = auth()->id();
-
-        if (! $userId || PageWidgetLayout::query()->where('user_id', $userId)->where('page', self::GRID)->exists()) {
-            return;
-        }
-
-        $summary = $service->summary($this->region);
-
-        $map = [
-            'Active TSPs' => ['metric' => 'active_tsps'],
-            'Open records' => ['metric' => 'open_records'],
-            'Resolution rate' => ['metric' => 'resolution_rate', 'suffix' => '%', 'decimals' => 1],
-            'Total reports' => ['metric' => 'total_reports'],
-        ];
-
-        $this->seedWidgetDraft(self::GRID, $this->buildKpiWidgets($summary['kpis'], $map));
+        return ['version' => 1, 'widgets' => [
+            [
+                'id' => 'tsp-filtered', 'type' => 'supporting_kpi', 'w' => 3, 'h' => 1,
+                'props' => [
+                    'label' => 'Reports (filtered)', 'metric' => 'filtered_reports',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => 'matching filters',
+                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
+                    'href' => '', 'icon' => 'o-document-text', 'tone' => 'primary',
+                ],
+            ],
+            [
+                'id' => 'tsp-distinct', 'type' => 'supporting_kpi', 'w' => 3, 'h' => 1,
+                'props' => [
+                    'label' => 'Distinct TSPs', 'metric' => 'distinct_tsps',
+                    'formula' => '', 'suffix' => '', 'decimals' => 0,
+                    'context' => 'in current scope',
+                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
+                    'href' => '', 'icon' => 'o-users', 'tone' => 'info',
+                ],
+            ],
+            [
+                'id' => 'tsp-completion', 'type' => 'supporting_kpi', 'w' => 3, 'h' => 1,
+                'props' => [
+                    'label' => 'Completion rate', 'metric' => 'completion_rate',
+                    'formula' => '', 'suffix' => '%', 'decimals' => 1,
+                    'context' => 'completed reports',
+                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
+                    'href' => '', 'icon' => 'o-shield-check', 'tone' => 'success',
+                ],
+            ],
+            [
+                'id' => 'tsp-repair', 'type' => 'supporting_kpi', 'w' => 3, 'h' => 1,
+                'props' => [
+                    'label' => 'Avg repair time', 'metric' => 'avg_repair_hours',
+                    'formula' => '', 'suffix' => 'h', 'decimals' => 2,
+                    'context' => 'per report',
+                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
+                    'href' => '', 'icon' => 'o-clock', 'tone' => 'warning',
+                ],
+            ],
+        ]];
     }
 
     public function render(TspAnalyticsService $service, DashboardLayoutEngine $engine): View
@@ -136,21 +163,19 @@ class TspAnalytics extends Component
             $this->branch
         );
 
-        $metrics = is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [];
+        $metrics = is_array($details['metrics'] ?? null) ? $details['metrics'] : [];
         $context = new DashboardContext($this->region, $this->period, $metrics, [], [], []);
 
         $state = $this->widgetGridState(self::GRID);
         $stored = $this->loadWidgetLayout(self::GRID);
-        $hasWidgets = $stored !== null;
         $layout = $state['customizing'] && $state['draftLayout'] !== []
             ? $state['draftLayout']
-            : ($stored ?? ['version' => 1, 'widgets' => []]);
+            : ($stored ?? $this->defaultTspWidgets());
 
         return view('livewire.tsp-analytics', array_merge($summary, $details, [
             'tspOptions' => $service->tspOptions(),
             'branchOptions' => $service->branchOptions(),
             'tspGrid' => $this->widgetGridView(self::GRID, $layout, $context, $engine),
-            'hasTspWidgets' => $hasWidgets,
             'tspState' => $state,
             'tspCustomizing' => $state['customizing'],
             'canCustomizeTsp' => $this->canCustomizeWidgets(),

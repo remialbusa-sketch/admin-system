@@ -87,14 +87,6 @@ class TspAnalyticsService
 
         return [
             'kpis' => $kpis,
-            // Scalar metrics for customizable widgets; display kpis above
-            // stay exactly as rendered.
-            'metrics' => [
-                'active_tsps' => $activeTsp,
-                'open_records' => $openRecords,
-                'resolution_rate' => $resolutionRate,
-                'total_reports' => $totalReports,
-            ],
             'regionalData' => $visibleRegions,
             'trend' => $trend,
             'totalActive' => $totalActive,
@@ -155,6 +147,16 @@ class TspAnalyticsService
             ['label' => 'Avg repair time', 'value' => round((float) $avgRepair, 2).'h', 'context' => 'per report', 'icon' => 'o-clock', 'tone' => 'warning'],
         ];
 
+        // Scalar metrics for customizable widgets. Note: the TSP page merges
+        // summary + details with details winning, so THESE are the metrics
+        // the visible strip resolves — not summary()'s region scope.
+        $metrics = [
+            'filtered_reports' => $totalReports,
+            'distinct_tsps' => $distinctTsp,
+            'completion_rate' => $totalReports > 0 ? round(($completed / $totalReports) * 100, 1) : 0,
+            'avg_repair_hours' => round((float) $avgRepair, 2),
+        ];
+
         // Per-TSP table merged by normalized identity so a person who appears
         // under several workbook IDs shows once with their full totals.
         $rows = (clone $query)
@@ -197,6 +199,7 @@ class TspAnalyticsService
 
         return [
             'kpis' => $kpis,
+            'metrics' => $metrics,
             'topTsp' => $top,
             'filteredReports' => $totalReports,
         ];

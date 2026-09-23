@@ -272,6 +272,17 @@ class ProductDashboardService
             'regionOptions' => ['All regions', ...self::REGIONS],
             'freshness' => $freshness,
             'kpis' => $kpis,
+            // Status colors keyed by metric for headline widgets.
+            'metric_rag' => [
+                'installed' => 'green',
+                'active' => $ragActive,
+                'warranty_covered' => $ragWarranty,
+                'contracts' => 'green',
+                'annual_bu_charges' => 'green',
+                'missing_pms' => $ragPms,
+                'warranty_expiring_90d' => $ragWarrantyOutlook,
+                'pulled_out' => 'green',
+            ],
             // Scalar metrics exposed to the dashboard grid's expression
             // engine (ratios in percent, matching the RAG thresholds above).
             'metrics' => [
