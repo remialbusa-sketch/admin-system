@@ -233,6 +233,33 @@ class TablesList extends Component
         );
     }
 
+    /**
+     * Clear the import history list (batches + their failures). Table data
+     * is untouched — domain rows just lose their batch link.
+     */
+    public function clearImportHistory(): void
+    {
+        abort_unless(auth()->user()?->isSuperadmin(), 403);
+
+        $count = ImportBatch::query()->count();
+        ImportBatch::query()->delete();
+
+        session()->flash('importsMessage', "Cleared {$count} import records from history. Table data untouched.");
+    }
+
+    /**
+     * Clear the manual-edits log. Table data is untouched.
+     */
+    public function clearEditHistory(): void
+    {
+        abort_unless(auth()->user()?->isSuperadmin(), 403);
+
+        $count = RecordEditLog::query()->count();
+        RecordEditLog::query()->delete();
+
+        session()->flash('editsMessage', "Cleared {$count} manual edit records. Table data untouched.");
+    }
+
     private function mayUndoImport(ImportBatch $batch): bool
     {
         $user = auth()->user();

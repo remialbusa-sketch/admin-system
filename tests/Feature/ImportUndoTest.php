@@ -10,6 +10,7 @@ use App\Models\DynamicRow;
 use App\Models\DynamicTable;
 use App\Models\ImportBatch;
 use App\Models\MondaySyncSetting;
+use App\Models\RecordEditLog;
 use App\Models\ServiceRequest;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -232,5 +233,46 @@ class ImportUndoTest extends TestCase
             ->assertNotFound();
 
         $this->assertDatabaseHas('service_requests', ['id' => $request2->id]);
+    }
+
+    public function test_clear_history_removes_logs_but_keeps_table_data(): void
+    {
+        $owner = $this->superadmin();
+
+        $batch = $this->batch($owner);
+
+        RecordEditLog::create([
+            'user_id' => $owner->id,
+            'table_key' => 'service-requests',
+            'row_id' => 1,
+            'action' => 'update',
+            'field' => 'group_status',
+            'old_value' => 'Open',
+            'new_value' => 'Closed',
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(TablesList::class)
+            ->call('clearImportHistory')
+            ->assertHasNoErrors()
+            ->assertSee('Table data untouched')
+            ->call('clearEditHistory')
+            ->assertHasNoErrors()
+            ->assertSee('Table data untouched');
+
+        $this->assertDatabaseMissing('import_batches', ['id' => $batch->id]);
+        $this->assertDatabaseMissing('record_edit_logs', ['table_key' => 'service-requests']);
+
+        $viewer = User::factory()->president()->create();
+
+        Livewire::actingAs($viewer)
+            ->test(TablesList::class)
+            ->call('clearImportHistory')
+            ->assertForbidden();
+
+        Livewire::actingAs($viewer)
+            ->test(TablesList::class)
+            ->call('clearEditHistory')
+            ->assertForbidden();
     }
 }

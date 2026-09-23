@@ -24,10 +24,14 @@
         </p>
     </div>
 
+    @if (session('tablesMessage'))
+        <div class="flex items-start gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3" role="status">
+            <x-mary-icon name="o-information-circle" class="mt-0.5 h-4 w-4 shrink-0 text-info" />
+            <p class="text-sm font-semibold text-base-content">{{ session('tablesMessage') }}</p>
+        </div>
+    @endif
+
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        @if (session('tablesMessage'))
-            <p class="rounded-md bg-info/10 px-3 py-2 text-xs font-semibold text-info md:col-span-2 xl:col-span-3" role="status">{{ session('tablesMessage') }}</p>
-        @endif
         @foreach ($tables as $table)
             <article class="admin-surface flex min-h-[200px] flex-col p-5 transition hover:-translate-y-0.5 hover:border-primary/40">
                 <div class="flex items-start justify-between gap-4">
@@ -106,10 +110,20 @@
     @endif
 
     <section class="admin-surface p-5 sm:p-6">
-        <h2 class="text-base font-bold text-base-content">Recent imports</h2>
-        <p class="mt-1 text-xs text-base-content/55">Every Excel/CSV import is tracked with a batch ID and row counts.</p>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+                <h2 class="text-base font-bold text-base-content">Recent imports</h2>
+                <p class="mt-1 text-xs text-base-content/55">Every Excel/CSV import is tracked with a batch ID and row counts.</p>
+            </div>
+            @if (($isSuperadmin ?? false) && $imports->isNotEmpty())
+                <button type="button" wire:click="clearImportHistory" wire:confirm="Clear the import history list? Table data stays untouched." class="admin-secondary-button">Clear history</button>
+            @endif
+        </div>
         @if (session('importsMessage'))
-            <p class="mt-3 rounded-md bg-info/10 px-3 py-2 text-xs font-semibold text-info" role="status">{{ session('importsMessage') }}</p>
+            <div class="mt-3 flex items-start gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3" role="status">
+                <x-mary-icon name="o-information-circle" class="mt-0.5 h-4 w-4 shrink-0 text-info" />
+                <p class="text-sm font-semibold text-base-content">{{ session('importsMessage') }}</p>
+            </div>
         @endif
         <div class="mt-4 divide-y divide-base-300">
             @forelse ($imports as $import)
@@ -141,8 +155,21 @@
     </section>
 
     <section class="admin-surface p-5 sm:p-6">
-        <h2 class="text-base font-bold text-base-content">Recent manual edits</h2>
-        <p class="mt-1 text-xs text-base-content/55">Who changed which record by hand — import-driven updates are tracked under Recent imports.</p>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+                <h2 class="text-base font-bold text-base-content">Recent manual edits</h2>
+                <p class="mt-1 text-xs text-base-content/55">Who changed which record by hand — import-driven updates are tracked under Recent imports.</p>
+            </div>
+            @if (($isSuperadmin ?? false) && $recentEdits->isNotEmpty())
+                <button type="button" wire:click="clearEditHistory" wire:confirm="Clear the manual-edits log? Table data stays untouched." class="admin-secondary-button">Clear history</button>
+            @endif
+        </div>
+        @if (session('editsMessage'))
+            <div class="mt-3 flex items-start gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3" role="status">
+                <x-mary-icon name="o-information-circle" class="mt-0.5 h-4 w-4 shrink-0 text-info" />
+                <p class="text-sm font-semibold text-base-content">{{ session('editsMessage') }}</p>
+            </div>
+        @endif
         <div class="mt-4 divide-y divide-base-300">
             @forelse ($recentEdits as $edit)
                 <div class="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
