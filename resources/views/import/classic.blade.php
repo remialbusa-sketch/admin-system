@@ -26,7 +26,7 @@
 
         <div class="admin-surface overflow-hidden">
             <div class="flex items-center gap-2 border-b border-base-300 px-6 py-4">
-                <template x-for="(label, idx) in ['Source file','Map columns','Import']" :key="idx">
+                <template x-for="(label, idx) in stepLabels()" :key="idx">
                     <span class="flex items-center gap-2">
                         <span class="flex h-6 w-6 items-center justify-center rounded-full border text-[11px] font-bold tabular-nums"
                               :class="step > idx+1 ? 'border-primary bg-primary text-primary-content' : (step === idx+1 ? 'border-primary text-primary' : 'border-base-300 text-base-content/40')">
@@ -161,13 +161,13 @@
                         <span class="text-xs text-base-content/50" x-text="titleColumn ? `Title column: ${titleColumn}` : 'No title column selected — rows fall back to a content digest.'"></span>
                         <div class="flex flex-wrap gap-2">
                             <button type="button" @click="phase = 'header'" class="admin-secondary-button">Back</button>
-                            <button type="button" @click="phase = 'columns'" class="admin-primary-button">Next</button>
+                            <button type="button" @click="phase = 'columns'; step = 3" class="admin-primary-button">Next</button>
                         </div>
                     </div>
                 </div>
 
-                {{-- Customize columns (dynamic tables): type each column, add new ones --}}
-                <div x-show="preview && !result && phase === 'columns' && isDynamic" x-cloak class="space-y-4">
+                {{-- Customize columns: the final step before import --}}
+                <div x-show="preview && !result && phase === 'columns'" x-cloak class="space-y-4">
                     <div>
                         <h3 class="text-lg font-bold text-base-content">Customize your columns</h3>
                         <p class="mt-0.5 text-xs text-base-content/55">Choose what each file column becomes — an existing field or a new column with its own type.</p>
@@ -186,7 +186,9 @@
                                         <template x-for="field in (targets?.fields || [])" :key="field.key">
                                             <option :value="field.key" x-text="field.label"></option>
                                         </template>
-                                        <option value="__new__">＋ New column…</option>
+                                        <template x-if="isDynamic">
+                                            <option value="__new__">＋ New column…</option>
+                                        </template>
                                     </select>
                                 </div>
                                 <div x-show="newColumns[col.letter]" x-cloak class="grid grid-cols-1 gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 sm:grid-cols-2">
@@ -208,63 +210,16 @@
                         </template>
                     </div>
 
-                    <div class="flex items-center justify-between gap-3 border-t border-base-300 pt-4">
-                        <span class="text-xs text-base-content/50" x-text="`${newColumnsPayload().length} new column(s)`"></span>
-                        <div class="flex flex-wrap gap-2">
-                            <button type="button" @click="phase = 'title'" class="admin-secondary-button">Back</button>
-                            <button type="button" @click="phase = 'map'" class="admin-primary-button">Next</button>
+                    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-4">
+                        <div class="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em]">
+                            <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums" x-text="`${columnsMappedCount()} mapped`"></span>
+                            <template x-for="label in columnsMissingRequired()" :key="label">
+                                <span class="rounded-full bg-error/10 px-3 py-1 text-error" x-text="`Required: ${label}`"></span>
+                            </template>
+                            <span x-show="isDynamic" class="rounded-full bg-base-200 px-3 py-1 text-base-content/60 tabular-nums" x-text="`${newColumnsPayload().length} new`"></span>
                         </div>
-                    </div>
-                </div>
-
-                {{-- Mapping --}}
-                <div x-show="preview && !result && phase === 'map'" x-cloak class="rounded-md border border-base-300">
-                    <div class="flex flex-wrap items-center gap-3 border-b border-base-300 bg-base-200/40 px-4 py-3">
-                        <p class="text-xs font-bold uppercase tracking-[0.08em] text-base-content/60" x-text="`Map columns — ${targets?.label || tableKey}`"></p>
-                        <span class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-primary tabular-nums" x-text="`${mappedCount()} / ${(targets?.fields || []).length} mapped`"></span>
-                        <template x-for="label in missingRequired()" :key="label">
-                            <span class="rounded-full bg-error/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-error" x-text="`Required: ${label}`"></span>
-                        </template>
-
-                        <div class="ml-auto flex flex-wrap items-center gap-3">
-                            <label class="flex items-center gap-1.5 text-xs text-base-content/60">
-                                <input type="checkbox" x-model="unmappedOnly">
-                                Unmapped only
-                            </label>
-                            <input type="search" x-model="fieldSearch" placeholder="Filter fields..." class="admin-control h-8 w-44 py-1 text-xs" aria-label="Filter fields">
-                        </div>
-                    </div>
-
-                    <div class="max-h-[46vh] divide-y divide-base-300 overflow-y-auto">
-                        <template x-for="field in visibleFields()" :key="field.key">
-                            <div class="grid grid-cols-1 items-center gap-2 px-4 py-2.5 sm:grid-cols-[minmax(0,210px)_minmax(0,1fr)_minmax(0,200px)] sm:gap-3" :class="field.required && !mapping[field.key] ? 'bg-error/5' : ''">
-                                <div class="min-w-0">
-                                    <p class="flex items-center gap-1.5 truncate text-sm font-semibold text-base-content">
-                                        <span x-text="field.label"></span>
-                                        <span x-show="field.required" class="text-error" title="Required field">*</span>
-                                        <span x-show="mappingSource[field.key] === 'auto'" x-cloak class="rounded-full bg-info/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-info">Auto</span>
-                                        <span x-show="mappingSource[field.key] === 'recalled'" x-cloak class="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary">Last used</span>
-                                        <span x-show="mappingSource[field.key] === 'manual'" x-cloak class="rounded-full bg-base-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-base-content/60">Manual</span>
-                                    </p>
-                                    <p class="text-[11px] uppercase tracking-[0.06em] text-base-content/45" x-text="field.kind"></p>
-                                </div>
-                                <select x-model="mapping[field.key]" @change="markManual(field.key)" class="admin-control w-full font-mono text-xs">
-                                    <option value="">-- not mapped --</option>
-                                    <template x-for="col in (preview?.columns || [])" :key="col.letter">
-                                        <option :value="col.letter" x-text="`${col.letter} · ${col.label || '(untitled)'}`"></option>
-                                    </template>
-                                </select>
-                                <p class="hidden truncate text-xs text-base-content/50 sm:block" :title="sampleFor(field.key)" x-text="sampleFor(field.key) || '--'"></p>
-                            </div>
-                        </template>
-
-                        <p x-show="visibleFields().length === 0" class="px-4 py-6 text-center text-sm text-base-content/55">No fields match the current filter.</p>
-                    </div>
-
-                    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 px-4 py-3">
-                        <span class="text-xs text-base-content/50">Only mapped columns are imported; existing records are updated by stable identifiers.</span>
                         <div class="flex flex-wrap gap-2">
-                            <button type="button" @click="phase = 'header'" class="admin-secondary-button">Back</button>
+                            <button type="button" @click="columnsBack()" class="admin-secondary-button">Back</button>
                             <button type="button" @click="execute()" :disabled="executing" class="admin-primary-button">
                                 <span x-show="!executing" x-text="`Start import (${Number(preview?.totalRows || 0).toLocaleString()} rows)`"></span>
                                 <span x-show="executing">Importing...</span>
@@ -272,6 +227,7 @@
                         </div>
                     </div>
                 </div>
+
             </div>
         </div>
 
@@ -304,8 +260,6 @@
                 dataStart: 2,
                 mapping: {},
                 mappingSource: {},
-                fieldSearch: '',
-                unmappedOnly: false,
                 result: null,
 
                 init() {
@@ -470,10 +424,6 @@
                     });
                 },
 
-                markManual(key) {
-                    this.mappingSource[key] = this.mapping[key] ? 'manual' : '';
-                },
-
                 async reAnalyze() {
                     if (!this.preview) return;
                     try { await this.analyze(); } catch {}
@@ -487,14 +437,43 @@
                     }
                 },
 
-                /** Next: analyze with the chosen rows, then title column (dynamic) or mapping. */
+                /** Next: analyze with the chosen rows, then title column (dynamic) or customize step. */
                 async goMap() {
                     try {
                         await this.analyze();
                         this.newColumns = {};
                         this.titleColumn = this.mapping['__identity__'] || this.mapping['name'] || '';
-                        this.phase = this.isDynamic ? 'title' : 'map';
+                        this.phase = this.isDynamic ? 'title' : 'columns';
+                        this.step = 2;
                     } catch {}
+                },
+
+                stepLabels() {
+                    return this.isDynamic
+                        ? ['Source file', 'First column', 'Customize columns']
+                        : ['Source file', 'Customize columns', 'Import'];
+                },
+
+                columnsBack() {
+                    if (this.isDynamic) {
+                        this.phase = 'title';
+                        this.step = 2;
+                    } else {
+                        this.phase = 'header';
+                        this.step = 1;
+                    }
+                },
+
+                columnsMappedCount() {
+                    return Object.values(this.mapping || {}).filter((letter) => letter !== '').length
+                        + this.newColumnsPayload().length;
+                },
+
+                columnsMissingRequired() {
+                    const mappedKeys = new Set(
+                        Object.entries(this.mapping || {}).filter(([, letter]) => letter !== '').map(([key]) => key),
+                    );
+                    return (targets?.fields || []).filter((field) => field.required && !mappedKeys.has(field.key)).map((field) => field.label);
                 },
 
                 /** Title column pick: the stable identity. Name falls back to
@@ -546,29 +525,6 @@
                         .map(([letter, draft]) => ({ letter, name: draft.name.trim(), type: draft.type || 'text' }));
                 },
 
-                visibleFields() {
-                    const term = (this.fieldSearch || '').trim().toLowerCase();
-                    return (targets?.fields || []).filter((field) => {
-                        if (this.unmappedOnly && this.mapping[field.key]) return false;
-                        if (!term) return true;
-                        return (field.label || '').toLowerCase().includes(term) || (field.key || '').toLowerCase().includes(term);
-                    });
-                },
-
-                mappedCount() {
-                    return Object.values(this.mapping || {}).filter(v => v !== '').length;
-                },
-
-                missingRequired() {
-                    return (targets?.fields || []).filter(f => f.required && !this.mapping[f.key]).map(f => f.label);
-                },
-
-                sampleFor(key) {
-                    const col = (this.preview?.columns || []).find(c => c.letter === this.mapping[key]);
-                    const samples = (col?.samples || []).filter(Boolean).slice(0,2);
-                    return samples.length ? 'e.g. ' + samples.join(' | ') : '';
-                },
-
                 failedRowsUrl() {
                     return (this.failedRowsUrlTemplate || '').replace('__BATCH__', this.result?.batchId ?? '');
                 },
@@ -617,8 +573,6 @@
                     this.dataStart = 2;
                     this.mapping = {};
                     this.mappingSource = {};
-                    this.fieldSearch = '';
-                    this.unmappedOnly = false;
                     this.titleColumn = '';
                     this.newColumns = {};
                     (targets?.fields || []).forEach(f => { this.mapping[f.key] = ''; });
