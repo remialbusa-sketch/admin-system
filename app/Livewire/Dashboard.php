@@ -382,6 +382,58 @@ class Dashboard extends Component
     }
 
     /**
+     * The metric vocabulary for widget settings: the shipped PDB defaults
+     * plus "alias.metric" for every table connected to this dashboard.
+     *
+     * @return array<string, string> key => label
+     */
+    private function metricOptions(): array
+    {
+        $options = config('dashboard.metric_labels', []);
+        $dashboard = $this->dashboard();
+
+        if ($dashboard === null) {
+            return $options;
+        }
+
+        $catalog = app(TableCatalog::class);
+        $aggregation = app(TableAggregationService::class);
+
+        foreach ($dashboard->sources()->get() as $source) {
+            $label = $catalog->resolve($source->table_key)['label'] ?? $source->table_key;
+            $summary = $aggregation->summary($source->table_key, $this->regionScope());
+            $metrics = is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [];
+
+            foreach (array_keys($metrics) as $name) {
+                $options[$source->alias.'.'.$name] = $label.' · '.ucfirst(str_replace('_', ' ', $name));
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * First connected-source metric key ("alias.metric"), or null when this
+     * dashboard has no sources. New widgets default here instead of the
+     * shipped PDB metric so source-connected boards stop opening on the
+     * Product Database.
+     */
+    private function firstSourceMetricKey(): ?string
+    {
+        if ($this->dashboard() === null) {
+            return null;
+        }
+
+        foreach (array_keys($this->metricOptions()) as $key) {
+            if (str_contains($key, '.')) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * The connected sources resolved to aggregation summaries, keyed by alias.
      *
      * @param  array<string, mixed>  $filters
@@ -688,12 +740,32 @@ class Dashboard extends Component
         $definition = app(WidgetRegistry::class)->make($type)->definition();
         $size = $definition['defaultSize'] ?? ['w' => 4, 'h' => 2];
 
+        $props = $definition['defaultProps'] ?? [];
+
+        // New widgets on a source-connected dashboard measure the connected
+        // table, not the Product Database: seed bare metric defaults to the
+        // first connected source's metric. Sourceless boards keep the PDB
+        // factory defaults.
+        if (($firstSourceMetric = $this->firstSourceMetricKey()) !== null) {
+            foreach ($definition['settings'] ?? [] as $field) {
+                $fieldKey = $field['key'] ?? '';
+
+                if (($field['type'] ?? '') === 'metric'
+                    && $fieldKey !== ''
+                    && is_string($props[$fieldKey] ?? null)
+                    && ! str_contains($props[$fieldKey], '.')
+                ) {
+                    $props[$fieldKey] = $firstSourceMetric;
+                }
+            }
+        }
+
         $this->draftLayout['widgets'][] = [
             'id' => $type.'-'.strtolower(Str::random(6)),
             'type' => $type,
             'w' => (int) min(12, max(1, $size['w'])),
             'h' => (int) min(6, max(1, $size['h'])),
-            'props' => $definition['defaultProps'] ?? [],
+            'props' => $props,
         ];
 
         $this->dispatch('close-modal', name: 'add-widget');
@@ -723,13 +795,19 @@ class Dashboard extends Component
         $this->settingsGraphCount = 0;
         $this->settingsOpenCount++;
 
-        // Dataset fields offer the dashboard's full vocabulary: shipped
-        // defaults plus every connected source's datasets (alias.name).
+        // Dataset + metric fields offer the dashboard's full vocabulary:
+        // shipped defaults plus every connected source's datasets/metrics
+        // (alias.name). Metric fields were previously stuck on the static
+        // PDB list, so widgets on source-connected dashboards always
+        // defaulted to the Product Database.
         $datasetOptions = $this->datasetOptions();
+        $metricOptions = $this->metricOptions();
 
         foreach ($this->settingsSchema as $index => $field) {
             if (($field['type'] ?? '') === 'dataset') {
                 $this->settingsSchema[$index]['options'] = array_keys($datasetOptions);
+            } elseif (($field['type'] ?? '') === 'metric') {
+                $this->settingsSchema[$index]['options'] = array_keys($metricOptions);
             }
         }
 
@@ -744,6 +822,29 @@ class Dashboard extends Component
 
             if ($key !== '' && ! array_key_exists($key, $props)) {
                 $props[$key] = $field['default'] ?? ($defaultProps[$key] ?? '');
+            }
+        }
+
+        // A widget opened on a source-connected dashboard should not keep a
+        // PDB default it can no longer explain: when the seeded metric is
+        // outside the live vocabulary, fall back to the first connected
+        // source's metric. Saved values already in the vocabulary are left
+        // untouched.
+        $sourceMetricKeys = array_values(array_filter(
+            array_keys($metricOptions),
+            fn (string $key): bool => str_contains($key, '.'),
+        ));
+
+        if ($sourceMetricKeys !== []) {
+            foreach ($this->settingsSchema as $field) {
+                $key = $field['key'] ?? '';
+
+                if (($field['type'] ?? '') === 'metric'
+                    && $key !== ''
+                    && ! array_key_exists((string) ($props[$key] ?? ''), $metricOptions)
+                ) {
+                    $props[$key] = $sourceMetricKeys[0];
+                }
             }
         }
 
@@ -871,7 +972,9 @@ class Dashboard extends Component
                     continue;
                 }
             } elseif ($type === 'metric') {
-                $allowed = $field['options'] ?? array_keys(config('dashboard.metric_labels', []));
+                // Validate against the dashboard's live vocabulary (shipped
+                // metrics + connected sources), not the static PDB list.
+                $allowed = $field['options'] ?? array_keys($this->metricOptions());
 
                 if (! in_array((string) $value, $allowed, true)) {
                     $errors[] = ($field['label'] ?? $key).' is not a known metric.';
@@ -1178,6 +1281,7 @@ class Dashboard extends Component
                 'metricLabels' => config('dashboard.metric_labels', []),
                 'metricValues' => [],
                 'datasetOptions' => $this->datasetOptions(),
+                'metricOptions' => $this->metricOptions(),
                 'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
                 'dashboard' => null,
                 'canEditDashboard' => false,
@@ -1247,6 +1351,7 @@ class Dashboard extends Component
             'metricLabels' => config('dashboard.metric_labels', []),
             'metricValues' => array_filter(is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], 'is_numeric'),
             'datasetOptions' => $this->datasetOptions(),
+            'metricOptions' => $this->metricOptions(),
             'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
             'dashboard' => $dashboard,
             'canEditDashboard' => $this->canEditDashboard(),

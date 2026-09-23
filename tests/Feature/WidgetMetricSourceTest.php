@@ -1,0 +1,184 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Livewire\Dashboard;
+use App\Models\Dashboard as DashboardModel;
+use App\Models\DynamicRow;
+use App\Models\DynamicTable;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
+use Tests\TestCase;
+
+class WidgetMetricSourceTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private function sourcedDashboardFor(User $owner): DashboardModel
+    {
+        DynamicTable::create(['key' => 'pdb_testing', 'name' => 'PDB Testing', 'created_by' => $owner->id]);
+
+        foreach (['r1', 'r2', 'r3'] as $index => $recordId) {
+            DynamicRow::create([
+                'table_key' => 'pdb_testing',
+                'name' => 'Row '.($index + 1),
+                'source_system' => 'test',
+                'source_record_id' => $recordId,
+            ]);
+        }
+
+        $dashboard = DashboardModel::create([
+            'owner_id' => $owner->id,
+            'name' => 'Testing PDB',
+            'layout' => ['version' => 1, 'widgets' => []],
+        ]);
+
+        $dashboard->sources()->create(['table_key' => 'pdb_testing', 'alias' => 't', 'position' => 0]);
+
+        return $dashboard;
+    }
+
+    public function test_metric_dropdown_offers_connected_source_metrics(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->assertViewHas('metricOptions', function (array $options): bool {
+                return ($options['t.rows'] ?? null) === 'PDB Testing · Rows'
+                    && array_key_exists('installed', $options);
+            });
+    }
+
+    public function test_sourceless_dashboard_keeps_pdb_metric_vocabulary(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = DashboardModel::create([
+            'owner_id' => $owner->id,
+            'name' => 'No sources',
+            'layout' => ['version' => 1, 'widgets' => []],
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->assertViewHas('metricOptions', function (array $options): bool {
+                foreach (array_keys($options) as $key) {
+                    if (str_contains($key, '.')) {
+                        return false;
+                    }
+                }
+
+                return array_key_exists('installed', $options);
+            });
+    }
+
+    public function test_new_widget_defaults_to_the_connected_source_metric(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        $component = Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->call('toggleCustomizing')
+            ->call('addWidget', 'kpi_card')
+            ->assertHasNoErrors();
+
+        $this->assertSame('t.rows', $component->get('draftLayout')['widgets'][0]['props']['metric']);
+    }
+
+    public function test_new_widget_keeps_pdb_default_without_sources(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = DashboardModel::create([
+            'owner_id' => $owner->id,
+            'name' => 'No sources',
+            'layout' => ['version' => 1, 'widgets' => []],
+        ]);
+
+        $component = Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->call('toggleCustomizing')
+            ->call('addWidget', 'kpi_card')
+            ->assertHasNoErrors();
+
+        $this->assertSame('installed', $component->get('draftLayout')['widgets'][0]['props']['metric']);
+    }
+
+    public function test_apply_accepts_namespaced_metric_and_rejects_unknown(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        $component = Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->call('toggleCustomizing')
+            ->call('addWidget', 'kpi_card')
+            ->assertHasNoErrors();
+
+        $widgetId = $component->get('draftLayout')['widgets'][0]['id'];
+
+        // A namespaced source metric passes validation and lands in the draft.
+        $component
+            ->call('editWidget', $widgetId)
+            ->set('settingsProps.label', 'Test rows')
+            ->set('settingsProps.metric', 't.rows')
+            ->call('applyWidgetSettings')
+            ->assertSet('settingsError', null);
+
+        $this->assertSame('t.rows', $component->get('draftLayout')['widgets'][0]['props']['metric']);
+
+        // An unknown metric is rejected with a settings error.
+        $component
+            ->call('editWidget', $widgetId)
+            ->set('settingsProps.metric', 't.not_a_metric')
+            ->call('applyWidgetSettings')
+            ->assertSet('settingsError', 'Metric is not a known metric.');
+    }
+
+    public function test_edit_reseeds_an_unknown_metric_to_the_source_metric(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        $component = Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->call('toggleCustomizing')
+            ->call('addWidget', 'kpi_card')
+            ->assertHasNoErrors();
+
+        $widgetId = $component->get('draftLayout')['widgets'][0]['id'];
+
+        $component->call('editWidget', $widgetId);
+        $component->set('settingsProps.metric', 'bogus_metric');
+        $component->call('editWidget', $widgetId);
+
+        $this->assertSame('t.rows', $component->get('settingsProps')['metric']);
+    }
+
+    public function test_kpi_widget_renders_the_connected_source_value(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $dashboard = $this->sourcedDashboardFor($owner);
+
+        $dashboard->update([
+            'layout' => [
+                'version' => 1,
+                'widgets' => [[
+                    'id' => 'kpi-1',
+                    'type' => 'kpi_card',
+                    'w' => 4,
+                    'h' => 2,
+                    'props' => ['label' => 'Test rows', 'metric' => 't.rows'],
+                ]],
+            ],
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(Dashboard::class, ['dashboard' => $dashboard])
+            ->assertViewHas('grid', function (array $grid): bool {
+                return ($grid['widgets'][0]['data']['value'] ?? null) === 3;
+            });
+    }
+}

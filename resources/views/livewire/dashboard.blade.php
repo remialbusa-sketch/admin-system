@@ -238,7 +238,7 @@
                         @elseif (($field['type'] ?? '') === 'metric')
                             <select id="widget-field-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
                                 @foreach (($field['options'] ?? array_keys($metricLabels)) as $option)
-                                    <option value="{{ $option }}">{{ $metricLabels[$option] ?? ucfirst($option) }}</option>
+                                    <option value="{{ $option }}">{{ $metricOptions[$option] ?? $metricLabels[$option] ?? ucfirst($option) }}</option>
                                 @endforeach
                             </select>
                         @elseif (($field['type'] ?? '') === 'dataset')
