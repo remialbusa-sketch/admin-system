@@ -17,7 +17,10 @@
              failedRowsUrlTemplate: @js(route('tables.import.classic.failed-rows', ['table' => $tableKey, 'batch' => '__BATCH__'])),
              uploadUrl: @js(route('import.upload-stream')),
              uploadChunkUrl: @js(route('import.upload-chunk')),
-             targets: @js($targets)
+             targets: @js($targets),
+             isDynamic: @js($isDynamic ?? false),
+             columnTypes: @js($columnTypes ?? []),
+             columnTypeHelp: @js($columnTypeHelp ?? [])
          })"
          x-init="init()">
 
@@ -122,6 +125,98 @@
                     </div>
                 </div>
 
+                {{-- Title column (dynamic tables): "What is your first column?" --}}
+                <div x-show="preview && !result && phase === 'title' && isDynamic" x-cloak class="space-y-4">
+                    <div>
+                        <h3 class="text-lg font-bold text-base-content">What is your first column?</h3>
+                        <p class="mt-0.5 text-xs text-base-content/55">This will become the title of each row. Click a column to select it.</p>
+                    </div>
+
+                    <div class="overflow-x-auto rounded-md border border-base-300">
+                        <table class="min-w-full border-collapse text-left text-xs">
+                            <thead>
+                                <tr class="border-b border-base-300 bg-base-200/60">
+                                    <th class="w-12 px-3 py-2"></th>
+                                    <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
+                                        <th class="px-1 py-1 text-center">
+                                            <button type="button" @click="pickTitleColumn(col.letter)" :title="`Use column ${col.letter} as the title`" class="w-full rounded px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] transition-colors" :class="titleColumn === col.letter ? 'bg-primary text-primary-content' : 'text-base-content/45 hover:bg-primary/10 hover:text-primary'" x-text="col.letter"></button>
+                                        </th>
+                                    </template>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-base-300">
+                                <template x-for="row in (preview?.topRows || []).slice(0,6)" :key="row.rowNumber">
+                                    <tr class="hover:bg-base-200/50">
+                                        <td class="px-3 py-1.5 tabular-nums text-base-content/40" x-text="row.rowNumber"></td>
+                                        <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
+                                            <td class="max-w-[150px] truncate px-3 py-1.5" :class="titleColumn === col.letter ? 'bg-primary/15 font-semibold text-base-content' : 'text-base-content/70'" :title="row.cells[col.letter] || ''" x-text="row.cells[col.letter] || ''"></td>
+                                        </template>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-3 border-t border-base-300 pt-4">
+                        <span class="text-xs text-base-content/50" x-text="titleColumn ? `Title column: ${titleColumn}` : 'No title column selected — rows fall back to a content digest.'"></span>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" @click="phase = 'header'" class="admin-secondary-button">Back</button>
+                            <button type="button" @click="phase = 'columns'" class="admin-primary-button">Next</button>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- Customize columns (dynamic tables): type each column, add new ones --}}
+                <div x-show="preview && !result && phase === 'columns' && isDynamic" x-cloak class="space-y-4">
+                    <div>
+                        <h3 class="text-lg font-bold text-base-content">Customize your columns</h3>
+                        <p class="mt-0.5 text-xs text-base-content/55">Choose what each file column becomes — an existing field or a new column with its own type.</p>
+                    </div>
+
+                    <div class="max-h-[46vh] divide-y divide-base-300 overflow-y-auto rounded-md border border-base-300">
+                        <template x-for="col in (preview?.columns || [])" :key="col.letter">
+                            <div class="space-y-2 px-4 py-3">
+                                <div class="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:gap-3">
+                                    <div class="min-w-0">
+                                        <p class="truncate text-sm font-semibold text-base-content"><span class="mr-1.5 font-mono text-xs text-base-content/45" x-text="col.letter"></span><span x-text="col.label || '(untitled)'"></span></p>
+                                        <p class="truncate text-xs text-base-content/50" x-text="columnSample(col)"></p>
+                                    </div>
+                                    <select :value="columnTarget(col.letter)" @change="onColumnTarget(col.letter, $el.value, col.label)" class="admin-control w-full font-mono text-xs" :aria-label="`Target for column ${col.letter}`">
+                                        <option value="">-- not imported --</option>
+                                        <template x-for="field in (targets?.fields || [])" :key="field.key">
+                                            <option :value="field.key" x-text="field.label"></option>
+                                        </template>
+                                        <option value="__new__">＋ New column…</option>
+                                    </select>
+                                </div>
+                                <div x-show="newColumns[col.letter]" x-cloak class="grid grid-cols-1 gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 sm:grid-cols-2">
+                                    <div>
+                                        <label class="mb-1 block text-[11px] font-bold uppercase tracking-[0.08em] text-base-content/55">New column name</label>
+                                        <input type="text" x-model="newColumns[col.letter].name" class="admin-control w-full text-xs" maxlength="100">
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-[11px] font-bold uppercase tracking-[0.08em] text-base-content/55">Type</label>
+                                        <select x-model="newColumns[col.letter].type" class="admin-control w-full text-xs">
+                                            <template x-for="(label, key) in (columnTypes || {})" :key="key">
+                                                <option :value="key" x-text="label"></option>
+                                            </template>
+                                        </select>
+                                        <p class="mt-1 text-[11px] text-base-content/50" x-text="(columnTypeHelp || {})[newColumns[col.letter].type] || ''"></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-3 border-t border-base-300 pt-4">
+                        <span class="text-xs text-base-content/50" x-text="`${newColumnsPayload().length} new column(s)`"></span>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" @click="phase = 'title'" class="admin-secondary-button">Back</button>
+                            <button type="button" @click="phase = 'map'" class="admin-primary-button">Next</button>
+                        </div>
+                    </div>
+                </div>
+
                 {{-- Mapping --}}
                 <div x-show="preview && !result && phase === 'map'" x-cloak class="rounded-md border border-base-300">
                     <div class="flex flex-wrap items-center gap-3 border-b border-base-300 bg-base-200/40 px-4 py-3">
@@ -188,11 +283,13 @@
 
     <script>
         document.addEventListener('alpine:init', () => {
-            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets }) => ({
-                tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets,
+            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp }) => ({
+                tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp,
                 backUrl: @js($backUrl),
                 step: 1,
                 phase: 'header',
+                titleColumn: '',
+                newColumns: {},
                 uploading: false,
                 analyzing: false,
                 executing: false,
@@ -390,12 +487,63 @@
                     }
                 },
 
-                /** Next: analyze with the chosen rows, then show mapping. */
+                /** Next: analyze with the chosen rows, then title column (dynamic) or mapping. */
                 async goMap() {
                     try {
                         await this.analyze();
-                        this.phase = 'map';
+                        this.newColumns = {};
+                        this.titleColumn = this.mapping['__identity__'] || this.mapping['name'] || '';
+                        this.phase = this.isDynamic ? 'title' : 'map';
                     } catch {}
+                },
+
+                /** Title column pick: the stable identity. Name falls back to
+                    it automatically when unmapped, so one click titles rows
+                    without tripping the one-column-per-field rule. */
+                pickTitleColumn(letter) {
+                    this.titleColumn = letter;
+                    this.mapping['__identity__'] = letter;
+                    this.mappingSource['__identity__'] = 'manual';
+                },
+
+                columnSample(col) {
+                    const samples = (col?.samples || []).filter(Boolean).slice(0, 2);
+                    return samples.length ? 'e.g. ' + samples.join(' | ') : '';
+                },
+
+                /** Field key currently fed by this letter, '__new__', or ''. */
+                columnTarget(letter) {
+                    if (this.newColumns && this.newColumns[letter]) {
+                        return '__new__';
+                    }
+                    const found = Object.entries(this.mapping || {}).find(([, mapped]) => mapped === letter);
+                    return found ? found[0] : '';
+                },
+
+                onColumnTarget(letter, value, headerLabel) {
+                    if (value === '__new__') {
+                        Object.keys(this.mapping || {}).forEach((key) => {
+                            if (this.mapping[key] === letter) {
+                                this.mapping[key] = '';
+                                this.mappingSource[key] = '';
+                            }
+                        });
+                        if (!this.newColumns[letter]) {
+                            this.newColumns[letter] = { name: headerLabel || '', type: 'text' };
+                        }
+                    } else {
+                        this.newColumns[letter] = null;
+                        if (value) {
+                            this.mapping[value] = letter;
+                            this.mappingSource[value] = 'manual';
+                        }
+                    }
+                },
+
+                newColumnsPayload() {
+                    return Object.entries(this.newColumns || {})
+                        .filter(([, draft]) => draft && (draft.name || '').trim() !== '')
+                        .map(([letter, draft]) => ({ letter, name: draft.name.trim(), type: draft.type || 'text' }));
                 },
 
                 visibleFields() {
@@ -445,6 +593,7 @@
                                 headerRow: this.headerRow,
                                 dataStart: this.dataStart,
                                 mapping: this.mapping,
+                                newColumns: this.newColumnsPayload(),
                             }),
                         });
                         const data = await this.readJson(resp);
@@ -470,6 +619,8 @@
                     this.mappingSource = {};
                     this.fieldSearch = '';
                     this.unmappedOnly = false;
+                    this.titleColumn = '';
+                    this.newColumns = {};
                     (targets?.fields || []).forEach(f => { this.mapping[f.key] = ''; });
                     this.step = 1;
                     this.phase = 'header';

@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CustomTableColumn;
 use App\Models\DynamicTable;
 use App\Models\ImportBatch;
+use App\Services\ColumnTypeRegistry;
 use App\Services\DynamicTableImportService;
 use App\Services\ImportMappingService;
 use App\Services\SourceWorkbookImportService;
@@ -38,7 +40,38 @@ class ClassicImportController extends Controller
             'title' => $targets['label'],
             'backUrl' => $this->backUrl($table),
             'targets' => $targets,
+            'isDynamic' => (bool) $targets['dynamic'],
+            'columnTypes' => $this->importableColumnTypes(),
+            'columnTypeHelp' => [
+                'text' => 'Free form information and annotations',
+                'long_text' => 'Longer notes and descriptions',
+                'number' => 'Numeric values for math and totals',
+                'status' => 'Indicates the state or progress of each row',
+                'dropdown' => 'Assign labels from a list to each row',
+                'checkbox' => 'Checked or unchecked flag',
+                'date' => 'Calendar dates',
+                'email' => 'Email addresses',
+                'phone' => 'Phone numbers',
+                'link' => 'Web links',
+                'location' => 'Places and addresses',
+                'person' => 'People on each row',
+                'files' => 'File attachments',
+            ],
         ]);
+    }
+
+    /**
+     * Types a file column may be created as during import (dynamic tables).
+     * Formula is excluded — it computes instead of storing imported values.
+     *
+     * @return array<string, string> key => label
+     */
+    private function importableColumnTypes(): array
+    {
+        return collect(array_keys(app(ColumnTypeRegistry::class)->all()))
+            ->reject(fn (string $key): bool => $key === 'formula')
+            ->mapWithKeys(fn (string $key): array => [$key => Str::headline($key)])
+            ->all();
     }
 
     /**
@@ -134,6 +167,103 @@ class ClassicImportController extends Controller
     }
 
     /**
+     * Create user-requested columns from unmapped file columns (dynamic
+     * tables only) and fold them into the mapping + field catalog, so the
+     * required/duplicates/unknown checks below cover them like natives.
+     * Returns the extended mapping.
+     *
+     * @param  array<string, string>  $mapping
+     * @return array<string, string>
+     */
+    private function createImportColumns(Request $request, string $table, array &$targets, array $mapping): array
+    {
+        $entries = collect($request->input('newColumns', []))->values();
+
+        if ($entries->isEmpty()) {
+            return $mapping;
+        }
+
+        if (! $targets['dynamic']) {
+            abort(response()->json(['message' => 'Only user-created tables accept new columns during import.'], 422));
+        }
+
+        abort_unless($request->user()?->canEditRecords(), 403);
+
+        $allowedTypes = array_keys($this->importableColumnTypes());
+        $existingNames = CustomTableColumn::query()->where('table_key', $table)->pluck('name')->all();
+        $validated = [];
+
+        foreach ($entries as $index => $entry) {
+            $position = $index + 1;
+            $letter = strtoupper(trim((string) ($entry['letter'] ?? '')));
+            $name = trim((string) ($entry['name'] ?? ''));
+            $type = trim((string) ($entry['type'] ?? ''));
+
+            if (! preg_match('/^[A-Z]{1,3}$/', $letter)) {
+                abort(response()->json(['message' => "New column #{$position}: invalid source column."], 422));
+            }
+
+            if ($name === '' || mb_strlen($name) > 100) {
+                abort(response()->json(['message' => "New column #{$position}: give it a name (max 100 characters)."], 422));
+            }
+
+            if (in_array($name, $existingNames, true)) {
+                abort(response()->json(['message' => "A column named '{$name}' already exists on this table."], 422));
+            }
+
+            if (! in_array($type, $allowedTypes, true)) {
+                abort(response()->json(['message' => "New column '{$name}': unknown column type."], 422));
+            }
+
+            $existingNames[] = $name;
+            $validated[] = ['letter' => $letter, 'name' => $name, 'type' => $type];
+        }
+
+        $position = (int) CustomTableColumn::query()->where('table_key', $table)->max('position') + 1;
+
+        foreach ($validated as $entry) {
+            $column = CustomTableColumn::create([
+                'table_key' => $table,
+                'name' => $entry['name'],
+                'type' => $entry['type'],
+                'settings' => $this->defaultColumnSettings($entry['type']),
+                'position' => $position++,
+                'created_by' => $request->user()?->id,
+            ]);
+
+            $mapping[$column->columnKey()] = $entry['letter'];
+            $targets['fields'][] = [
+                'key' => $column->columnKey(),
+                'label' => $column->name,
+                'required' => false,
+                'kind' => $column->type,
+            ];
+        }
+
+        return $mapping;
+    }
+
+    /**
+     * Starter settings for import-created columns — mirrors
+     * ManagedTable::defaultColumnSettings so imported values validate.
+     */
+    private function defaultColumnSettings(string $type): array
+    {
+        return match ($type) {
+            'status', 'dropdown' => [
+                'multi' => $type === 'dropdown',
+                'options' => [
+                    ['index' => 0, 'label' => 'New', 'color' => '#64748B'],
+                    ['index' => 1, 'label' => 'In Progress', 'color' => '#2563EB'],
+                    ['index' => 2, 'label' => 'Done', 'color' => '#16A34A'],
+                ],
+            ],
+            'number' => ['precision' => 2],
+            default => [],
+        };
+    }
+
+    /**
      * Execute the import with the user's column mapping. Managed tables go
      * through SourceWorkbookImportService; dynamic (user-created) tables go
      * through DynamicTableImportService.
@@ -169,6 +299,8 @@ class ClassicImportController extends Controller
         $mapping = collect($request->input('mapping', []))
             ->map(fn ($letter): string => strtoupper(trim((string) $letter)))
             ->all();
+
+        $mapping = $this->createImportColumns($request, $table, $targets, $mapping);
 
         $missing = collect($targets['fields'])
             ->filter(fn (array $field): bool => $field['required'] && ($mapping[$field['key']] ?? '') === '')

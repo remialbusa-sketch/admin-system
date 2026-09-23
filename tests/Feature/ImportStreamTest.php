@@ -256,6 +256,121 @@ class ImportStreamTest extends TestCase
     }
 
     /**
+     * Dynamic tables accept brand-new columns mid-import: unmapped file
+     * columns arrive with a name + type, are created, then import normally.
+     */
+    public function test_classic_execute_creates_new_columns_from_unmapped_file_columns(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $dynamic = DynamicTable::create([
+            'key' => 'newcol-sites',
+            'name' => 'Newcol Sites',
+            'created_by' => $user->id,
+        ]);
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Sites');
+        $sheet->setCellValue('A1', 'Name');
+        $sheet->setCellValue('B1', 'Town');
+        $sheet->setCellValue('A2', 'North Clinic');
+        $sheet->setCellValue('B2', 'Bacolod');
+        $path = tempnam(sys_get_temp_dir(), 'newcol-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+
+        $uploadId = str_repeat('7c', 16);
+
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'sites.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'sites.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        $execution = $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'sites.xlsx',
+            'sheet' => 'Sites',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['name' => 'A'],
+            'newColumns' => [['letter' => 'B', 'name' => 'Town', 'type' => 'text']],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+
+        $column = CustomTableColumn::query()
+            ->where('table_key', $dynamic->key)
+            ->where('name', 'Town')
+            ->firstOrFail();
+
+        $this->assertSame('text', $column->type);
+
+        $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->value('id');
+
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $rowId,
+            'value_text' => 'Bacolod',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+        @unlink($path);
+    }
+
+    public function test_classic_execute_rejects_bad_new_columns(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $dynamic = DynamicTable::create([
+            'key' => 'newcol-reject',
+            'name' => 'Newcol Reject',
+            'created_by' => $user->id,
+        ]);
+
+        CustomTableColumn::create([
+            'table_key' => $dynamic->key,
+            'name' => 'Town',
+            'type' => 'text',
+            'position' => 0,
+            'created_by' => $user->id,
+        ]);
+
+        $payload = [
+            'uploadId' => str_repeat('8d', 16),
+            'originalName' => 'sites.xlsx',
+            'sheet' => 'Sites',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['name' => 'A'],
+        ];
+
+        // Duplicate name.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'newColumns' => [['letter' => 'B', 'name' => 'Town', 'type' => 'text']],
+        ])->assertStatus(422);
+
+        // Unknown type.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'newColumns' => [['letter' => 'B', 'name' => 'Fresh', 'type' => 'nope']],
+        ])->assertStatus(422);
+
+        // Managed tables never accept new columns.
+        $this->postJson('/tables/service-requests/import-classic/execute', $payload + [
+            'newColumns' => [['letter' => 'B', 'name' => 'Fresh', 'type' => 'text']],
+        ])->assertStatus(422);
+
+        $this->assertDatabaseMissing('table_custom_columns', ['table_key' => $dynamic->key, 'name' => 'Fresh']);
+    }
+
+    /**
      * Formula cells must import the value Excel cached in the file — not the
      * raw "=..." formula string, and never a recalculation (that engine OOMs
      * the worker; see the Session 20 formula notes).
