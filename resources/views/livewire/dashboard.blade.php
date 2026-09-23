@@ -182,7 +182,7 @@
                     @endif
                     <button type="button" wire:click="resetLayout" wire:confirm="Reset this dashboard to the default layout? Unsaved changes are lost." class="admin-secondary-button">Reset layout</button>
                     <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Cancel</button>
-                    <button type="button" data-grid-done class="admin-primary-button">Done</button>
+                    <button type="button" data-grid-done="default" class="admin-primary-button">Done</button>
                 @else
                     @if ($dashboard)
                         <button type="button" x-on:click="$dispatch('open-modal', { name: 'dashboard-sources' })" class="admin-secondary-button">
@@ -201,12 +201,15 @@
                         @endif
                     @endif
                     @if ($canEditDashboard)
+                        @if (! $dashboard && $isSuperadmin && ! $hasPersonalHomeLayout && $allowAddWidgets)
+                            <button type="button" wire:click="convertHeadlinesToWidgets" wire:confirm="Convert the headline cards into customizable widgets? You can tune, reorder or delete them afterwards; Reset layout restores the curated cards." class="admin-secondary-button">Convert to widgets</button>
+                        @endif
                         <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Customize grid</button>
                     @endif
                 @endif
             </div>
         </div>
-        <x-dashboard.grid :widgets="$grid['widgets']" :editing="$customizing" />
+        <x-dashboard.grid :widgets="$grid['widgets']" :editing="$customizing" grid-key="default" />
     </section>
 
     {{-- Widget settings: opened per-widget from the gear button in edit
@@ -447,9 +450,10 @@
         </x-admin.modal>
     @endif
 
-    {{-- The curated Product Database overview is the Home dashboard only.
-         User-created / shared dashboards render just the widget grid. --}}
-    @if (! $dashboard)
+    {{-- The curated Product Database overview is the Home dashboard only,
+         and only until the user takes ownership with widgets. User-created
+         / shared dashboards render just the widget grid. --}}
+    @if (! $dashboard && ! $hasPersonalHomeLayout)
     @php
         $headlineKeys = ['Installed products', 'Active products', 'Warranty covered', 'Service contracts', 'Annual BU charges'];
         $primary = collect($kpis)->filter(fn ($k) => in_array($k['label'], $headlineKeys))->values()->all();

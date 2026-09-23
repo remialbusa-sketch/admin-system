@@ -87,6 +87,14 @@ class TspAnalyticsService
 
         return [
             'kpis' => $kpis,
+            // Scalar metrics for customizable widgets; display kpis above
+            // stay exactly as rendered.
+            'metrics' => [
+                'active_tsps' => $activeTsp,
+                'open_records' => $openRecords,
+                'resolution_rate' => $resolutionRate,
+                'total_reports' => $totalReports,
+            ],
             'regionalData' => $visibleRegions,
             'trend' => $trend,
             'totalActive' => $totalActive,

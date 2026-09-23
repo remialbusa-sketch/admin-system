@@ -28,14 +28,17 @@ const collectLayout = (grid) => [...grid.querySelectorAll('[data-widget-id]')].m
     h: parseInt(el.dataset.h || '2', 10),
 }));
 
+const gridKeyOf = (grid) => grid.dataset.gridKey || 'default';
+
 // Draft sync: keeps the server-side draft aligned with the DOM without
-// persisting anything and without leaving customize mode.
+// persisting anything and without leaving customize mode. The grid key
+// lets several independent grids share one page.
 const syncDraft = debounce((grid) => {
     if (!window.Livewire) {
         return;
     }
 
-    window.Livewire.dispatch('dashboard-layout-sync', { layout: collectLayout(grid) });
+    window.Livewire.dispatch('dashboard-layout-sync', { layout: collectLayout(grid), grid: gridKeyOf(grid) });
 }, 400);
 
 // Done: commit the draft (persist + exit customize mode).
@@ -44,12 +47,16 @@ const commitLayout = (grid) => {
         return;
     }
 
-    window.Livewire.dispatch('dashboard-layout-save', { layout: collectLayout(grid) });
+    window.Livewire.dispatch('dashboard-layout-save', { layout: collectLayout(grid), grid: gridKeyOf(grid) });
 };
 
 const initDashboardGrid = () => {
-    const grid = document.querySelector('[data-dashboard-grid]');
+    document.querySelectorAll('[data-dashboard-grid]').forEach((grid) => {
+        initGrid(grid);
+    });
+};
 
+const initGrid = (grid) => {
     if (!grid || grid.dataset.gridInit === '1') {
         return;
     }
@@ -222,7 +229,9 @@ const bindDoneButton = () => {
             return;
         }
 
-        const grid = document.querySelector('[data-dashboard-grid][data-editing]');
+        const key = done.dataset.gridDone || 'default';
+        const grid = document.querySelector(`[data-dashboard-grid][data-grid-key="${key}"][data-editing]`)
+            ?? document.querySelector('[data-dashboard-grid][data-editing]');
 
         if (grid) {
             event.preventDefault();

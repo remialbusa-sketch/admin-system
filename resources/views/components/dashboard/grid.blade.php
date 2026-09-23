@@ -1,6 +1,7 @@
 @props([
     'widgets' => [],
     'editing' => false,
+    'gridKey' => 'default',
 ])
 
 {{-- The grid-layout-engine surface: 12 columns, span-based placement.
@@ -9,6 +10,7 @@
     layout is a DRAFT — changes stay client-side/draft until Done. --}}
 <div class="dashboard-grid grid auto-rows-[minmax(92px,auto)] grid-cols-12 gap-5"
      data-dashboard-grid
+     data-grid-key="{{ $gridKey }}"
      @if ($editing) data-editing="true" @endif>
     @forelse ($widgets as $widget)
         <section wire:key="widget-{{ $widget['id'] }}"

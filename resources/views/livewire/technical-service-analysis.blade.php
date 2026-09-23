@@ -43,6 +43,9 @@
             </div>
             <div class="flex shrink-0 flex-wrap items-center gap-2">
                 <button type="button" onclick="window.print()" class="admin-secondary-button no-print">Print report</button>
+                @if (! $hasTsaWidgets && $canCustomizeTsa)
+                    <button type="button" wire:click="convertHeadlinesToWidgets" wire:confirm="Convert the headline cards into customizable widgets? You can tune, reorder or delete them afterwards; Reset restores the curated cards." class="admin-secondary-button no-print">Convert to widgets</button>
+                @endif
                 <a href="{{ route('technical-reports') }}" wire:navigate class="admin-primary-button no-print">Open Technical Reports</a>
             </div>
         </div>
@@ -63,6 +66,7 @@
         </div>
     </header>
 
+    @if (! $hasTsaWidgets)
     <section aria-label="Headline metrics" class="grid grid-cols-1 gap-5 xl:grid-cols-3">
         @if ($lead)
         <div class="admin-surface relative overflow-hidden p-6 transition duration-200 hover:border-primary/40 sm:p-8 xl:col-span-1">
@@ -116,6 +120,43 @@
             </a>
         @endforeach
     </section>
+    @elseif ($hasTsaWidgets || $tsaCustomizing)
+    {{-- Owned widget grid: the curated cards above step aside once converted. --}}
+    <section aria-label="Technical reports widgets">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <p class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
+                    <span class="inline-block h-px w-6 bg-primary/60"></span>
+                    Technical reports grid
+                </p>
+                <p class="mt-1 text-xs text-base-content/50">Your widgets — every value computed live from the imported reports. Nothing below is fixed.</p>
+            </div>
+            <div class="no-print flex flex-wrap items-center gap-2">
+                @if ($tsaCustomizing)
+                    <span class="hidden text-[11px] font-semibold text-base-content/45 sm:inline">Drag to reorder · corner to resize · gear to configure — saved on Done</span>
+                    <button type="button" wire:click="resetWidgetGrid('tsa')" wire:confirm="Reset this grid to the curated cards? Your widgets will be removed." class="admin-secondary-button">Reset</button>
+                    <button type="button" wire:click="toggleCustomizingFor('tsa')" class="admin-secondary-button">Cancel</button>
+                    <button type="button" data-grid-done="tsa" class="admin-primary-button">Done</button>
+                @elseif ($canCustomizeTsa)
+                    <button type="button" wire:click="toggleCustomizingFor('tsa')" class="admin-secondary-button">Customize grid</button>
+                @endif
+            </div>
+        </div>
+        <x-dashboard.grid :widgets="$tsaGrid['widgets']" :editing="$tsaCustomizing" grid-key="tsa" />
+    </section>
+
+    @include('components.dashboard.widget-settings-modal', [
+        'wsModal' => $this->widgetSettingsModalName('tsa'),
+        'wsGrid' => 'tsa',
+        'ws' => $tsaState,
+        'wsPrefix' => $this->widgetSettingsPrefix('tsa'),
+        'wsMetricLabels' => $tsaMetricLabels,
+        'wsMetricValues' => $tsaMetricValues,
+        'wsApply' => "applyWidgetSettingsFor('tsa', window.__treeGraphs || {})",
+        'wsCancel' => "cancelWidgetSettingsFor('tsa')",
+        'wsHint' => 'No data selected — pick a metric above.',
+    ])
+    @endif
 
     <section aria-label="Status mix and completion trend" class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.35fr)]">
         <div class="admin-surface flex h-full flex-col p-6 sm:p-7" x-data="{ active: null }">

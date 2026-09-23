@@ -14,6 +14,11 @@
         description="Coverage and workload for company technical service personnel, sourced from the Personnel list and service records."
     >
         <x-slot name="actions">
+            @if (! $hasTspWidgets && $canCustomizeTsp)
+                <button type="button" wire:click="convertHeadlinesToWidgets" wire:confirm="Convert the KPI cards into customizable widgets? You can tune, reorder or delete them afterwards; Reset restores the curated cards." class="admin-secondary-button">
+                    Convert to widgets
+                </button>
+            @endif
             <a href="{{ route('personnel') }}" wire:navigate class="admin-primary-button">
                 View personnel
                 <x-mary-icon name="o-arrow-right" class="h-4 w-4" />
@@ -49,6 +54,7 @@
         <button type="button" wire:click="applyPeriod" class="admin-secondary-button">Last 30 days</button>
     </x-admin.filter-bar>
 
+    @if (! $hasTspWidgets)
     <section class="admin-surface grid grid-cols-1 divide-y divide-base-300 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4" aria-label="TSP KPI summary">
         @foreach ($kpis as $kpi)
             <div class="flex items-start gap-3 p-5">
@@ -63,6 +69,43 @@
             </div>
         @endforeach
     </section>
+    @elseif ($hasTspWidgets || $tspCustomizing)
+    {{-- Owned widget grid: the curated strip above steps aside once converted. --}}
+    <section aria-label="TSP widgets">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <p class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
+                    <span class="inline-block h-px w-6 bg-primary/60"></span>
+                    TSP grid
+                </p>
+                <p class="mt-1 text-xs text-base-content/50">Your widgets — every value computed live. Nothing below is fixed.</p>
+            </div>
+            <div class="no-print flex flex-wrap items-center gap-2">
+                @if ($tspCustomizing)
+                    <span class="hidden text-[11px] font-semibold text-base-content/45 sm:inline">Drag to reorder · corner to resize · gear to configure — saved on Done</span>
+                    <button type="button" wire:click="resetWidgetGrid('tsp')" wire:confirm="Reset this grid to the curated cards? Your widgets will be removed." class="admin-secondary-button">Reset</button>
+                    <button type="button" wire:click="toggleCustomizingFor('tsp')" class="admin-secondary-button">Cancel</button>
+                    <button type="button" data-grid-done="tsp" class="admin-primary-button">Done</button>
+                @elseif ($canCustomizeTsp)
+                    <button type="button" wire:click="toggleCustomizingFor('tsp')" class="admin-secondary-button">Customize grid</button>
+                @endif
+            </div>
+        </div>
+        <x-dashboard.grid :widgets="$tspGrid['widgets']" :editing="$tspCustomizing" grid-key="tsp" />
+    </section>
+
+    @include('components.dashboard.widget-settings-modal', [
+        'wsModal' => $this->widgetSettingsModalName('tsp'),
+        'wsGrid' => 'tsp',
+        'ws' => $tspState,
+        'wsPrefix' => $this->widgetSettingsPrefix('tsp'),
+        'wsMetricLabels' => $tspMetricLabels,
+        'wsMetricValues' => $tspMetricValues,
+        'wsApply' => "applyWidgetSettingsFor('tsp', window.__treeGraphs || {})",
+        'wsCancel' => "cancelWidgetSettingsFor('tsp')",
+        'wsHint' => 'No data selected — pick a metric above.',
+    ])
+    @endif
 
     <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(340px,0.8fr)]">
         <section class="admin-surface p-5 sm:p-6">

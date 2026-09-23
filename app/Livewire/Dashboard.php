@@ -800,6 +800,86 @@ class Dashboard extends Component
         $this->draftLayout = $this->mergeGeometry($this->draftLayout, $layout);
     }
 
+    /**
+     * Headline KPI label => conversion spec for take-ownership widgets.
+     * Annual BU charges render in millions on the curated cards, so they
+     * convert to a formula rather than the raw metric.
+     */
+    private const HEADLINE_WIDGET_MAP = [
+        'Installed products' => ['metric' => 'installed'],
+        'Active products' => ['metric' => 'active'],
+        'Warranty covered' => ['metric' => 'warranty_covered'],
+        'Service contracts' => ['metric' => 'contracts'],
+        'Annual BU charges' => ['formula' => 'round(annual_bu_charges / 1000000, 1)', 'suffix' => 'M', 'decimals' => 1],
+    ];
+
+    /**
+     * Convert the curated Home headline cards into real kpi_card widgets:
+     * same numbers, fully customizable. Explicit opt-in (button),
+     * superadmin only, Home only, and only until a personal layout exists.
+     * Done persists; Reset layout restores the curated cards.
+     */
+    public function convertHeadlinesToWidgets(ProductDashboardService $service): void
+    {
+        $user = auth()->user();
+
+        abort_unless($user?->isSuperadmin() ?? false, 403);
+
+        if ($this->dashboardId !== null) {
+            return;
+        }
+
+        if (DashboardLayout::query()->where('user_id', $user->id)->exists()) {
+            return;
+        }
+
+        $region = $this->regionLocked && $user?->role === UserRole::RegionalManager
+            ? $user->region
+            : $this->region;
+        $filters = $this->filterScope();
+        $summary = $service->summary($region === 'All regions' ? null : $region, $this->period, $filters);
+
+        $byLabel = collect($summary['kpis'] ?? [])->keyBy('label');
+        $tones = config('dashboard.tones', ['primary']);
+        $widgets = [];
+        $lead = true;
+
+        foreach (self::HEADLINE_WIDGET_MAP as $label => $spec) {
+            $kpi = $byLabel->get($label);
+
+            if ($kpi === null) {
+                continue;
+            }
+
+            $widgets[] = [
+                'id' => 'kpi-'.strtolower(Str::random(6)),
+                'type' => 'kpi_card',
+                'w' => 4,
+                'h' => $lead ? 3 : 2,
+                'props' => [
+                    'label' => $kpi['label'],
+                    'metric' => $spec['metric'] ?? '',
+                    'formula' => $spec['formula'] ?? '',
+                    'suffix' => $spec['suffix'] ?? ($kpi['suffix'] ?? ''),
+                    'decimals' => $spec['decimals'] ?? (int) ($kpi['decimals'] ?? 0),
+                    // Snapshot of the curated context line — editable text
+                    // afterwards, not a live value.
+                    'context' => (string) ($kpi['context'] ?? ''),
+                    'href' => (string) ($kpi['href'] ?? ''),
+                    'green_above' => null,
+                    'amber_above' => null,
+                    'sparkline' => false,
+                    'trend_metric' => '',
+                    'tone' => in_array($kpi['tone'] ?? 'primary', $tones, true) ? $kpi['tone'] : 'primary',
+                ],
+            ];
+            $lead = false;
+        }
+
+        $this->draftLayout = ['version' => 1, 'widgets' => $widgets];
+        $this->customizing = true;
+    }
+
     /** Back to the shipped default layout: drop the saved one and exit. */
     public function resetLayout(): void
     {
@@ -1382,6 +1462,11 @@ class Dashboard extends Component
                 $grid['widgets'][$index]['provenance'] = $this->widgetProvenance($widget);
             }
 
+            // Home takes ownership via widgets: once the user has a personal
+            // layout, the curated hardcoded cards step aside for the grid.
+            $hasPersonalHomeLayout = $this->dashboardId === null && $user !== null
+                && DashboardLayout::query()->where('user_id', $user->id)->exists();
+
             return view('livewire.dashboard', [
                 'regionLocked' => $this->regionLocked,
                 'periodOptions' => array_keys(ProductDashboardService::PERIODS),
@@ -1401,6 +1486,8 @@ class Dashboard extends Component
                 'datasetOptions' => $this->datasetOptions(),
                 'metricOptions' => $this->metricOptions(),
                 'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
+                'hasPersonalHomeLayout' => $hasPersonalHomeLayout,
+                'isSuperadmin' => (bool) $user?->isSuperadmin(),
                 'dashboard' => null,
                 'canEditDashboard' => false,
                 'shares' => collect(),
@@ -1461,6 +1548,11 @@ class Dashboard extends Component
             $grid['widgets'][$index]['provenance'] = $this->widgetProvenance($widget);
         }
 
+        // Home takes ownership via widgets: once the user has a personal
+        // layout, the curated hardcoded cards step aside for the grid.
+        $hasPersonalHomeLayout = $this->dashboardId === null && $user !== null
+            && DashboardLayout::query()->where('user_id', $user->id)->exists();
+
         return view('livewire.dashboard', [
             'regionLocked' => $this->regionLocked,
             'periodOptions' => array_keys(ProductDashboardService::PERIODS),
@@ -1480,6 +1572,8 @@ class Dashboard extends Component
             'datasetOptions' => $this->datasetOptions(),
             'metricOptions' => $this->metricOptions(),
             'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
+            'hasPersonalHomeLayout' => $hasPersonalHomeLayout,
+            'isSuperadmin' => (bool) $user?->isSuperadmin(),
             'dashboard' => $dashboard,
             'canEditDashboard' => $this->canEditDashboard(),
             'shares' => $dashboard?->shares()->with('user')->orderBy('id')->get() ?? collect(),

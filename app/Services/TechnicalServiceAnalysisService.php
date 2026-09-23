@@ -142,6 +142,17 @@ class TechnicalServiceAnalysisService
         return [
             'kpis' => $kpis,
             'secondary' => $secondary,
+            // Scalar metrics for customizable widgets (kpi_card props resolve
+            // these keys; the display kpis above stay exactly as rendered).
+            'metrics' => [
+                'reports_total' => $totalReports,
+                'completed' => $completedAny,
+                'assigned_tsp' => $assignedTsp,
+                'unassigned' => $unassigned,
+                'avg_repair_hours' => round($avgRepair, 2),
+                'avg_response_hours' => round($avgResponse, 2),
+                'window_completed' => $trendTotal,
+            ],
             'statusDonut' => $statusDonut,
             'statusTotal' => $statusTotal,
             'byStatus' => $byStatus,
