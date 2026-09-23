@@ -784,13 +784,16 @@ class Dashboard extends Component
     /**
      * Live geometry sync from the client editor (after a drag, resize or
      * removal). Updates the draft only — no persistence, edit mode stays on.
+     * An empty layout is a real state (last widget deleted), not a missing
+     * payload: only this editor dispatches this event, and nothing persists
+     * until Done (Cancel still discards).
      */
     #[On('dashboard-layout-sync')]
     public function syncLayout(array $layout = []): void
     {
         $this->guardEdit();
 
-        if (! $this->customizing || $this->draftLayout === [] || $layout === []) {
+        if (! $this->customizing || $this->draftLayout === []) {
             return;
         }
 

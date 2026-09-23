@@ -190,8 +190,12 @@ const initDashboardGrid = () => {
 
         event.preventDefault();
 
+        // The last widget is flagged, not silently kept: deleting it leaves
+        // an intentionally empty dashboard (Reset restores the default).
         if (grid.querySelectorAll('[data-widget-id]').length <= 1) {
-            return; // never leave the grid empty by accident; Reset restores all
+            if (!window.confirm('Delete the last widget? The dashboard will be empty until you add a widget.')) {
+                return;
+            }
         }
 
         remove.closest('[data-widget-id]').remove();
