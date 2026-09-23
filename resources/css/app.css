@@ -952,14 +952,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Room for the ⋮ button eases open on hover so the title never
+       jumps under it — the table layout itself never moves. */
+    padding-right: 0;
+    transition: padding-right 0.16s ease;
+}
+
+.tabulator-col:hover .grid-col-title-label,
+.tabulator-col:focus-within .grid-col-title-label {
+    padding-right: 1.5rem;
 }
 
 .grid-col-menu-btn {
-    display: none;
+    display: inline-flex;
     position: absolute;
     right: 8px;
     top: 50%;
-    transform: translateY(-50%);
+    transform: translateY(-50%) translateX(4px);
     flex: none;
     align-items: center;
     justify-content: center;
@@ -970,6 +979,23 @@
     border: 1px solid var(--color-base-300);
     color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
     cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease, transform 0.16s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.tabulator-col:hover .grid-col-menu-btn,
+.tabulator-col:focus-within .grid-col-menu-btn,
+.grid-col-menu-btn:focus-visible {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+    pointer-events: auto;
+}
+
+.grid-col-menu-btn:hover,
+.grid-col-menu-btn:focus-visible {
+    background: var(--color-base-200);
+    color: var(--color-base-content);
 }
 
 .grid-col-menu-btn svg {
@@ -978,13 +1004,18 @@
 }
 
 .tabulator-col:hover .grid-col-menu-btn,
-.tabulator-col:focus-within .grid-col-menu-btn {
-    display: inline-flex;
+.tabulator-col:focus-within .grid-col-menu-btn,
+.grid-col-menu-btn:focus-visible {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+    pointer-events: auto;
 }
 
 .grid-col-menu-btn:hover,
 .grid-col-menu-btn:focus-visible {
-    display: inline-flex;
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+    pointer-events: auto;
     background: var(--color-base-200);
     color: var(--color-base-content);
 }
