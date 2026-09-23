@@ -352,20 +352,22 @@ class Dashboard extends Component
     }
 
     /**
-     * The dataset vocabulary for widget settings: the shipped default keys
-     * plus "alias.dataset" for every table connected to this dashboard.
+     * The dataset vocabulary for widget settings. Boards with connected
+     * sources offer ONLY those sources ("alias.dataset") — the shipped
+     * PDB defaults appear solely on sourceless boards, so a widget can
+     * never silently read the Product Database behind a connected table.
      *
      * @return array<string, string> key => label
      */
     private function datasetOptions(): array
     {
-        $options = config('dashboard.datasets', []);
         $dashboard = $this->dashboard();
 
-        if ($dashboard === null) {
-            return $options;
+        if ($dashboard === null || ! $dashboard->sources()->exists()) {
+            return config('dashboard.datasets', []);
         }
 
+        $options = [];
         $catalog = app(TableCatalog::class);
         $aggregation = app(TableAggregationService::class);
 
@@ -382,20 +384,22 @@ class Dashboard extends Component
     }
 
     /**
-     * The metric vocabulary for widget settings: the shipped PDB defaults
-     * plus "alias.metric" for every table connected to this dashboard.
+     * The metric vocabulary for widget settings. Boards with connected
+     * sources offer ONLY those sources ("alias.metric") — the shipped
+     * PDB defaults appear solely on sourceless boards, so a widget can
+     * never silently read the Product Database behind a connected table.
      *
      * @return array<string, string> key => label
      */
     private function metricOptions(): array
     {
-        $options = config('dashboard.metric_labels', []);
         $dashboard = $this->dashboard();
 
-        if ($dashboard === null) {
-            return $options;
+        if ($dashboard === null || ! $dashboard->sources()->exists()) {
+            return config('dashboard.metric_labels', []);
         }
 
+        $options = [];
         $catalog = app(TableCatalog::class);
         $aggregation = app(TableAggregationService::class);
 
@@ -902,8 +906,15 @@ class Dashboard extends Component
                 $this->settingsSchema[$index]['options'] = array_keys($datasetOptions);
                 $this->settingsSchema[$index]['grouped_options'] = $this->groupedOptions($datasetOptions);
             } elseif (($field['type'] ?? '') === 'metric') {
-                $this->settingsSchema[$index]['options'] = array_keys($metricOptions);
-                $this->settingsSchema[$index]['grouped_options'] = $this->groupedOptions($metricOptions);
+                // Momentum fields (trend_metric, delta_metric) are
+                // expression-scoped: the engine only understands bare PDB
+                // identifiers, so they keep the shipped list. The primary
+                // metric follows the dashboard's live vocabulary.
+                $vocab = ($field['key'] ?? '') === 'metric'
+                    ? $metricOptions
+                    : config('dashboard.metric_labels', []);
+                $this->settingsSchema[$index]['options'] = array_keys($vocab);
+                $this->settingsSchema[$index]['grouped_options'] = $this->groupedOptions($vocab);
             }
         }
 

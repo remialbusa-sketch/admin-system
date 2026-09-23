@@ -39,16 +39,18 @@ class WidgetMetricSourceTest extends TestCase
         return $dashboard;
     }
 
-    public function test_metric_dropdown_offers_connected_source_metrics(): void
+    public function test_metric_dropdown_offers_only_connected_source_metrics(): void
     {
         $owner = User::factory()->superadmin()->create();
         $dashboard = $this->sourcedDashboardFor($owner);
 
+        // A board with sources connected offers no PDB metrics at all —
+        // widgets cannot silently read the Product Database.
         Livewire::actingAs($owner)
             ->test(Dashboard::class, ['dashboard' => $dashboard])
             ->assertViewHas('metricOptions', function (array $options): bool {
                 return ($options['t.rows'] ?? null) === 'PDB Testing · Rows'
-                    && array_key_exists('installed', $options);
+                    && ! array_key_exists('installed', $options);
             });
     }
 
@@ -252,8 +254,8 @@ class WidgetMetricSourceTest extends TestCase
         $metricField = collect($component->get('settingsSchema'))
             ->firstWhere('key', 'metric');
 
-        $this->assertSame('Installed products', $metricField['grouped_options']['Product Database']['installed'] ?? null);
         $this->assertSame('PDB Testing · Rows', $metricField['grouped_options']['PDB Testing']['t.rows'] ?? null);
+        $this->assertArrayNotHasKey('Product Database', $metricField['grouped_options']);
     }
 
     public function test_grid_flags_widget_provenance(): void
