@@ -20,11 +20,13 @@
              targets: @js($targets),
              isDynamic: @js($isDynamic ?? false),
              columnTypes: @js($columnTypes ?? []),
-             columnTypeHelp: @js($columnTypeHelp ?? [])
+             columnTypeHelp: @js($columnTypeHelp ?? []),
+             optionPalette: @js($optionPalette ?? []),
+             optionLimit: @js($optionLimit ?? 200)
          })"
          x-init="init()"
          @click.window="onWindowClick($event)"
-         @keydown.escape.window="typeMenu = null">
+         @keydown.escape.window="typeMenu = null, optionsMenu = null">
 
         <div class="admin-surface overflow-hidden">
             <div class="flex items-center gap-2 border-b border-base-300 px-6 py-4">
@@ -190,6 +192,14 @@
                                                     <span class="truncate" x-text="typeLabel(colTypes[col.letter] || 'text')"></span>
                                                     <x-mary-icon name="o-chevron-down" class="h-3 w-3 shrink-0" />
                                                 </button>
+                                                {{-- Option editor chip: only status/dropdown columns carry options --}}
+                                                <button type="button" data-options-menu x-show="isOptionType(col.letter)" x-cloak @click="toggleOptionsMenu(col.letter, $event)"
+                                                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-base-300 bg-base-100 px-2 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-base-content transition-colors hover:border-primary hover:text-primary"
+                                                        :aria-label="`Options for column ${col.letter}`"
+                                                        :aria-expanded="optionsMenu?.letter === col.letter">
+                                                    <x-mary-icon name="o-adjustments-horizontal" class="h-3 w-3 shrink-0" />
+                                                    <span class="truncate" x-text="optionsChipLabel(col.letter)"></span>
+                                                </button>
                                                 <template x-if="!isDynamic">
                                                     <select class="admin-control w-full text-xs"
                                                             :value="columnTarget(col.letter)"
@@ -266,6 +276,55 @@
                         </div>
                     </template>
 
+                    {{-- Option editor: rename/recolor/remove options, seeded from the file's distinct values --}}
+                    <template x-if="optionsMenu">
+                        <div data-options-menu
+                             class="fixed z-50 w-80 rounded-md border border-base-300 bg-base-100 shadow-xl"
+                             :style="`left:${optionsMenu.left}px; top:${optionsMenu.top}px`">
+                            <div class="border-b border-base-300 px-3 py-2">
+                                <p class="text-xs font-bold text-base-content" x-text="`Options — column ${optionsMenu.letter}`"></p>
+                                <p class="mt-0.5 text-[11px] leading-snug text-base-content/55" x-text="optionHint(optionsMenu.letter)"></p>
+                            </div>
+                            <div class="max-h-64 space-y-1.5 overflow-y-auto px-3 py-2">
+                                <template x-for="(opt, idx) in (colOptions[optionsMenu.letter] || [])" :key="idx">
+                                    <div class="flex items-center gap-2">
+                                        <input type="color" class="h-6 w-6 shrink-0 cursor-pointer rounded border border-base-300 bg-transparent p-0"
+                                               :value="opt.color" @input="setOptionColor(optionsMenu.letter, idx, $event.target.value)"
+                                               :aria-label="`Color for option ${idx + 1}`">
+                                        <input type="text" class="admin-control min-w-0 flex-1 text-xs" maxlength="100" :value="opt.label"
+                                               @change="renameOption(optionsMenu.letter, idx, $event)"
+                                               :aria-label="`Label for option ${idx + 1}`">
+                                        <button type="button" @click="removeOption(optionsMenu.letter, idx)"
+                                                class="shrink-0 rounded p-1 text-base-content/40 transition-colors hover:bg-error/10 hover:text-error"
+                                                :aria-label="`Remove option ${idx + 1}`">
+                                            <x-mary-icon name="o-x-mark" class="h-3.5 w-3.5" />
+                                        </button>
+                                    </div>
+                                </template>
+                                <p x-show="colOptions[optionsMenu.letter] === undefined" x-cloak class="py-1 text-[11px] leading-snug text-base-content/45">
+                                    Not customized yet — the defaults described above apply until you edit this list.
+                                </p>
+                                <p x-show="colOptions[optionsMenu.letter]?.length === 0" x-cloak class="py-1 text-[11px] leading-snug text-base-content/45">
+                                    Empty list — values found in the file are appended automatically during import.
+                                </p>
+                            </div>
+                            <div class="flex items-center gap-2 border-t border-base-300 px-3 py-2">
+                                <input type="text" class="admin-control min-w-0 flex-1 text-xs" maxlength="100" x-model="optionDraft"
+                                       @keydown.enter.prevent="addOption(optionsMenu.letter)" placeholder="New option label"
+                                       aria-label="New option label">
+                                <button type="button" @click="addOption(optionsMenu.letter)" class="admin-primary-button shrink-0 px-2 py-1 text-[11px]">Add</button>
+                            </div>
+                            <div class="flex items-center justify-between gap-2 border-t border-base-300 px-3 py-1.5">
+                                <span class="text-[11px] tabular-nums text-base-content/45" x-text="`${(colOptions[optionsMenu.letter] || []).length} / ${optionLimit}`"></span>
+                                <button type="button" x-show="fileValues(optionsMenu.letter).length" x-cloak
+                                        @click="useFileValues(optionsMenu.letter)"
+                                        class="admin-secondary-button px-2 py-1 text-[11px]"
+                                        x-text="`Use file values (${fileValues(optionsMenu.letter).length})`"></button>
+                            </div>
+                            <p x-show="optionError" x-cloak class="border-t border-base-300 px-3 py-1.5 text-[11px] text-error" x-text="optionError"></p>
+                        </div>
+                    </template>
+
                     <div class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-4">
                         <div class="flex min-w-0 flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em]">
                             <span class="max-w-[240px] truncate rounded-full bg-base-200 px-3 py-1 text-base-content/60" :title="`${originalName || ''} → ${tableKey}`" x-text="`${originalName || ''} → ${tableKey}`"></span>
@@ -305,8 +364,8 @@
 
     <script>
         document.addEventListener('alpine:init', () => {
-            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp }) => ({
-                tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp,
+            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp, optionPalette, optionLimit }) => ({
+                tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp, optionPalette, optionLimit,
                 backUrl: @js($backUrl),
                 step: 1,
                 phase: 'header',
@@ -318,6 +377,10 @@
                 colTypesSeeded: false,
                 seededSignature: null,
                 typeMenu: null,
+                colOptions: {},
+                optionsMenu: null,
+                optionDraft: '',
+                optionError: '',
                 uploading: false,
                 analyzing: false,
                 executing: false,
@@ -375,6 +438,10 @@
                     this.colTypesSeeded = false;
                     this.seededSignature = null;
                     this.typeMenu = null;
+                    this.colOptions = {};
+                    this.optionsMenu = null;
+                    this.optionDraft = '';
+                    this.optionError = '';
                     if (!file) return;
                     const ext = (file.name.split('.').pop() || '').toLowerCase();
                     if (!['xlsx','xls','csv','txt'].includes(ext)) {
@@ -519,6 +586,10 @@
                     this.colTypesSeeded = false;
                     this.seededSignature = null;
                     this.typeMenu = null;
+                    this.colOptions = {};
+                    this.optionsMenu = null;
+                    this.optionDraft = '';
+                    this.optionError = '';
                     await this.reAnalyze();
                 },
 
@@ -589,6 +660,12 @@
                  */
                 initColTypes() {
                     if (this.colTypesSeeded) return;
+                    // Reseeding for a changed preview: option drafts keyed by
+                    // letter belong to the old preview and must not leak.
+                    this.colOptions = {};
+                    this.optionsMenu = null;
+                    this.optionDraft = '';
+                    this.optionError = '';
                     const kindByNorm = {};
                     (targets?.fields || []).forEach((field) => {
                         kindByNorm[this.normalizeLabel(field.label)] = field.kind;
@@ -700,6 +777,7 @@
 
                 /** Type buttons: one open menu at a time, anchored to its header. */
                 toggleTypeMenu(letter, event) {
+                    this.optionsMenu = null;
                     if (this.typeMenu && this.typeMenu.letter === letter) {
                         this.typeMenu = null;
                         return;
@@ -713,17 +791,144 @@
                     };
                 },
 
-                /** Any click outside the buttons/panel dismisses the type menu. */
-                onWindowClick(event) {
-                    if (!this.typeMenu) return;
-                    const target = event.target;
-                    if (target && target.closest && target.closest('[data-type-menu]')) return;
+                /** Option editor chip: mutually exclusive with the type menu. */
+                toggleOptionsMenu(letter, event) {
                     this.typeMenu = null;
+                    if (this.optionsMenu && this.optionsMenu.letter === letter) {
+                        this.optionsMenu = null;
+                        return;
+                    }
+                    this.optionDraft = '';
+                    this.optionError = '';
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const width = 320; // w-80
+                    this.optionsMenu = {
+                        letter,
+                        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+                        top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 360)),
+                    };
+                },
+
+                /** Any click outside the buttons/panel dismisses the open menu. */
+                onWindowClick(event) {
+                    const target = event.target;
+                    if (target && target.closest) {
+                        if (target.closest('[data-type-menu]') || target.closest('[data-options-menu]')) return;
+                    }
+                    this.typeMenu = null;
+                    this.optionsMenu = null;
                 },
 
                 setColumnType(letter, key) {
                     if (letter) this.colTypes[letter] = key;
                     this.typeMenu = null;
+                },
+
+                /** Only status/dropdown columns carry an option list. */
+                isOptionType(letter) {
+                    return ['status', 'dropdown'].includes(this.colTypes[letter] || 'text');
+                },
+
+                /** Header chip label: the list length once customized. */
+                optionsChipLabel(letter) {
+                    const list = this.colOptions[letter];
+                    return Array.isArray(list) ? `Options · ${list.length}` : 'Options';
+                },
+
+                /** Distinct non-blank values the preview scanned for this column. */
+                fileValues(letter) {
+                    const col = (this.preview?.columns || []).find((c) => c.letter === letter);
+                    return col?.distinct || [];
+                },
+
+                /** Replace the list with the file's distinct values (palette-cycled colors). */
+                useFileValues(letter) {
+                    const values = this.fileValues(letter);
+                    if (!values.length) return;
+                    const palette = this.optionPalette?.length ? this.optionPalette : ['#64748B'];
+                    this.colOptions[letter] = values.map((label, i) => ({
+                        label,
+                        color: palette[i % palette.length],
+                    }));
+                    this.optionError = '';
+                },
+
+                /** Append the drafted label (creating the list on first edit). */
+                addOption(letter) {
+                    const label = (this.optionDraft || '').trim();
+                    if (!label) return;
+                    if (!Array.isArray(this.colOptions[letter])) this.colOptions[letter] = [];
+                    const list = this.colOptions[letter];
+                    if (list.some((o) => o.label.toLowerCase() === label.toLowerCase())) {
+                        this.optionError = `"${label}" is already in the list.`;
+                        return;
+                    }
+                    if (list.length >= this.optionLimit) {
+                        this.optionError = `Limit reached: ${this.optionLimit} options per column.`;
+                        return;
+                    }
+                    const palette = this.optionPalette?.length ? this.optionPalette : ['#64748B'];
+                    list.push({ label, color: palette[list.length % palette.length] });
+                    this.optionDraft = '';
+                    this.optionError = '';
+                },
+
+                removeOption(letter, idx) {
+                    const list = this.colOptions[letter];
+                    if (!Array.isArray(list)) return;
+                    list.splice(idx, 1);
+                },
+
+                /** Commit a rename on change; blank/duplicate revert the input. */
+                renameOption(letter, idx, event) {
+                    const list = this.colOptions[letter];
+                    if (!Array.isArray(list)) return;
+                    const label = (event.target.value || '').trim();
+                    if (!label) {
+                        event.target.value = list[idx].label;
+                        this.optionError = 'Option labels cannot be blank.';
+                        return;
+                    }
+                    const duplicate = list.some((o, i) => i !== idx && o.label.toLowerCase() === label.toLowerCase());
+                    if (duplicate) {
+                        event.target.value = list[idx].label;
+                        this.optionError = `"${label}" is already in the list.`;
+                        return;
+                    }
+                    event.target.value = label;
+                    list[idx] = { ...list[idx], label };
+                    this.optionError = '';
+                },
+
+                setOptionColor(letter, idx, color) {
+                    const list = this.colOptions[letter];
+                    if (!Array.isArray(list)) return;
+                    list[idx] = { ...list[idx], color };
+                },
+
+                /**
+                 * Editor header: explains what currently applies — existing
+                 * field schema (managed), the untouched defaults, an explicit
+                 * empty list, or the custom list.
+                 */
+                optionHint(letter) {
+                    if (!this.isDynamic) {
+                        const target = this.columnTarget(letter);
+                        if (target && target !== '__new__') {
+                            return 'This column feeds an existing field — its fixed schema applies. Options can only be set for a new column.';
+                        }
+                    }
+                    const list = this.colOptions[letter];
+                    if (list === undefined) {
+                        const n = this.fileValues(letter).length;
+                        return n
+                            ? `No custom options yet — defaults apply. The file has ${n} distinct value${n === 1 ? '' : 's'} to start from below.`
+                            : 'No custom options yet — the default options apply until you customize.';
+                    }
+                    if (list.length === 0) {
+                        return 'Empty list — values found in the file are appended automatically during import.';
+                    }
+                    return `${list.length} option${list.length === 1 ? '' : 's'} — these replace the defaults.`;
                 },
 
                 typeLabel(key) {
@@ -790,15 +995,23 @@
                     }
                 },
 
-                /** Draft new columns to send with the import ({letter, name, type}). */
+                /** Draft new columns to send with the import ({letter, name, type[, options]}). */
                 newColumnsPayload() {
                     return Object.entries(this.newCols || {})
                         .filter(([, draft]) => (draft.name || '').trim() !== '')
-                        .map(([letter, draft]) => ({
-                            letter,
-                            name: draft.name.trim(),
-                            type: this.colTypes[letter] || 'text',
-                        }));
+                        .map(([letter, draft]) => {
+                            const entry = {
+                                letter,
+                                name: draft.name.trim(),
+                                type: this.colTypes[letter] || 'text',
+                            };
+                            // Custom options ride only for status/dropdown, and
+                            // only once the editor actually customized them.
+                            if (this.isOptionType(letter) && Array.isArray(this.colOptions[letter])) {
+                                entry.options = this.colOptions[letter];
+                            }
+                            return entry;
+                        });
                 },
 
                 /** First 10 data records as they will land. */
@@ -816,11 +1029,19 @@
                     return (this.preview?.columns || [])
                         .map((col) => col.letter)
                         .filter((letter) => letter === this.titleColumn || (this.importCols[letter] && this.importCols[letter].include))
-                        .map((letter) => ({
-                            letter,
-                            name: (this.importCols[letter]?.name || '').trim(),
-                            type: this.colTypes[letter] || 'text',
-                        }))
+                        .map((letter) => {
+                            const entry = {
+                                letter,
+                                name: (this.importCols[letter]?.name || '').trim(),
+                                type: this.colTypes[letter] || 'text',
+                            };
+                            // Same rule as the managed payload: only edited
+                            // status/dropdown columns carry their option list.
+                            if (this.isOptionType(letter) && Array.isArray(this.colOptions[letter])) {
+                                entry.options = this.colOptions[letter];
+                            }
+                            return entry;
+                        })
                         .filter((entry) => entry.name !== '');
                 },
 
@@ -903,6 +1124,10 @@
                     this.colTypesSeeded = false;
                     this.seededSignature = null;
                     this.typeMenu = null;
+                    this.colOptions = {};
+                    this.optionsMenu = null;
+                    this.optionDraft = '';
+                    this.optionError = '';
                     (targets?.fields || []).forEach(f => { this.mapping[f.key] = ''; });
                     this.step = 1;
                     this.phase = 'header';

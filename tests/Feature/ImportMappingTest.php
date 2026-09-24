@@ -209,6 +209,51 @@ class ImportMappingTest extends TestCase
         }
     }
 
+    public function test_preview_columns_expose_distinct_option_candidates(): void
+    {
+        $path = $this->csv([
+            ['Status', 'Region'],
+            ['Active', 'North'],
+            ['Closed', 'South'],
+            ['Active', 'North'],
+            ['', 'Visayas'],
+            ['3', 'North'],
+            ['Closed', 'South'],
+            ['On Hold', 'Luzon'],
+        ]);
+
+        try {
+            $preview = app(ImportMappingService::class)->previewSheet($path, 'CSV', 1, 2);
+
+            // First-appearance order; blanks and integer-like values dropped
+            // — validate() reads integer-like cells as index lookups, never
+            // as labels (see the ImportOptionSeeder pitfall).
+            $this->assertSame(['Active', 'Closed', 'On Hold'], $preview['columns'][0]['distinct']);
+            $this->assertSame(['North', 'South', 'Visayas', 'Luzon'], $preview['columns'][1]['distinct']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_preview_distinct_option_candidates_cap_at_twenty(): void
+    {
+        $rows = [['Region']];
+        foreach (range(1, 25) as $i) {
+            $rows[] = ['Zone '.$i];
+        }
+
+        $path = $this->csv($rows);
+
+        try {
+            $preview = app(ImportMappingService::class)->previewSheet($path, 'CSV', 1, 2);
+
+            $this->assertCount(20, $preview['columns'][0]['distinct']);
+            $this->assertSame('Zone 1', $preview['columns'][0]['distinct'][0]);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_mapped_import_tracks_batch_metadata_for_product_like_flow(): void
     {
         $path = $this->csv([

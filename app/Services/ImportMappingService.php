@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\ImportOptionSeeder;
 use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -559,6 +560,14 @@ class ImportMappingService
         $maxColumn = max(1, min($totalColumns, 120));
         $headerCells = $rows[$headerRow] ?? [];
 
+        // Distinct value candidates per column for the step-3 type/options
+        // editor: first-appearance order over the first 30 data rows, capped
+        // at 20. Blanks and integer-like numerics are skipped — validate()
+        // reads integer-like cells as index lookups, never labels (same rule
+        // as ImportOptionSeeder::isSeedableLabel()).
+        $distinctScan = 30;
+        $distinctCap = 20;
+
         $columns = [];
         for ($index = 1; $index <= $maxColumn; $index++) {
             $letter = Coordinate::stringFromColumnIndex($index);
@@ -570,10 +579,27 @@ class ImportMappingService
                 $samples[] = $value === null ? '' : trim((string) $value);
             }
 
+            $distinct = [];
+            for ($rowNumber = $dataStart; $rowNumber < $dataStart + $distinctScan; $rowNumber++) {
+                if (count($distinct) >= $distinctCap) {
+                    break;
+                }
+
+                $value = $rows[$rowNumber][$letter] ?? null;
+                $value = $value === null ? '' : trim((string) $value);
+
+                if ($value === '' || isset($distinct[$value]) || ! ImportOptionSeeder::isSeedableLabel($value)) {
+                    continue;
+                }
+
+                $distinct[$value] = true;
+            }
+
             $columns[] = [
                 'letter' => $letter,
                 'label' => $label !== '' ? $label : null,
                 'samples' => $samples,
+                'distinct' => array_keys($distinct),
             ];
         }
 

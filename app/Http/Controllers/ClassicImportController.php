@@ -13,7 +13,9 @@ use App\Services\ImportMappingService;
 use App\Services\ImportUndoService;
 use App\Services\SourceWorkbookImportService;
 use App\Support\ImportFatalCapture;
+use App\Support\ImportOptionSeeder;
 use App\Support\ImportTargetResolver;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -61,6 +63,10 @@ class ClassicImportController extends Controller
                 'person' => 'People on each row',
                 'files' => 'File attachments',
             ],
+            // Step-3 option editor: the shared palette + cap the backend
+            // enforces (ImportOptionSeeder), mirrored to the UI.
+            'optionPalette' => ImportOptionSeeder::COLORS,
+            'optionLimit' => ImportOptionSeeder::MAX_OPTIONS,
         ]);
     }
 
@@ -173,9 +179,28 @@ class ClassicImportController extends Controller
     /**
      * Starter settings for import-created columns — mirrors
      * ManagedTable::defaultColumnSettings so imported values validate.
+     * Step-3 custom options (from the option editor) replace the starter
+     * list wholesale when present; null keeps the starters (back-compat
+     * for callers that send no options).
+     *
+     * @param  array<int, array{label: string, color: string}>|null  $options
      */
-    private function defaultColumnSettings(string $type): array
+    private function defaultColumnSettings(string $type, ?array $options = null): array
     {
+        if (in_array($type, ['status', 'dropdown'], true) && $options !== null) {
+            return [
+                'multi' => $type === 'dropdown',
+                'options' => collect($options)
+                    ->map(fn (array $option, int $index): array => [
+                        'index' => $index,
+                        'label' => $option['label'],
+                        'color' => $option['color'],
+                    ])
+                    ->values()
+                    ->all(),
+            ];
+        }
+
         return match ($type) {
             'status', 'dropdown' => [
                 'multi' => $type === 'dropdown',
@@ -188,6 +213,70 @@ class ClassicImportController extends Controller
             'number' => ['precision' => 2],
             default => [],
         };
+    }
+
+    /**
+     * Validate the step-3 option editor payload for one column.
+     *
+     * Returns null when the payload carries no options (the column keeps
+     * the starter defaults), the normalized [{label, color}] list when
+     * present (colors default to the shared palette), or a 422 response
+     * when malformed. Shared by the managed and dynamic write paths so
+     * both reject identically, before any file access or purge.
+     *
+     * @return array<int, array{label: string, color: string}>|JsonResponse|null
+     */
+    private function normalizeOptions(mixed $raw, string $type, string $columnName): array|JsonResponse|null
+    {
+        if ($raw === null) {
+            return null;
+        }
+
+        if (! in_array($type, ['status', 'dropdown'], true)) {
+            return response()->json(['message' => "Column '{$columnName}': only status and dropdown columns take options."], 422);
+        }
+
+        if (! is_array($raw) || ! array_is_list($raw)) {
+            return response()->json(['message' => "Column '{$columnName}': options must be a list."], 422);
+        }
+
+        if (count($raw) > ImportOptionSeeder::MAX_OPTIONS) {
+            return response()->json(['message' => "Column '{$columnName}': at most ".ImportOptionSeeder::MAX_OPTIONS.' options are allowed.'], 422);
+        }
+
+        $normalized = [];
+
+        foreach ($raw as $option) {
+            if (is_array($option)) {
+                $label = trim((string) ($option['label'] ?? ''));
+                $color = trim((string) ($option['color'] ?? ''));
+            } else {
+                // Tolerate legacy plain-string options like the seeder does.
+                $label = is_string($option) ? trim($option) : '';
+                $color = '';
+            }
+
+            if ($label === '') {
+                return response()->json(['message' => "Column '{$columnName}': option labels cannot be blank."], 422);
+            }
+
+            if (mb_strlen($label) > 100) {
+                return response()->json(['message' => "Column '{$columnName}': option labels are limited to 100 characters."], 422);
+            }
+
+            if ($color !== '' && ! preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
+                return response()->json(['message' => "Column '{$columnName}': option colors must be hex like #2563EB."], 422);
+            }
+
+            $normalized[] = [
+                'label' => $label,
+                'color' => $color !== ''
+                    ? strtoupper($color)
+                    : ImportOptionSeeder::COLORS[count($normalized) % count(ImportOptionSeeder::COLORS)],
+            ];
+        }
+
+        return $normalized;
     }
 
     /**
@@ -290,8 +379,14 @@ class ClassicImportController extends Controller
                 return response()->json(['message' => "Column '{$name}': unknown column type."], 422);
             }
 
+            $options = $this->normalizeOptions($entry['options'] ?? null, $type, $name);
+
+            if ($options instanceof JsonResponse) {
+                return $options;
+            }
+
             $seenNames[] = $this->normalizeColumnName($name);
-            $newColumns[$index] = ['letter' => $letter, 'name' => $name, 'type' => $type];
+            $newColumns[$index] = ['letter' => $letter, 'name' => $name, 'type' => $type, 'options' => $options];
         }
 
         // Each source column feeds one target only: reject letters already
@@ -326,7 +421,7 @@ class ClassicImportController extends Controller
                 // Same name, different type: reuse must convert the column,
                 // otherwise the matched type is silently dropped.
                 if ($existing->type !== $entry['type']) {
-                    $toConvert[] = ['column' => $existing, 'type' => $entry['type']];
+                    $toConvert[] = ['column' => $existing, 'type' => $entry['type'], 'options' => $entry['options']];
                 }
             } else {
                 $toCreate[] = $entry;
@@ -364,7 +459,7 @@ class ClassicImportController extends Controller
         foreach ($toConvert as $conversion) {
             $conversion['column']->update([
                 'type' => $conversion['type'],
-                'settings' => $this->defaultColumnSettings($conversion['type']),
+                'settings' => $this->defaultColumnSettings($conversion['type'], $conversion['options']),
             ]);
         }
 
@@ -375,7 +470,7 @@ class ClassicImportController extends Controller
                 'table_key' => $table,
                 'name' => $entry['name'],
                 'type' => $entry['type'],
-                'settings' => $this->defaultColumnSettings($entry['type']),
+                'settings' => $this->defaultColumnSettings($entry['type'], $entry['options']),
                 'position' => ++$position,
                 'created_by' => $request->user()?->id,
             ]);
@@ -453,8 +548,14 @@ class ClassicImportController extends Controller
                 return response()->json(['message' => "Column '{$name}': unknown column type."], 422);
             }
 
+            $options = $this->normalizeOptions($entry['options'] ?? null, $type, $name);
+
+            if ($options instanceof JsonResponse) {
+                return $options;
+            }
+
             $seenNames[] = mb_strtolower($name);
-            $validated[] = ['letter' => $letter, 'name' => $name, 'type' => $type];
+            $validated[] = ['letter' => $letter, 'name' => $name, 'type' => $type, 'options' => $options];
         }
 
         $letters = array_column($validated, 'letter');
@@ -490,7 +591,7 @@ class ClassicImportController extends Controller
                 'table_key' => $table,
                 'name' => $entry['name'],
                 'type' => $entry['type'],
-                'settings' => $this->defaultColumnSettings($entry['type']),
+                'settings' => $this->defaultColumnSettings($entry['type'], $entry['options']),
                 'position' => $position,
                 'created_by' => $request->user()?->id,
             ]);

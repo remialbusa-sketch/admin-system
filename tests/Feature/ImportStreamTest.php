@@ -520,6 +520,265 @@ class ImportStreamTest extends TestCase
     }
 
     /**
+     * Step-3 option editor, dynamic half: a column created with custom
+     * options must land with EXACTLY that list — no starter defaults,
+     * caller colors kept, palette fallback for a missing color — while a
+     * file value outside the custom list is still seeded by the import-time
+     * backstop.
+     */
+    public function test_classic_execute_dynamic_dropdown_uses_step3_custom_options(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $dynamic = DynamicTable::create([
+            'key' => 'step3-options',
+            'name' => 'Step3 Options',
+            'created_by' => $user->id,
+        ]);
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Sites');
+        $sheet->setCellValue('A1', 'Name');
+        $sheet->setCellValue('B1', 'Status');
+        $sheet->setCellValue('C1', 'Tier');
+        $sheet->setCellValue('A2', 'North Clinic');
+        $sheet->setCellValue('B2', 'Active');
+        $sheet->setCellValue('C2', 'Premium');
+        $sheet->setCellValue('A3', 'South Clinic');
+        $sheet->setCellValue('B3', 'Closed');
+        $sheet->setCellValue('C3', 'Basic');
+        $path = tempnam(sys_get_temp_dir(), 'opts-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+
+        $uploadId = str_repeat('42', 16);
+
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'sites.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'sites.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        $execution = $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'sites.xlsx',
+            'sheet' => 'Sites',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => [],
+            'titleLetter' => 'A',
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+                ['letter' => 'B', 'name' => 'Status', 'type' => 'status', 'options' => [
+                    ['label' => 'Active', 'color' => '#DC2626'],
+                    ['label' => 'Closed', 'color' => '#0891B2'],
+                    ['label' => 'Archived'], // not in the file — must survive as-is
+                ]],
+                ['letter' => 'C', 'name' => 'Tier', 'type' => 'dropdown', 'options' => [
+                    ['label' => 'Premium'],
+                    ['label' => 'Standard'], // not in the file
+                ]],
+            ],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(2, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        $statusColumn = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', 'Status')->firstOrFail();
+        $tierColumn = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', 'Tier')->firstOrFail();
+
+        // Exactly the step-3 list: no New/In Progress/Done starters.
+        $this->assertSame(
+            ['Active', 'Closed', 'Archived'],
+            array_column($statusColumn->settings['options'] ?? [], 'label'),
+        );
+        $this->assertSame([0, 1, 2], array_column($statusColumn->settings['options'] ?? [], 'index'));
+        $this->assertSame('#DC2626', $statusColumn->settings['options'][0]['color']);
+        $this->assertSame('#0891B2', $statusColumn->settings['options'][1]['color']);
+        $this->assertSame('#16A34A', $statusColumn->settings['options'][2]['color']); // palette fallback
+        $this->assertFalse($statusColumn->settings['multi'] ?? true);
+
+        // Custom list first, then the file's out-of-list label seeded by
+        // the import-time backstop (ImportOptionSeeder).
+        $this->assertSame(
+            ['Premium', 'Standard', 'Basic'],
+            array_column($tierColumn->settings['options'] ?? [], 'label'),
+        );
+        $this->assertTrue($tierColumn->settings['multi'] ?? false);
+
+        $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->where('name', 'North Clinic')->value('id');
+        $this->assertNotNull($rowId);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $statusColumn->id,
+            'row_id' => $rowId,
+            'value_text' => 'Active',
+        ]);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $tierColumn->id,
+            'row_id' => $rowId,
+            'value_text' => 'Premium',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+        @unlink($path);
+    }
+
+    /**
+     * Step-3 option editor, managed half: a "＋ New column…" status draft
+     * with custom options must create the column with exactly that list
+     * (no starters) and land the matching cell.
+     */
+    public function test_classic_execute_managed_new_column_uses_step3_custom_options(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $uploadId = str_repeat('27', 16);
+        $this->streamExtraColumnWorkbook($uploadId, 'Escalated');
+
+        $execution = $this->postJson('/tables/service-requests/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+            'sheet' => 'Service Requests',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['service_request_no' => 'A', 'customer_name' => 'B'],
+            'newColumns' => [[
+                'letter' => 'C',
+                'name' => 'Escalation',
+                'type' => 'status',
+                'options' => [
+                    ['label' => 'Escalated', 'color' => '#DC2626'],
+                    ['label' => 'Monitoring', 'color' => '#2563EB'],
+                ],
+            ]],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        $column = CustomTableColumn::query()
+            ->where('table_key', 'service-requests')
+            ->where('name', 'Escalation')
+            ->firstOrFail();
+
+        $this->assertSame(
+            ['Escalated', 'Monitoring'],
+            array_column($column->settings['options'] ?? [], 'label'),
+        );
+        $this->assertSame('#DC2626', $column->settings['options'][0]['color']);
+        $this->assertFalse($column->settings['multi'] ?? true);
+
+        $rowId = ServiceRequest::query()->where('service_request_number', 'SR-9001')->value('id');
+        $this->assertNotNull($rowId);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $rowId,
+            'value_text' => 'Escalated',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * Step-3 options are validated at the shared boundary: malformed
+     * payloads must 422 with an option-specific message BEFORE any purge or
+     * file access, on both the dynamic and the managed write path.
+     */
+    public function test_classic_execute_rejects_bad_step3_options(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $dynamic = DynamicTable::create([
+            'key' => 'bad-options',
+            'name' => 'Bad Options',
+            'created_by' => $user->id,
+        ]);
+
+        $payload = [
+            'uploadId' => str_repeat('58', 16),
+            'originalName' => 'sites.xlsx',
+            'sheet' => 'Sites',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => [],
+            'titleLetter' => 'A',
+        ];
+
+        $statusColumns = fn (mixed $options): array => [
+            ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+            ['letter' => 'B', 'name' => 'Status', 'type' => 'status', 'options' => $options],
+        ];
+
+        // Options must be a list.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'columns' => $statusColumns('nope'),
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', "Column 'Status': options must be a list.");
+
+        // Blank labels are rejected.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'columns' => $statusColumns([['label' => '   ']]),
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', "Column 'Status': option labels cannot be blank.");
+
+        // Over the shared cap (ImportOptionSeeder::MAX_OPTIONS).
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'columns' => $statusColumns(
+                collect(range(1, 201))->map(fn (int $i): array => ['label' => 'L'.$i])->all(),
+            ),
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Column \'Status\': at most 200 options are allowed.');
+
+        // Colors must be hex.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'columns' => $statusColumns([['label' => 'Fine', 'color' => 'tomato']]),
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Column \'Status\': option colors must be hex like #2563EB.');
+
+        // Options only fit status/dropdown columns.
+        $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
+            'columns' => [['letter' => 'A', 'name' => 'Name', 'type' => 'text', 'options' => [['label' => 'X']]]],
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Column \'Name\': only status and dropdown columns take options.');
+
+        // The managed write path shares the same validation (no upload
+        // needed: options validation runs before the file-existence check).
+        $this->postJson('/tables/service-requests/import-classic/execute', [
+            'uploadId' => str_repeat('58', 16),
+            'originalName' => 'workbook.xlsx',
+            'sheet' => 'Service Requests',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['service_request_no' => 'A', 'customer_name' => 'B'],
+            'newColumns' => [[
+                'letter' => 'C',
+                'name' => 'Escalation',
+                'type' => 'status',
+                'options' => 'nope',
+            ]],
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', "Column 'Escalation': options must be a list.");
+
+        $this->assertDatabaseMissing('table_custom_columns', ['table_key' => $dynamic->key]);
+    }
+
+    /**
      * Formula cells must import the value Excel cached in the file — not the
      * raw "=..." formula string, and never a recalculation (that engine OOMs
      * the worker; see the Session 20 formula notes).

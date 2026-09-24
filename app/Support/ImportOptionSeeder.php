@@ -21,10 +21,10 @@ use InvalidArgumentException;
 class ImportOptionSeeder
 {
     /** Hard cap so a runaway file cannot bloat a column's option list. */
-    private const MAX_OPTIONS = 200;
+    public const MAX_OPTIONS = 200;
 
     /** Categorical palette for seeded options (labels keep their exact string). */
-    private const COLORS = [
+    public const COLORS = [
         '#64748B', '#2563EB', '#16A34A', '#D97706', '#7C3AED',
         '#DC2626', '#0891B2', '#DB2777', '#4F46E5', '#059669',
     ];
@@ -115,25 +115,28 @@ class ImportOptionSeeder
         $labels = [];
 
         foreach ($candidates as $candidate) {
-            if (! is_string($candidate)) {
-                // Non-strings: integers/floats are index lookups (validate()
-                // resolves them against existing indexes) — never seedable.
-                continue;
+            if (self::isSeedableLabel($candidate)) {
+                $labels[] = $candidate;
             }
-
-            if (trim($candidate) === '') {
-                continue;
-            }
-
-            // "3" is an index lookup in validate(), not the label "3".
-            if (is_numeric($candidate) && (string) (int) $candidate === $candidate) {
-                continue;
-            }
-
-            $labels[] = $candidate;
         }
 
         return $labels;
+    }
+
+    /**
+     * Would this cell value become an option label? Non-strings and blanks
+     * never do; integer-like numerics are index lookups in validate() (they
+     * resolve against existing indexes), never labels. The preview's
+     * distinct-value list uses the same rule so the step-3 editor only
+     * offers real candidates.
+     */
+    public static function isSeedableLabel(mixed $candidate): bool
+    {
+        if (! is_string($candidate) || trim($candidate) === '') {
+            return false;
+        }
+
+        return ! (is_numeric($candidate) && (string) (int) $candidate === $candidate);
     }
 
     /**
