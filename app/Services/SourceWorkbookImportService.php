@@ -13,6 +13,7 @@ use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -69,7 +70,7 @@ class SourceWorkbookImportService
      * sheet's pms_frequency / tsp_in_charge during auto-import; the mapped
      * wizard passes none, keeping those two fields manual-only.
      */
-    private function upsertProductRow(array $data, int $rowNumber, ImportBatch $batch, array $extra = []): void
+    private function upsertProductRow(array $data, int $rowNumber, ImportBatch $batch, array $extra = []): ?Installation
     {
         $data['pms_frequency'] = $extra['pms_frequency'] ?? '';
         $data['tsp_in_charge'] = $extra['tsp_in_charge'] ?? '';
@@ -82,7 +83,7 @@ class SourceWorkbookImportService
             // row past the real data range (e.g. stray "#N/A" / "!" values with
             // no customer or device identified). Skip it rather than creating a
             // blank/ghost installation.
-            return;
+            return null;
         }
 
         // Compute the stable source id / hash from the ORIGINAL row data
@@ -108,7 +109,7 @@ class SourceWorkbookImportService
             ],
         );
 
-        Installation::updateOrCreate(
+        return Installation::updateOrCreate(
             ['source_system' => self::PRODUCT_SOURCE, 'source_record_id' => $sourceId],
             [
                 'account_id' => $account->id,
@@ -162,14 +163,14 @@ class SourceWorkbookImportService
     }
 
     /** One Service Requests row -> ServiceRequest upsert (shared by both import paths). */
-    private function upsertServiceRequestRow(array $data, int $rowNumber, ImportBatch $batch): void
+    private function upsertServiceRequestRow(array $data, int $rowNumber, ImportBatch $batch): ServiceRequest
     {
         $requestId = $this->value($data, 'service_request_no') ?: $this->value($data, 'service_request');
         // The actual file row number is the stable fallback identity
         // (counter-based ids drifted once counters were batched).
         $requestId = $requestId ?: 'row-'.$rowNumber;
 
-        ServiceRequest::updateOrCreate(
+        return ServiceRequest::updateOrCreate(
             ['source_system' => self::EXECUTIVE_SOURCE, 'source_record_id' => $requestId],
             [
                 'import_batch_id' => $batch->id,
@@ -225,7 +226,7 @@ class SourceWorkbookImportService
     }
 
     /** One Technical Reports row -> TechnicalReport upsert (shared by both import paths). */
-    private function upsertTechnicalReportRow(array $data, int $rowNumber, ImportBatch $batch): void
+    private function upsertTechnicalReportRow(array $data, int $rowNumber, ImportBatch $batch): TechnicalReport
     {
         $reference = $this->value($data, 'reference_number');
         if ($reference === '') {
@@ -238,7 +239,7 @@ class SourceWorkbookImportService
                 $query->where('service_request_number', $requestNumber)->orWhere('service_request_code', $requestNumber);
             })->first();
 
-        TechnicalReport::updateOrCreate(
+        return TechnicalReport::updateOrCreate(
             ['source_system' => self::EXECUTIVE_SOURCE, 'source_record_id' => $reference],
             [
                 'service_request_id' => $request?->id,
@@ -290,12 +291,12 @@ class SourceWorkbookImportService
     }
 
     /** One historical TSMS row -> HistoricalTsmsReport upsert (shared by both import paths). */
-    private function upsertHistoricalRow(array $data, int $rowNumber, ImportBatch $batch): void
+    private function upsertHistoricalRow(array $data, int $rowNumber, ImportBatch $batch): HistoricalTsmsReport
     {
         $timestamp = $this->value($data, 'timestamp');
         $sourceId = $timestamp !== '' ? $timestamp.'-row-'.$rowNumber : 'row-'.$rowNumber;
 
-        HistoricalTsmsReport::updateOrCreate(
+        return HistoricalTsmsReport::updateOrCreate(
             ['source_system' => self::HISTORICAL_SOURCE, 'source_record_id' => $sourceId],
             [
                 'import_batch_id' => $batch->id,
@@ -368,11 +369,11 @@ class SourceWorkbookImportService
      * whole-row hash minted a new row whenever position or branch changed,
      * orphaning the previous version.
      */
-    private function upsertPersonnelRow(array $data, ImportBatch $batch): void
+    private function upsertPersonnelRow(array $data, ImportBatch $batch): ?TechnicalPersonnel
     {
         $name = $this->value($data, 'name');
         if ($name === '') {
-            return;
+            return null;
         }
 
         $row = [
@@ -381,7 +382,7 @@ class SourceWorkbookImportService
             'branch' => $this->value($data, 'branch'),
         ];
 
-        TechnicalPersonnel::updateOrCreate(
+        return TechnicalPersonnel::updateOrCreate(
             ['source_system' => self::PERSONNEL_SOURCE, 'source_record_id' => 'personnel-'.Str::slug($row['name'])],
             [
                 'import_batch_id' => $batch->id,
@@ -481,14 +482,29 @@ class SourceWorkbookImportService
 
         $this->prepareBatch($batch, $reader, $path, $ext === 'csv' ? 'CSV' : $sheetName, $dataStart);
 
-        $this->processChunks($reader, $path, $ext === 'csv' ? 'CSV' : $sheetName, $headers, function (array $data, int $rowNumber) use ($batch, $handler, $tableKey): void {
-            if ($tableKey === 'personnel') {
-                $this->upsertPersonnelRow($data, $batch);
+        // Custom-column targets (custom_{id}) carry file values the fixed
+        // upserts ignore - fetch those columns once, write per row below.
+        $customColumns = CustomTableColumn::query()
+            ->where('table_key', $tableKey)
+            ->whereIn('id', collect($mapping)->keys()
+                ->filter(fn (string $key): bool => str_starts_with($key, 'custom_'))
+                ->map(fn (string $key): int => (int) substr($key, 7))
+                ->all())
+            ->get()
+            ->all();
 
-                return;
+        $this->processChunks($reader, $path, $ext === 'csv' ? 'CSV' : $sheetName, $headers, function (array $data, int $rowNumber) use ($batch, $handler, $tableKey, $customColumns): void {
+            $row = null;
+
+            if ($tableKey === 'personnel') {
+                $row = $this->upsertPersonnelRow($data, $batch);
+            } else {
+                $row = $this->{$handler}($data, $rowNumber, $batch);
             }
 
-            $this->{$handler}($data, $rowNumber, $batch);
+            if ($row !== null) {
+                $this->writeMappedCustomValues($row, $data, $customColumns);
+            }
         }, $batch, $dataStart);
 
         if ($tableKey === 'installed-products') {
@@ -496,6 +512,59 @@ class SourceWorkbookImportService
         }
 
         return $this->completeBatch($batch);
+    }
+
+    /**
+     * Write the custom-column values of a freshly upserted core-table row.
+     * File columns connected to (or created as) table_custom_columns land
+     * here - the fixed-column upserts above ignore them.
+     *
+     * A value the column type rejects fails the whole row: the exception
+     * propagates out of runRow's retry/transaction, the upsert rolls back
+     * with it, and the row lands in the failed-rows CSV.
+     *
+     * @param  array<int, CustomTableColumn>  $columns
+     * @param  array<string, mixed>  $data  target key => source cell
+     */
+    private function writeMappedCustomValues(Model $row, array $data, array $columns): void
+    {
+        if ($columns === []) {
+            return;
+        }
+
+        $registry = app(ColumnTypeRegistry::class);
+
+        foreach ($columns as $column) {
+            $raw = $data['custom_'.$column->id] ?? null;
+
+            if ($this->isBlankCustomValue($raw)) {
+                continue;
+            }
+
+            $type = $registry->resolve($column->type);
+            $validated = $type->validate($raw, $column->settings ?? []);
+            $shadow = $type->toShadowFields($validated);
+
+            CustomTableColumnValue::query()->updateOrCreate(
+                ['custom_column_id' => $column->id, 'row_id' => $row->getKey()],
+                [
+                    'value' => $validated,
+                    'value_text' => $shadow['value_text'] ?? null,
+                    'value_number' => $shadow['value_number'] ?? null,
+                    'value_date' => $shadow['value_date'] ?? null,
+                ],
+            );
+        }
+    }
+
+    /** Empty-ish markers never become stored custom values (mirrors DynamicTableImportService). */
+    private function isBlankCustomValue(mixed $value): bool
+    {
+        if ($value === null || $value === '') {
+            return true;
+        }
+
+        return is_string($value) && in_array(trim($value), ['N/A', 'NA', '-', '#N/A', 'null'], true);
     }
 
     /**

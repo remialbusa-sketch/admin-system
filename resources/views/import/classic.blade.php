@@ -1,5 +1,5 @@
 <x-layouts.dashboard title="Import {{ $title }}">
-    <x-admin.page-header eyebrow="Import" title="Import {{ $title }}" description="Upload, preview and map your workbook, then import. Existing records are updated by stable identifiers; nothing is written until you press Start import.">
+    <x-admin.page-header eyebrow="Import" title="Import {{ $title }}" description="Upload your workbook, connect each column to a field, preview the first records, then import. Importing replaces the table's records — undo stays available on the table page.">
         <x-slot name="actions">
             <a href="{{ $backUrl }}" class="admin-secondary-button">
                 <x-mary-icon name="o-arrow-left" class="h-4 w-4" />
@@ -57,8 +57,8 @@
                     </div>
                 </div>
 
-                {{-- Upload --}}
-                <div x-show="!result">
+                {{-- Step 1: source file (upload is step-1 content) --}}
+                <div x-show="!result && phase === 'header'" x-cloak>
                     <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Excel / CSV file</label>
                     <input type="file" @change="onFile($el.files[0])" :disabled="uploading || analyzing" class="admin-control w-full" accept=".xlsx,.xls,.csv,.txt">
                     <span class="mt-1 block text-xs font-semibold text-primary" x-show="uploading" x-cloak>Uploading... <span x-text="progress"></span>%</span>
@@ -125,53 +125,23 @@
                     </div>
                 </div>
 
-                {{-- Title column: "What is your first column?" --}}
-                <div x-show="preview && !result && phase === 'title'" x-cloak class="space-y-4">
-                    <div>
-                        <h3 class="text-lg font-bold text-base-content">What is your first column?</h3>
-                        <p class="mt-0.5 text-xs text-base-content/55" x-text="titleHint()"></p>
-                    </div>
-
-                    <div class="overflow-x-auto rounded-md border border-base-300">
-                        <table class="min-w-full border-collapse text-left text-xs">
-                            <thead>
-                                <tr class="border-b border-base-300 bg-base-200/60">
-                                    <th class="w-12 px-3 py-2"></th>
-                                    <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
-                                        <th class="px-1 py-1 text-center">
-                                            <button type="button" @click="pickTitleColumn(col.letter)" :title="`Use column ${col.letter} as the title`" class="w-full rounded px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] transition-colors" :class="titleColumn === col.letter ? 'bg-primary text-primary-content' : 'text-base-content/45 hover:bg-primary/10 hover:text-primary'" x-text="col.letter"></button>
-                                        </th>
-                                    </template>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-base-300">
-                                <template x-for="row in (preview?.topRows || []).slice(0,6)" :key="row.rowNumber">
-                                    <tr class="hover:bg-base-200/50">
-                                        <td class="px-3 py-1.5 tabular-nums text-base-content/40" x-text="row.rowNumber"></td>
-                                        <template x-for="col in (preview?.columns || []).slice(0,12)" :key="col.letter">
-                                            <td class="max-w-[150px] truncate px-3 py-1.5" :class="titleColumn === col.letter ? 'bg-primary/15 font-semibold text-base-content' : 'text-base-content/70'" :title="row.cells[col.letter] || ''" x-text="row.cells[col.letter] || ''"></td>
-                                        </template>
-                                    </tr>
-                                </template>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <div class="flex items-center justify-between gap-3 border-t border-base-300 pt-4">
-                        <span class="text-xs text-base-content/50" x-text="titleColumn ? `Title column: ${titleColumn}` : 'No title column selected — rows fall back to a content digest.'"></span>
-                        <div class="flex flex-wrap gap-2">
-                            <button type="button" @click="phase = 'header'" class="admin-secondary-button">Back</button>
-                            <button type="button" @click="phase = 'columns'; step = 3" class="admin-primary-button">Next</button>
-                        </div>
-                    </div>
-                </div>
-
-                {{-- Customize columns: the final step before import --}}
+                {{-- Step 2: connect each column to a field --}}
                 <div x-show="preview && !result && phase === 'columns'" x-cloak class="space-y-4">
                     <div>
-                        <h3 class="text-lg font-bold text-base-content">Customize your columns</h3>
-                        <p class="mt-0.5 text-xs text-base-content/55" x-text="isDynamic ? 'Every checked column becomes a table column. Importing replaces the whole table.' : 'Choose what each file column feeds. Importing replaces every record.'"></p>
+                        <h3 class="text-lg font-bold text-base-content">Connect each column to a field</h3>
+                        <p class="mt-0.5 text-xs text-base-content/55" x-text="isDynamic ? 'Every checked column becomes a table column. Importing replaces the whole table.' : 'Pick what each file column feeds — or add it as a new column. Importing replaces every record.'"></p>
                     </div>
+
+                    <template x-if="isDynamic">
+                        <div class="max-w-sm">
+                            <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55">Row title column</label>
+                            <select x-model="titleColumn" @change="titleColumn = $event.target.value" class="admin-control w-full" aria-label="Row title column">
+                                <template x-for="col in titleOptions()" :key="col.letter">
+                                    <option :value="col.letter" x-text="`${col.letter} · ${col.label || '(untitled)'}`"></option>
+                                </template>
+                            </select>
+                        </div>
+                    </template>
 
                     <div class="max-h-[46vh] divide-y divide-base-300 overflow-y-auto rounded-md border border-base-300">
                         <template x-for="col in (preview?.columns || [])" :key="col.letter">
@@ -194,20 +164,31 @@
                                     </div>
                                 </template>
                                 <template x-if="!isDynamic">
-                                    <div class="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,220px)] sm:gap-3">
+                                    <div class="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,260px)] sm:gap-3">
                                         <div class="min-w-0">
                                             <p class="truncate text-sm font-semibold text-base-content"><span class="mr-1.5 font-mono text-xs text-base-content/45" x-text="col.letter"></span><span x-text="col.label || '(untitled)'"></span></p>
                                             <p class="truncate text-xs text-base-content/50" x-text="columnSample(col)"></p>
                                         </div>
-                                        <div>
-                                            <template x-if="mappedTarget(col.letter)">
-                                                <p class="truncate rounded-md border border-base-300 bg-base-200/50 px-3 py-2 font-mono text-xs text-base-content" :title="`Feeds ${mappedTarget(col.letter).label}`">
-                                                    → <span x-text="mappedTarget(col.letter).label"></span>
-                                                    <span class="text-base-content/50" x-text="`(${mappedTarget(col.letter).kind})`"></span>
-                                                </p>
-                                            </template>
-                                            <template x-if="!mappedTarget(col.letter)">
-                                                <p class="rounded-md border border-dashed border-base-300 px-3 py-2 font-mono text-xs text-base-content/40">skipped</p>
+                                        <div class="space-y-2">
+                                            <select class="admin-control w-full text-xs"
+                                                    :value="columnTarget(col.letter)"
+                                                    @change="onColumnTarget(col.letter, $event.target.value, col.label)"
+                                                    :aria-label="`Connect column ${col.letter}`">
+                                                <option value="">— Skip this column —</option>
+                                                <template x-for="field in (targets?.fields || [])" :key="field.key">
+                                                    <option :value="field.key" x-text="field.label"></option>
+                                                </template>
+                                                <option value="__new__">＋ New column…</option>
+                                            </select>
+                                            <template x-if="columnTarget(col.letter) === '__new__' && newCols[col.letter]">
+                                                <div class="grid grid-cols-2 gap-2">
+                                                    <input type="text" x-model="newCols[col.letter].name" maxlength="100" class="admin-control w-full text-xs" placeholder="Column name" :aria-label="`Name for column ${col.letter}`">
+                                                    <select x-model="newCols[col.letter].type" class="admin-control w-full font-mono text-xs" :aria-label="`Type for column ${col.letter}`">
+                                                        <template x-for="(label, key) in (columnTypes || {})" :key="key">
+                                                            <option :value="key" x-text="label"></option>
+                                                        </template>
+                                                    </select>
+                                                </div>
                                             </template>
                                         </div>
                                     </div>
@@ -222,7 +203,12 @@
                                 <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums" x-text="`${importColumnsPayload().length} columns`"></span>
                             </template>
                             <template x-if="!isDynamic">
-                                <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums" x-text="`${columnsMappedCount()} mapped`"></span>
+                                <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums" x-text="`${columnsMappedCount()} connected`"></span>
+                            </template>
+                            <template x-if="!isDynamic && newColumnsPayload().length > 0">
+                                <span class="rounded-full bg-base-200 px-3 py-1 text-base-content/60 tabular-nums" x-text="`${newColumnsPayload().length} new`"></span>
+                            </template>
+                            <template x-if="!isDynamic">
                                 <template x-for="label in columnsMissingRequired()" :key="label">
                                     <span class="rounded-full bg-error/10 px-3 py-1 text-error" x-text="`Required: ${label}`"></span>
                                 </template>
@@ -230,8 +216,50 @@
                         </div>
                         <div class="flex flex-wrap gap-2">
                             <button type="button" @click="columnsBack()" class="admin-secondary-button">Back</button>
+                            <button type="button" @click="toPreview()" :disabled="isDynamic ? importColumnsPayload().length === 0 : columnsMissingRequired().length > 0" class="admin-primary-button">Continue</button>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- Step 3: record preview, then import --}}
+                <div x-show="preview && !result && phase === 'preview'" x-cloak class="space-y-4">
+                    <div>
+                        <h3 class="text-lg font-bold text-base-content" x-text="`Your first ${previewRows().length} records are here`"></h3>
+                        <p class="mt-0.5 text-xs text-base-content/55" x-text="isDynamic ? 'Each checked column becomes a table column. Importing replaces the whole table.' : 'Connected columns land as shown. Importing replaces every record.'"></p>
+                    </div>
+
+                    <div class="overflow-x-auto rounded-md border border-base-300">
+                        <table class="min-w-full border-collapse text-left text-xs">
+                            <thead>
+                                <tr class="border-b border-base-300 bg-base-200/60">
+                                    <th class="w-12 px-3 py-2"></th>
+                                    <template x-for="col in previewConnectedColumns()" :key="col.letter">
+                                        <th class="max-w-[180px] truncate px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-base-content/55" :title="col.label" x-text="col.label"></th>
+                                    </template>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-base-300">
+                                <template x-for="row in previewRows()" :key="row.rowNumber">
+                                    <tr class="hover:bg-base-200/50">
+                                        <td class="px-3 py-1.5 tabular-nums text-base-content/40" x-text="row.rowNumber"></td>
+                                        <template x-for="col in previewConnectedColumns()" :key="col.letter">
+                                            <td class="max-w-[180px] truncate px-3 py-1.5 text-base-content/70" :title="row.cells[col.letter] || ''" x-text="row.cells[col.letter] || ''"></td>
+                                        </template>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-4">
+                        <div class="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em]">
+                            <span class="rounded-full bg-primary/10 px-3 py-1 text-primary tabular-nums" x-text="`${Number(preview?.totalRows || 0).toLocaleString()} records`"></span>
+                            <span class="rounded-full bg-base-200 px-3 py-1 text-base-content/60 tabular-nums" x-text="`${previewConnectedColumns().length} columns`"></span>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" @click="previewBack()" class="admin-secondary-button">Back</button>
                             <button type="button" @click="execute()" :disabled="executing" class="admin-primary-button">
-                                <span x-show="!executing" x-text="`Start import (${Number(preview?.totalRows || 0).toLocaleString()} rows)`"></span>
+                                <span x-show="!executing" x-text="`Import ${Number(preview?.totalRows || 0).toLocaleString()} records`"></span>
                                 <span x-show="executing">Importing...</span>
                             </button>
                         </div>
@@ -256,7 +284,8 @@
                 phase: 'header',
                 titleColumn: '',
                 importCols: {},
-                importCols: {},
+                newCols: {},
+                newColsSeeded: false,
                 uploading: false,
                 analyzing: false,
                 executing: false,
@@ -308,6 +337,8 @@
                     this.mappingSource = {};
                     this.titleColumn = '';
                     this.importCols = {};
+                    this.newCols = {};
+                    this.newColsSeeded = false;
                     if (!file) return;
                     const ext = (file.name.split('.').pop() || '').toLowerCase();
                     if (!['xlsx','xls','csv','txt'].includes(ext)) {
@@ -371,7 +402,6 @@
                             offset = Math.min(offset + chunkSize, file.size);
                             this.progress = Math.round(offset / file.size * 100);
                         }
-                        this.step = 2;
                         await this.analyze();
                     } catch (e) {
                         this.globalError = e.message || 'The upload failed.';
@@ -447,6 +477,8 @@
                     this.mappingSource = {};
                     this.titleColumn = '';
                     this.importCols = {};
+                    this.newCols = {};
+                    this.newColsSeeded = false;
                     await this.reAnalyze();
                 },
 
@@ -463,14 +495,18 @@
                     }
                 },
 
-                /** Next: analyze with the chosen rows, then the title column step. */
+                /** Next: analyze with the chosen rows, then step 2. */
                 async goMap() {
                     try {
                         await this.analyze();
-                        this.titleColumn = this.mapping['__identity__'] || this.mapping['name'] || this.mapping[this.titleFieldKey()] || '';
-                        this.initImportCols();
-                        this.initImportCols();
-                        this.phase = 'title';
+                        if (this.isDynamic) {
+                            this.titleColumn = this.mapping['__identity__'] || this.mapping['name'] || '';
+                            this.initImportCols();
+                        } else {
+                            this.initNewCols();
+                        }
+                        this.ensureTitleColumn();
+                        this.phase = 'columns';
                         this.step = 2;
                     } catch {}
                 },
@@ -496,28 +532,58 @@
                     return (label || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
                 },
 
-                /** This table's title field (identity for dynamic tables). */
-                titleFieldKey() {
-                    if (this.isDynamic) {
-                        return '__identity__';
-                    }
-                    return (targets && targets.title) || '';
+                /**
+                 * Default unmatched file columns to "＋ New column…" (name from
+                 * the header) so no column is silently skipped. Runs once per
+                 * file: later revisits of step 2 keep the user's choices.
+                 */
+                initNewCols() {
+                    if (this.newColsSeeded) return;
+                    const used = new Set(Object.values(this.mapping || {}).filter((letter) => letter !== ''));
+                    this.newCols = {};
+                    (this.preview?.columns || []).forEach((col) => {
+                        const header = (col.label || '').trim();
+                        if (header === '' || used.has(col.letter)) return;
+                        this.newCols[col.letter] = { name: header, type: 'text' };
+                    });
+                    this.newColsSeeded = true;
                 },
 
-                titleHint() {
-                    const field = (targets?.fields || []).find((entry) => entry.key === this.titleFieldKey());
-                    const name = field ? field.label : 'each row';
-                    return this.isDynamic
-                        ? 'This will become the title of each row. Click a column to select it.'
-                        : `This will become the ${name} of each row. Click a column to select it.`;
+                /** Dynamic: the title must be one of the included columns. */
+                ensureTitleColumn() {
+                    if (!this.isDynamic) return;
+                    const options = this.titleOptions();
+                    if (!options.some((col) => col.letter === this.titleColumn)) {
+                        this.titleColumn = options[0]?.letter || '';
+                    }
+                },
+
+                /** Included file columns (letter + label), for the title picker. */
+                titleOptions() {
+                    const included = new Set(this.importColumnsPayload().map((entry) => entry.letter));
+                    return (this.preview?.columns || []).filter((col) => included.has(col.letter));
                 },
 
                 stepLabels() {
-                    return ['Source file', 'First column', 'Customize columns'];
+                    return ['Source file', 'Connect columns', 'Preview & import'];
                 },
 
                 columnsBack() {
-                    this.phase = 'title';
+                    this.phase = 'header';
+                    this.step = 1;
+                },
+
+                /** Step 2 -> step 3: the record preview before importing. */
+                toPreview() {
+                    if (this.isDynamic && this.importColumnsPayload().length === 0) return;
+                    if (!this.isDynamic && this.columnsMissingRequired().length > 0) return;
+                    this.ensureTitleColumn();
+                    this.phase = 'preview';
+                    this.step = 3;
+                },
+
+                previewBack() {
+                    this.phase = 'columns';
                     this.step = 2;
                 },
 
@@ -535,32 +601,77 @@
                     return (targets?.fields || []).filter((field) => field.required && !mappedKeys.has(field.key)).map((field) => field.label);
                 },
 
-                /** Title column pick: identity for dynamic tables, the title
-                    field for managed ones. Name falls back automatically when
-                    unmapped, so one click never trips the one-column rule. */
-                pickTitleColumn(letter) {
-                    const key = this.titleFieldKey();
-                    if (!key) {
-                        return;
-                    }
-                    this.titleColumn = letter;
-                    this.mapping[key] = letter;
-                    this.mappingSource[key] = 'manual';
-                },
-
                 columnSample(col) {
                     const samples = (col?.samples || []).filter(Boolean).slice(0, 2);
                     return samples.length ? 'e.g. ' + samples.join(' | ') : '';
                 },
 
-                /** Field key currently fed by this letter, '__new__', or ''. */
-                /** Field definition fed by this letter, if any (read-only). */
-                mappedTarget(letter) {
+                /** Field key fed by this letter, '__new__' for a draft new column, or ''. */
+                columnTarget(letter) {
                     const found = Object.entries(this.mapping || {}).find(([, mapped]) => mapped === letter);
-                    if (!found) {
-                        return null;
+                    if (found) {
+                        return found[0];
                     }
-                    return (targets?.fields || []).find((field) => field.key === found[0]) || null;
+                    return this.newCols[letter] ? '__new__' : '';
+                },
+
+                /** Dropdown change: one source column feeds exactly one target. */
+                onColumnTarget(letter, value, header) {
+                    Object.keys(this.mapping).forEach((key) => {
+                        if (this.mapping[key] === letter) {
+                            this.mapping[key] = '';
+                            delete this.mappingSource[key];
+                        }
+                    });
+                    delete this.newCols[letter];
+
+                    if (value === '__new__') {
+                        this.newCols[letter] = { name: (header || '').trim(), type: 'text' };
+                        return;
+                    }
+
+                    if (value) {
+                        this.mapping[value] = letter;
+                        this.mappingSource[value] = 'manual';
+                    }
+                },
+
+                /** Draft new columns to send with the import ({letter, name, type}). */
+                newColumnsPayload() {
+                    return Object.entries(this.newCols || {})
+                        .filter(([, draft]) => (draft.name || '').trim() !== '')
+                        .map(([letter, draft]) => ({
+                            letter,
+                            name: draft.name.trim(),
+                            type: draft.type || 'text',
+                        }));
+                },
+
+                /** Connected columns in file order (letter + target label) for the step-3 preview. */
+                previewConnectedColumns() {
+                    if (this.isDynamic) {
+                        return this.importColumnsPayload().map((entry) => ({ letter: entry.letter, label: entry.name }));
+                    }
+
+                    const connected = [];
+                    (this.preview?.columns || []).forEach((col) => {
+                        const target = this.columnTarget(col.letter);
+                        if (!target) return;
+                        if (target === '__new__') {
+                            connected.push({ letter: col.letter, label: this.newCols[col.letter]?.name || col.label || 'New column' });
+                            return;
+                        }
+                        const field = (targets?.fields || []).find((entry) => entry.key === target);
+                        connected.push({ letter: col.letter, label: field ? field.label : target });
+                    });
+                    return connected;
+                },
+
+                /** First 10 data records as they will land. */
+                previewRows() {
+                    return (this.preview?.topRows || [])
+                        .filter((row) => row.rowNumber >= (this.dataStart || 1))
+                        .slice(0, 10);
                 },
 
                 /** Included file columns for a replacing dynamic import, in file order. */
@@ -582,6 +693,7 @@
 
                 async execute() {
                     this.globalError = '';
+                    this.ensureTitleColumn();
                     this.executing = true;
                     try {
                         const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -600,6 +712,7 @@
                                 headerRow: this.headerRow,
                                 dataStart: this.dataStart,
                                 mapping: this.mapping,
+                                newColumns: this.isDynamic ? [] : this.newColumnsPayload(),
                                 titleLetter: this.titleColumn || '',
                                 columns: this.importColumnsPayload(),
                                 columnSignature: Object.fromEntries(
@@ -630,6 +743,8 @@
                     this.mappingSource = {};
                     this.titleColumn = '';
                     this.importCols = {};
+                    this.newCols = {};
+                    this.newColsSeeded = false;
                     (targets?.fields || []).forEach(f => { this.mapping[f.key] = ''; });
                     this.step = 1;
                     this.phase = 'header';

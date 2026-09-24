@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\CustomTableColumn;
 use App\Models\DynamicTable;
 use App\Services\ImportMappingService;
 
@@ -27,7 +28,25 @@ class ImportTargetResolver
         $managed = ImportMappingService::TARGETS[$tableKey] ?? null;
 
         if ($managed !== null) {
-            return $managed + ['dynamic' => false];
+            // Custom columns previously added to this core table are import
+            // targets too: a file column connecting to one overwrites it
+            // (name-based matching) instead of duplicating it.
+            $custom = CustomTableColumn::query()
+                ->where('table_key', $tableKey)
+                ->orderBy('position')
+                ->get(['id', 'name', 'type'])
+                ->map(fn (CustomTableColumn $column): array => [
+                    'key' => $column->columnKey(),
+                    'label' => $column->name,
+                    'required' => false,
+                    'kind' => $column->type,
+                ])
+                ->all();
+
+            return array_merge($managed, [
+                'dynamic' => false,
+                'fields' => [...$managed['fields'], ...$custom],
+            ]);
         }
 
         $dynamic = DynamicTable::query()->where('key', $tableKey)->first();

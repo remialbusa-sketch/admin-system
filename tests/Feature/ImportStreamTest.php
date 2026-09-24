@@ -6,6 +6,7 @@ use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
 use App\Models\DynamicRow;
 use App\Models\DynamicTable;
+use App\Models\ServiceRequest;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -551,6 +552,123 @@ class ImportStreamTest extends TestCase
         $this->assertStringStartsNotWith('<!DOCTYPE', (string) $response->getContent());
 
         Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+        @unlink($path);
+    }
+
+    /**
+     * The flagged bug: an Excel column that matches no managed field must
+     * still land — created as a CustomTableColumn on the core table key and
+     * written per row, never silently dropped.
+     */
+    public function test_classic_execute_adds_extra_file_columns_to_a_core_table(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $uploadId = str_repeat('4e', 16);
+        $this->streamExtraColumnWorkbook($uploadId, 'Cebu DC');
+
+        $execution = $this->postJson('/tables/service-requests/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+            'sheet' => 'Service Requests',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['service_request_no' => 'A', 'customer_name' => 'B'],
+            'newColumns' => [['letter' => 'C', 'name' => 'Cost Center', 'type' => 'text']],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        $column = CustomTableColumn::query()
+            ->where('table_key', 'service-requests')
+            ->where('name', 'Cost Center')
+            ->firstOrFail();
+        $rowId = ServiceRequest::query()->where('service_request_number', 'SR-9001')->value('id');
+
+        $this->assertNotNull($rowId);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $rowId,
+            'value_text' => 'Cebu DC',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * Re-importing the same file overwrites by name: the extra column is
+     * reused (unique per table_key + name), never duplicated.
+     */
+    public function test_classic_execute_reimport_reuses_extra_columns_by_name(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $uploadId = str_repeat('5f', 16);
+        $this->streamExtraColumnWorkbook($uploadId, 'Cebu DC');
+
+        $payload = [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+            'sheet' => 'Service Requests',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['service_request_no' => 'A', 'customer_name' => 'B'],
+            'newColumns' => [['letter' => 'C', 'name' => 'cost center', 'type' => 'text']],
+        ];
+
+        $this->postJson('/tables/service-requests/import-classic/execute', $payload)->assertOk();
+        $second = $this->postJson('/tables/service-requests/import-classic/execute', $payload)->assertOk()->json();
+
+        $this->assertSame('completed', $second['status'], json_encode($second));
+        $this->assertSame(1, $second['processed'], json_encode($second));
+
+        $this->assertSame(1, CustomTableColumn::query()->where('table_key', 'service-requests')->count());
+        $this->assertSame(1, ServiceRequest::query()->count());
+
+        // The overwritten row still carries the value.
+        $column = CustomTableColumn::query()->where('table_key', 'service-requests')->firstOrFail();
+        $rowId = ServiceRequest::query()->where('service_request_number', 'SR-9001')->value('id');
+
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $rowId,
+            'value_text' => 'Cebu DC',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * A Service Requests workbook with one column ("Cost Center") that maps
+     * to no managed field.
+     */
+    private function streamExtraColumnWorkbook(string $uploadId, string $costCenter): void
+    {
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Service Requests');
+        $sheet->setCellValue('A1', 'SR No');
+        $sheet->setCellValue('B1', 'Customer');
+        $sheet->setCellValue('C1', 'Cost Center');
+        $sheet->setCellValue('A2', 'SR-9001');
+        $sheet->setCellValue('B2', 'Extra Hospital');
+        $sheet->setCellValue('C2', $costCenter);
+        $path = tempnam(sys_get_temp_dir(), 'extra-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        $spreadsheet->disconnectWorksheets();
+
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'workbook.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'workbook.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
         @unlink($path);
     }
 }

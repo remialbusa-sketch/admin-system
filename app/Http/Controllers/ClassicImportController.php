@@ -209,8 +209,10 @@ class ClassicImportController extends Controller
             'headerRow' => ['required', 'integer', 'min:1', 'max:200'],
             'dataStart' => ['required', 'integer', 'min:1', 'max:500'],
             // Optional: dynamic replace flows send columns + titleLetter
-            // instead of a field mapping (emptiness is checked below).
+            // instead of a field mapping (emptiness is checked below);
+            // managed flows may send newColumns ("＋ New column…" drafts).
             'mapping' => ['array'],
+            'newColumns' => ['sometimes', 'array'],
         ]);
 
         $targets = ImportTargetResolver::for($table);
@@ -260,6 +262,80 @@ class ClassicImportController extends Controller
             return response()->json(['message' => 'Unknown import target field.'], 422);
         }
 
+        // "＋ New column…" drafts (letter => name/type): validate structure
+        // first - nothing may be written until every check below passes.
+        $newColumns = collect($request->input('newColumns', []))->values();
+        $allowedTypes = array_keys($this->importableColumnTypes());
+        $seenNames = [];
+
+        foreach ($newColumns as $index => $entry) {
+            $position = $index + 1;
+            $letter = strtoupper(trim((string) ($entry['letter'] ?? '')));
+            $name = trim((string) ($entry['name'] ?? ''));
+            $type = trim((string) ($entry['type'] ?? ''));
+
+            if (! preg_match('/^[A-Z]{1,3}$/', $letter)) {
+                return response()->json(['message' => "New column #{$position}: invalid source column."], 422);
+            }
+
+            if ($name === '' || mb_strlen($name) > 100) {
+                return response()->json(['message' => "New column #{$position}: give it a name (max 100 characters)."], 422);
+            }
+
+            if (in_array($this->normalizeColumnName($name), $seenNames, true)) {
+                return response()->json(['message' => "Column name '{$name}' is used twice."], 422);
+            }
+
+            if (! in_array($type, $allowedTypes, true)) {
+                return response()->json(['message' => "Column '{$name}': unknown column type."], 422);
+            }
+
+            $seenNames[] = $this->normalizeColumnName($name);
+            $newColumns[$index] = ['letter' => $letter, 'name' => $name, 'type' => $type];
+        }
+
+        // Each source column feeds one target only: reject letters already
+        // connected to a field (and letters used by two drafts).
+        $usedLetters = $used->values();
+
+        foreach ($newColumns as $entry) {
+            if ($usedLetters->contains($entry['letter'])) {
+                return response()->json(['message' => 'Column '.$entry['letter'].' is already connected to a field. Each source column can be used once.'], 422);
+            }
+
+            $usedLetters->push($entry['letter']);
+        }
+
+        // Name-based match: a draft whose name equals an existing custom
+        // column of this table overwrites it instead of duplicating it.
+        $existingColumns = CustomTableColumn::query()
+            ->where('table_key', $table)
+            ->get()
+            ->keyBy(fn (CustomTableColumn $column): string => $this->normalizeColumnName($column->name));
+
+        $resolved = [];
+        $toCreate = [];
+
+        foreach ($newColumns as $entry) {
+            $existing = $existingColumns->get($this->normalizeColumnName($entry['name']));
+
+            if ($existing !== null) {
+                $resolved[$existing->columnKey()] = $entry['letter'];
+            } else {
+                $toCreate[] = $entry;
+            }
+        }
+
+        foreach ($resolved as $key => $letter) {
+            if (($mapping[$key] ?? '') !== '' && $mapping[$key] !== $letter) {
+                return response()->json(['message' => 'Column '.$letter.' and column '.$mapping[$key].' both connect to the same table field.'], 422);
+            }
+        }
+
+        if ($toCreate !== [] && ! $request->user()?->canEditRecords()) {
+            return response()->json(['message' => 'Your role cannot add columns to this table.'], 403);
+        }
+
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         $relative = ImportStreamController::storedPathFor($uploadId, $extension);
         $absolute = Storage::disk(config('filesystems.default'))->path($relative);
@@ -273,6 +349,25 @@ class ClassicImportController extends Controller
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
         }
+
+        // Reuse first, create after the purge so a rejected import never
+        // leaves structure behind.
+        $position = (int) CustomTableColumn::query()->where('table_key', $table)->max('position');
+
+        foreach ($toCreate as $entry) {
+            $column = CustomTableColumn::create([
+                'table_key' => $table,
+                'name' => $entry['name'],
+                'type' => $entry['type'],
+                'settings' => $this->defaultColumnSettings($entry['type']),
+                'position' => ++$position,
+                'created_by' => $request->user()?->id,
+            ]);
+
+            $resolved[$column->columnKey()] = $entry['letter'];
+        }
+
+        $mapping = array_merge($mapping, $resolved);
 
         try {
             $batch = app(SourceWorkbookImportService::class)->importMapped(
@@ -418,6 +513,18 @@ class ClassicImportController extends Controller
      *
      * @return array<string, string>
      */
+    /**
+     * Name-based matching key for custom columns: case- and punctuation-
+     * insensitive, so "Cost-Center" and "cost center" are the same column.
+     * (Mirrors ImportMappingService::normalizeLabel for auto-mapping.)
+     */
+    private function normalizeColumnName(string $name): string
+    {
+        $normalized = preg_replace('/[^a-z0-9]+/', ' ', strtolower(trim($name))) ?? '';
+
+        return trim(preg_replace('/\s+/', ' ', $normalized) ?? '');
+    }
+
     private function columnSignature(Request $request): array
     {
         $signature = [];
