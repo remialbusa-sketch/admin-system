@@ -316,6 +316,7 @@
                 newColsSeeded: false,
                 colTypes: {},
                 colTypesSeeded: false,
+                seededSignature: null,
                 typeMenu: null,
                 uploading: false,
                 analyzing: false,
@@ -372,6 +373,7 @@
                     this.newColsSeeded = false;
                     this.colTypes = {};
                     this.colTypesSeeded = false;
+                    this.seededSignature = null;
                     this.typeMenu = null;
                     if (!file) return;
                     const ext = (file.name.split('.').pop() || '').toLowerCase();
@@ -515,6 +517,7 @@
                     this.newColsSeeded = false;
                     this.colTypes = {};
                     this.colTypesSeeded = false;
+                    this.seededSignature = null;
                     this.typeMenu = null;
                     await this.reAnalyze();
                 },
@@ -536,12 +539,23 @@
                 async goMap() {
                     try {
                         await this.analyze();
+                        // Reseed defaults only when the preview's letters+labels
+                        // actually changed: back/forward must keep step-3 type
+                        // picks, renames and includes.
+                        const signature = JSON.stringify((this.preview?.columns || []).map((col) => [col.letter, col.label || '']));
+                        const previewChanged = signature !== this.seededSignature;
+                        this.seededSignature = signature;
                         if (this.isDynamic) {
                             this.titleColumn = this.mapping['__identity__'] || this.mapping['name'] || this.mapping[this.titleFieldKey()] || this.titleColumn || '';
-                            // Fresh headers can carry fresh defaults: reseed types on re-entry.
-                            this.colTypesSeeded = false;
-                            this.initImportCols();
+                            if (previewChanged) {
+                                this.colTypesSeeded = false;
+                                this.initImportCols();
+                            }
                         } else {
+                            if (previewChanged) {
+                                this.colTypesSeeded = false;
+                                this.newColsSeeded = false;
+                            }
                             this.initNewCols();
                         }
                         this.initColTypes();
@@ -887,6 +901,7 @@
                     this.newColsSeeded = false;
                     this.colTypes = {};
                     this.colTypesSeeded = false;
+                    this.seededSignature = null;
                     this.typeMenu = null;
                     (targets?.fields || []).forEach(f => { this.mapping[f.key] = ''; });
                     this.step = 1;

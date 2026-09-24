@@ -8,6 +8,8 @@ use App\Models\DynamicRow;
 use App\Models\DynamicTable;
 use App\Models\ServiceRequest;
 use App\Models\User;
+use App\Services\ColumnTypeRegistry;
+use App\Services\ImportMappingService;
 use DateTimeImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -376,6 +378,99 @@ class ImportStreamTest extends TestCase
         @unlink($path);
     }
 
+    /**
+     * The flagged bug, dynamic half: import-created status/dropdown columns
+     * were seeded with hardcoded starter options only, so the file's own
+     * labels ("Active", "Premium") failed validation and the cells never
+     * landed. The label must be seeded into the column's options instead.
+     */
+    public function test_classic_execute_seeds_option_labels_from_the_file(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $dynamic = DynamicTable::create([
+            'key' => 'seeded-options',
+            'name' => 'Seeded Options',
+            'created_by' => $user->id,
+        ]);
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Sites');
+        $sheet->setCellValue('A1', 'Name');
+        $sheet->setCellValue('B1', 'Status');
+        $sheet->setCellValue('C1', 'Tier');
+        $sheet->setCellValue('A2', 'North Clinic');
+        $sheet->setCellValue('B2', 'Active');
+        $sheet->setCellValue('C2', 'Premium');
+        $sheet->setCellValue('A3', 'South Clinic');
+        $sheet->setCellValue('B3', 'Closed');
+        $sheet->setCellValue('C3', 'Basic');
+        $path = tempnam(sys_get_temp_dir(), 'seed-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+
+        $uploadId = str_repeat('11', 16);
+
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'sites.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'sites.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        $execution = $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'sites.xlsx',
+            'sheet' => 'Sites',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => [],
+            'titleLetter' => 'A',
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+                ['letter' => 'B', 'name' => 'Status', 'type' => 'status'],
+                ['letter' => 'C', 'name' => 'Tier', 'type' => 'dropdown'],
+            ],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(2, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        // The file's labels were seeded into the columns' options.
+        $statusColumn = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', 'Status')->firstOrFail();
+        $tierColumn = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', 'Tier')->firstOrFail();
+
+        $statusLabels = array_column($statusColumn->settings['options'] ?? [], 'label');
+        $tierLabels = array_column($tierColumn->settings['options'] ?? [], 'label');
+
+        $this->assertContains('Active', $statusLabels);
+        $this->assertContains('Closed', $statusLabels);
+        $this->assertContains('Premium', $tierLabels);
+        $this->assertContains('Basic', $tierLabels);
+
+        // ...and the cells landed on their columns.
+        $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->where('name', 'North Clinic')->value('id');
+        $this->assertNotNull($rowId);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $statusColumn->id,
+            'row_id' => $rowId,
+            'value_text' => 'Active',
+        ]);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $tierColumn->id,
+            'row_id' => $rowId,
+            'value_text' => 'Premium',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+        @unlink($path);
+    }
+
     public function test_classic_execute_rejects_bad_replacement_columns(): void
     {
         $user = User::factory()->superadmin()->create();
@@ -643,6 +738,155 @@ class ImportStreamTest extends TestCase
         ]);
 
         Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * The flagged bug, managed half: a newColumns draft of type status on a
+     * core table was rejected because its starter options never contained
+     * the file's label — the label must be seeded so the row imports.
+     */
+    public function test_classic_execute_imports_a_new_status_column_with_file_labels(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $uploadId = str_repeat('23', 16);
+        $this->streamExtraColumnWorkbook($uploadId, 'Escalated');
+
+        $execution = $this->postJson('/tables/service-requests/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+            'sheet' => 'Service Requests',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['service_request_no' => 'A', 'customer_name' => 'B'],
+            'newColumns' => [['letter' => 'C', 'name' => 'Escalation', 'type' => 'status']],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        $column = CustomTableColumn::query()
+            ->where('table_key', 'service-requests')
+            ->where('name', 'Escalation')
+            ->firstOrFail();
+
+        $this->assertSame('status', $column->type);
+        $this->assertContains('Escalated', array_column($column->settings['options'] ?? [], 'label'));
+
+        $rowId = ServiceRequest::query()->where('service_request_number', 'SR-9001')->value('id');
+        $this->assertNotNull($rowId);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $rowId,
+            'value_text' => 'Escalated',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * The flagged bug, type-conflict half: a draft whose name matches an
+     * existing column of a different type silently kept the old type, so
+     * the matched (correct) type was dropped. Reuse must convert the column
+     * in place — same id, fresh settings for the new type, file label seeded.
+     */
+    public function test_classic_execute_converts_a_reused_column_whose_type_differs(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $existing = CustomTableColumn::create([
+            'table_key' => 'service-requests',
+            'name' => 'Priority',
+            'type' => 'text',
+            'settings' => ['note' => 'stale'],
+            'position' => 0,
+            'created_by' => $user->id,
+        ]);
+
+        $uploadId = str_repeat('35', 16);
+        $this->streamExtraColumnWorkbook($uploadId, 'Escalated');
+
+        $execution = $this->postJson('/tables/service-requests/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+            'sheet' => 'Service Requests',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['service_request_no' => 'A', 'customer_name' => 'B'],
+            'newColumns' => [['letter' => 'C', 'name' => 'Priority', 'type' => 'status']],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        // Same column id (converted, not duplicated), now the matched type.
+        $columns = CustomTableColumn::query()
+            ->where('table_key', 'service-requests')
+            ->where('name', 'Priority')
+            ->get();
+
+        $this->assertCount(1, $columns);
+        $column = $columns->firstOrFail();
+        $this->assertSame($existing->id, $column->id);
+        $this->assertSame('status', $column->type);
+
+        // Fresh settings: stale text-era config gone, starters + file label present.
+        $this->assertArrayNotHasKey('note', $column->settings ?? []);
+        $labels = array_column($column->settings['options'] ?? [], 'label');
+        $this->assertContains('New', $labels);
+        $this->assertContains('Escalated', $labels);
+
+        $rowId = ServiceRequest::query()->where('service_request_number', 'SR-9001')->value('id');
+        $this->assertNotNull($rowId);
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $rowId,
+            'value_text' => 'Escalated',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * TARGETS kind drift: every declared kind must be a real registry key
+     * ("datetime" isn't and used to 422 __new__ columns), select-backed
+     * fields must declare "status", and datetime fields must declare "date".
+     */
+    public function test_import_mapping_target_kinds_match_the_column_type_registry(): void
+    {
+        $registryKeys = array_keys(app(ColumnTypeRegistry::class)->all());
+
+        foreach (ImportMappingService::TARGETS as $tableKey => $target) {
+            foreach ($target['fields'] as $field) {
+                $this->assertContains(
+                    $field['kind'],
+                    $registryKeys,
+                    "TARGETS[{$tableKey}][{$field['key']}] declares kind '{$field['kind']}', which is not a registered column type."
+                );
+            }
+        }
+
+        $kind = function (string $table, string $key): string {
+            foreach (ImportMappingService::TARGETS[$table]['fields'] as $field) {
+                if ($field['key'] === $key) {
+                    return $field['kind'];
+                }
+            }
+
+            $this->fail("TARGETS[{$table}] has no field {$key}.");
+        };
+
+        $this->assertSame('status', $kind('service-requests', 'ticket_status'));
+        $this->assertSame('status', $kind('installed-products', 'device_status'));
+        $this->assertSame('date', $kind('technical-reports', 'service_start_date_time'));
+        $this->assertSame('status', $kind('personnel', 'branch'));
     }
 
     /**

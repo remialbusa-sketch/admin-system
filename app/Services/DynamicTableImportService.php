@@ -8,6 +8,7 @@ use App\Models\CustomTableColumnValue;
 use App\Models\DynamicRow;
 use App\Models\ImportBatch;
 use App\Models\ImportFailure;
+use App\Support\ImportOptionSeeder;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -224,7 +225,16 @@ class DynamicTableImportService
 
             try {
                 $type = $registry->resolve($column->type);
-                $validated = $this->isEmpty($value) ? [] : $type->validate($value, $column->settings ?? []);
+
+                if ($this->isEmpty($value)) {
+                    $validated = [];
+                } else {
+                    // Seed unknown status/dropdown labels before validating,
+                    // or file values the starters lack fail the cell.
+                    ImportOptionSeeder::seed($column, $value);
+                    $validated = $type->validate($value, $column->settings ?? []);
+                }
+
                 $this->writeValue($row, $column, $type, $validated);
             } catch (Throwable $exception) {
                 $failed = true;

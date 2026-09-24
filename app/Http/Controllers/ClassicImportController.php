@@ -315,12 +315,19 @@ class ClassicImportController extends Controller
 
         $resolved = [];
         $toCreate = [];
+        $toConvert = [];
 
         foreach ($newColumns as $entry) {
             $existing = $existingColumns->get($this->normalizeColumnName($entry['name']));
 
             if ($existing !== null) {
                 $resolved[$existing->columnKey()] = $entry['letter'];
+
+                // Same name, different type: reuse must convert the column,
+                // otherwise the matched type is silently dropped.
+                if ($existing->type !== $entry['type']) {
+                    $toConvert[] = ['column' => $existing, 'type' => $entry['type']];
+                }
             } else {
                 $toCreate[] = $entry;
             }
@@ -332,8 +339,8 @@ class ClassicImportController extends Controller
             }
         }
 
-        if ($toCreate !== [] && ! $request->user()?->canEditRecords()) {
-            return response()->json(['message' => 'Your role cannot add columns to this table.'], 403);
+        if (($toCreate !== [] || $toConvert !== []) && ! $request->user()?->canEditRecords()) {
+            return response()->json(['message' => 'Your role cannot add or change columns to this table.'], 403);
         }
 
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
@@ -351,7 +358,16 @@ class ClassicImportController extends Controller
         }
 
         // Reuse first, create after the purge so a rejected import never
-        // leaves structure behind.
+        // leaves structure behind. Conversions run after the purge too:
+        // purgeTable already deleted this column's values, so no stale
+        // value can violate the new type.
+        foreach ($toConvert as $conversion) {
+            $conversion['column']->update([
+                'type' => $conversion['type'],
+                'settings' => $this->defaultColumnSettings($conversion['type']),
+            ]);
+        }
+
         $position = (int) CustomTableColumn::query()->where('table_key', $table)->max('position');
 
         foreach ($toCreate as $entry) {

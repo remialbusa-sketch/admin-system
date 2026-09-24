@@ -13,6 +13,7 @@ use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use App\Support\ExcelDate;
+use App\Support\ImportOptionSeeder;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
@@ -543,6 +544,9 @@ class SourceWorkbookImportService
             }
 
             $type = $registry->resolve($column->type);
+            // Seed unknown status/dropdown labels before validating, or file
+            // values the starters lack fail the whole row.
+            ImportOptionSeeder::seed($column, $raw);
             $validated = $type->validate($raw, $column->settings ?? []);
             $shadow = $type->toShadowFields($validated);
 
