@@ -694,7 +694,10 @@ class ImportMappingService
     private function reader(string $path): IReader
     {
         $reader = IOFactory::createReaderForFile($path);
-        $reader->setReadDataOnly(true);
+        // NOT readDataOnly: this reader feeds the wizard preview only, which
+        // must show dates as Excel renders them ("15/07/2025"), not as raw
+        // serials ("45853"). The import hot-path readers keep readDataOnly
+        // (OOM-sensitive chunked path) and convert serials via ExcelDate.
         // Skip empty cells: system exports carry formatting (and the reader
         // filter bounds) across thousands of phantom columns — instantiating
         // their empty cells explodes memory during analysis.

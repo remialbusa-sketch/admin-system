@@ -8,10 +8,13 @@ use App\Models\DynamicRow;
 use App\Models\DynamicTable;
 use App\Models\ServiceRequest;
 use App\Models\User;
+use DateTimeImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use PhpOffice\PhpSpreadsheet\Shared\Date;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Style\NumberFormat;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
 
@@ -643,6 +646,185 @@ class ImportStreamTest extends TestCase
     }
 
     /**
+     * The flagged bug: date cells are stored by Excel as serial numbers, and
+     * the import readers (setReadDataOnly) drop the number formats — so a
+     * date column received raw serials ("45853", "45853.60416…") and either
+     * failed the row (integer serial) or silently stored 1970-01-01
+     * (fractional serial read as a Unix timestamp). Serials must convert to
+     * the cell's calendar date.
+     */
+    public function test_classic_execute_converts_serial_dates_for_dynamic_date_columns(): void
+    {
+        $user = User::factory()->superadmin()->create();
+        $this->actingAs($user);
+
+        $dynamic = DynamicTable::create([
+            'key' => 'project-dates',
+            'name' => 'Project Dates',
+            'created_by' => $user->id,
+        ]);
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Dates');
+        $sheet->setCellValue('A1', 'Name');
+        $sheet->setCellValue('B1', 'Start');
+        $sheet->setCellValue('C1', 'Kickoff');
+        $sheet->setCellValue('A2', 'Migrate Portal');
+        // A plain date and a date+time cell, both carrying real Excel number
+        // formats: exactly what the flagged file contained.
+        $sheet->setCellValue('B2', Date::PHPToExcel(new DateTimeImmutable('2025-07-15')));
+        $sheet->getStyle('B2')->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_DATE_DDMMYYYY);
+        $sheet->setCellValue('C2', Date::PHPToExcel(new DateTimeImmutable('2025-07-15 14:30')));
+        $sheet->getStyle('C2')->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_DATE_DATETIME_BETTER);
+
+        $uploadId = str_repeat('6b', 16);
+        $this->streamWorkbook($spreadsheet, $uploadId, 'dates.xlsx');
+
+        $execution = $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'dates.xlsx',
+            'sheet' => 'Dates',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => [],
+            'titleLetter' => 'A',
+            'columns' => [
+                ['letter' => 'A', 'name' => 'Name', 'type' => 'text'],
+                ['letter' => 'B', 'name' => 'Start', 'type' => 'date'],
+                ['letter' => 'C', 'name' => 'Kickoff', 'type' => 'date'],
+            ],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        $rowId = DynamicRow::query()->where('table_key', $dynamic->key)->value('id');
+        $this->assertNotNull($rowId);
+
+        foreach (['Start', 'Kickoff'] as $name) {
+            $column = CustomTableColumn::query()->where('table_key', $dynamic->key)->where('name', $name)->firstOrFail();
+
+            $this->assertDatabaseHas('table_custom_column_values', [
+                'custom_column_id' => $column->id,
+                'row_id' => $rowId,
+                'value_date' => '2025-07-15',
+            ]);
+        }
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * Managed tables: the mapped date field AND an import-created custom
+     * date column must both land Y-m-d from serial cells — the field path
+     * (SourceWorkbookImportService::dateTime) and the column path
+     * (DateColumnType::validate) convert through ExcelDate.
+     */
+    public function test_classic_execute_converts_serial_dates_for_managed_field_and_custom_column(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Service Requests');
+        $sheet->setCellValue('A1', 'SR No');
+        $sheet->setCellValue('B1', 'Customer');
+        $sheet->setCellValue('C1', 'Date Needed');
+        $sheet->setCellValue('D1', 'Follow Up');
+        $sheet->setCellValue('A2', 'SR-9101');
+        $sheet->setCellValue('B2', 'Date Hospital');
+        $sheet->setCellValue('C2', Date::PHPToExcel(new DateTimeImmutable('2025-07-15')));
+        $sheet->getStyle('C2')->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_DATE_DDMMYYYY);
+        $sheet->setCellValue('D2', Date::PHPToExcel(new DateTimeImmutable('2025-07-20')));
+        $sheet->getStyle('D2')->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_DATE_DDMMYYYY);
+
+        $uploadId = str_repeat('7d', 16);
+        $this->streamWorkbook($spreadsheet, $uploadId, 'workbook.xlsx');
+
+        $execution = $this->postJson('/tables/service-requests/import-classic/execute', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+            'sheet' => 'Service Requests',
+            'headerRow' => 1,
+            'dataStart' => 2,
+            'mapping' => ['service_request_no' => 'A', 'customer_name' => 'B', 'date_needed' => 'C'],
+            'newColumns' => [['letter' => 'D', 'name' => 'Follow Up', 'type' => 'date']],
+        ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('completed', $execution['status'], json_encode($execution));
+        $this->assertSame(1, $execution['processed'], json_encode($execution));
+        $this->assertSame(0, $execution['failed'], json_encode($execution));
+
+        // Managed date field: serial -> Y-m-d (assert via the model so the
+        // 'date' cast normalizes storage format across DB drivers).
+        $serviceRequest = ServiceRequest::query()->where('service_request_number', 'SR-9101')->firstOrFail();
+        $this->assertSame('2025-07-15', $serviceRequest->date_needed?->toDateString());
+
+        $rowId = $serviceRequest->id;
+
+        // Custom date column created by the wizard: serial -> value_date.
+        $column = CustomTableColumn::query()
+            ->where('table_key', 'service-requests')
+            ->where('name', 'Follow Up')
+            ->firstOrFail();
+
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $column->id,
+            'row_id' => $rowId,
+            'value_date' => '2025-07-20',
+        ]);
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
+     * The preview reader must load number formats (no readDataOnly): the
+     * wizard shows the operator what Excel shows — "15/07/2025", never the
+     * underlying serial "45853".
+     */
+    public function test_classic_analyze_preview_renders_formatted_dates_not_serials(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Service Requests');
+        $sheet->setCellValue('A1', 'SR No');
+        $sheet->setCellValue('B1', 'Date Needed');
+        $sheet->setCellValue('C1', 'Kickoff');
+        $sheet->setCellValue('A2', 'SR-9201');
+        $sheet->setCellValue('B2', Date::PHPToExcel(new DateTimeImmutable('2025-07-15')));
+        $sheet->getStyle('B2')->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_DATE_DDMMYYYY);
+        $sheet->setCellValue('C2', Date::PHPToExcel(new DateTimeImmutable('2025-07-15 14:30')));
+        $sheet->getStyle('C2')->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_DATE_DATETIME_BETTER);
+
+        $uploadId = str_repeat('8e', 16);
+        $this->streamWorkbook($spreadsheet, $uploadId, 'workbook.xlsx');
+
+        $analysis = $this->postJson('/tables/service-requests/import-classic/analyze', [
+            'uploadId' => $uploadId,
+            'originalName' => 'workbook.xlsx',
+        ])
+            ->assertOk()
+            ->json();
+
+        $samples = fn (string $letter): array => collect($analysis['preview']['columns'])
+            ->firstWhere('letter', $letter)['samples'] ?? [];
+
+        $this->assertContains('15/07/2025', $samples('B'));
+        $this->assertNotContains('45853', $samples('B'));
+        $this->assertContains('2025-07-15 14:30', $samples('C'));
+
+        Storage::disk(config('filesystems.default'))->delete('imports/stream-'.$uploadId.'.xlsx');
+    }
+
+    /**
      * A Service Requests workbook with one column ("Cost Center") that maps
      * to no managed field.
      */
@@ -667,6 +849,24 @@ class ImportStreamTest extends TestCase
             'fileName' => 'workbook.xlsx',
         ], [], [
             'chunk' => new UploadedFile($path, 'workbook.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        @unlink($path);
+    }
+
+    /** Save a workbook, POST it as a single upload-chunk, drop the temp file. */
+    private function streamWorkbook(Spreadsheet $spreadsheet, string $uploadId, string $fileName): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'wb-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        $spreadsheet->disconnectWorksheets();
+
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => $fileName,
+        ], [], [
+            'chunk' => new UploadedFile($path, $fileName, 'application/octet-stream', null, true),
         ])->assertOk();
 
         @unlink($path);

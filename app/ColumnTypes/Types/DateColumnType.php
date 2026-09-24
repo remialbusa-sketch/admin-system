@@ -3,6 +3,7 @@
 namespace App\ColumnTypes\Types;
 
 use App\ColumnTypes\AbstractColumnType;
+use App\Support\ExcelDate;
 use Carbon\Carbon;
 
 class DateColumnType extends AbstractColumnType
@@ -18,8 +19,15 @@ class DateColumnType extends AbstractColumnType
         $dateValue = $input['date'] ?? (is_scalar($raw) ? $raw : null);
 
         try {
-            $date = Carbon::parse($this->requiredString($dateValue, 'date'));
+            // ExcelDate, not Carbon::parse: import cells arrive as Excel
+            // serials ("45853" / "45853.60416…") and Carbon either rejects
+            // them or silently reads a fractional serial as 1970-01-01.
+            $date = ExcelDate::toCarbon($this->requiredString($dateValue, 'date'));
         } catch (\Throwable) {
+            $this->fail('The date value must be a valid date.');
+        }
+
+        if ($date === null) {
             $this->fail('The date value must be a valid date.');
         }
 

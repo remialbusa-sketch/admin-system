@@ -12,6 +12,7 @@ use App\Models\Installation;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
+use App\Support\ExcelDate;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
@@ -1213,32 +1214,10 @@ class SourceWorkbookImportService
 
     private function dateTime(?string $value): ?Carbon
     {
-        if ($value === null || trim($value) === '') {
-            return null;
-        }
-
-        $parts = preg_split('/\s+/', trim($value));
-        if (count($parts) >= 2 && is_numeric($parts[0]) && is_numeric($parts[1])) {
-            return $this->excelDateTime((float) $parts[0] + (float) $parts[1]);
-        }
-
-        if (is_numeric(trim($value)) && (float) $value > 20000) {
-            return $this->excelDateTime((float) $value);
-        }
-
-        try {
-            return Carbon::parse($value);
-        } catch (Throwable) {
-            return null;
-        }
-    }
-
-    private function excelDateTime(float $serial): Carbon
-    {
-        $days = (int) floor($serial);
-        $seconds = (int) round(($serial - $days) * 86400);
-
-        return Carbon::create(1899, 12, 30)->addDays($days)->addSeconds($seconds);
+        // ExcelDate, not Carbon::parse: import cells arrive as Excel serials
+        // ("45853" / "45853.60416…"); Carbon rejects integer serials and
+        // reads fractional ones as 1970-01-01 Unix timestamps.
+        return ExcelDate::toCarbon($value);
     }
 
     /**
