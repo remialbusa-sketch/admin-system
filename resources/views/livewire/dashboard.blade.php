@@ -36,7 +36,7 @@
             @if ($dashboard)
                 @if ($editingHeader)
                     <div class="min-w-0 flex-1 space-y-3">
-                        <input type="text" wire:model="editingName" class="admin-control w-full text-3xl font-semibold tracking-tight sm:text-4xl" placeholder="Dashboard title" autofocus>
+                        <input type="text" wire:model="editingName" @disabled($dashboard->is_system) class="admin-control w-full text-3xl font-semibold tracking-tight sm:text-4xl" placeholder="Dashboard title" autofocus>
                         <textarea wire:model="editingDescription" rows="2" class="admin-control w-full max-w-2xl text-sm leading-6" placeholder="Subtitle — what this dashboard is for (optional)"></textarea>
                         <x-input-error :messages="$errors->get('editingName')" />
                         <x-input-error :messages="$errors->get('editingDescription')" />
@@ -104,17 +104,6 @@
             </div>
         </div>
     </header>
-
-    @if (($isEmptyHome ?? false))
-        <div class="admin-surface p-8 text-center space-y-4">
-            <h2 class="text-lg font-bold text-base-content">No dashboard yet</h2>
-            <p class="text-sm text-base-content/60">Create a table, import your data, then create a dashboard for that table. Your dashboard will start empty — add widgets for your table.</p>
-            <div class="flex justify-center gap-2">
-                <a href="{{ route('tables') }}" wire:navigate class="admin-secondary-button">Go to Tables</a>
-                <a href="{{ route('dashboards.index') }}" wire:navigate class="admin-primary-button">Create dashboard</a>
-            </div>
-        </div>
-    @endif
 
     <x-admin.filter-bar>
         <select wire:model.live="branchFilter" class="admin-control" aria-label="Filter by branch">
@@ -184,7 +173,10 @@
                     <button type="button" wire:click="toggleCustomizing" class="admin-secondary-button">Cancel</button>
                     <button type="button" data-grid-done="default" class="admin-primary-button">Done</button>
                 @else
-                    @if ($dashboard)
+                    {{-- Core (system) rows: shared with everyone already — no
+                        per-person sharing, and their data vocabulary is the
+                        page's, not connectable sources. --}}
+                    @if ($dashboard && ! $dashboard->is_system)
                         <button type="button" x-on:click="$dispatch('open-modal', { name: 'dashboard-sources' })" class="admin-secondary-button">
                             <x-mary-icon name="o-circle-stack" class="h-4 w-4" />
                             Data sources ({{ $sources->count() }})
@@ -336,7 +328,7 @@
                     </button>
                 @endforeach
             </div>
-            @if ($dashboard && ($sources ?? collect())->isEmpty())
+            @if ($dashboard && ! $dashboard->is_system && ($sources ?? collect())->isEmpty())
                 <div class="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-base-300 bg-base-200/50 px-3 py-2 text-xs text-base-content/65">
                     <span>No tables connected — new widgets read the Product Database until you connect one.</span>
                     <button type="button" x-on:click="$dispatch('close-modal', { name: 'add-widget' }); $dispatch('open-modal', { name: 'dashboard-sources' })" class="font-bold text-primary hover:underline">Connect a table</button>
@@ -345,7 +337,9 @@
         </x-admin.modal>
     @endif
 
-    @if ($dashboard)
+    {{-- Core (system) rows skip the per-dashboard source/share UI: they are
+         shared with everyone by definition and read the page vocabulary. --}}
+    @if ($dashboard && ! $dashboard->is_system)
         {{-- Data sources: which tables this dashboard reads from. Widgets
              reference a source by its alias. --}}
         <x-admin.modal name="dashboard-sources" title="Data sources" description="Tables this dashboard reads from. Each source gets an alias widgets reference (e.g. pdb.brands)." size="lg">
@@ -722,7 +716,7 @@
         </div>
     </section>
 
-    @if (! $dashboard)
+    @if (! $dashboard || $dashboard->is_system)
     <footer class="flex flex-col gap-2 px-1 text-[11px] text-base-content/35 sm:flex-row sm:items-center sm:justify-between">
         <span>Product Database overview · click any card, segment, or point to open the records behind it — the grid arrives pre-filtered, with a one-click clear.</span>
         <span>All metrics computed live from the imported installed-base records — never hardcoded.</span>

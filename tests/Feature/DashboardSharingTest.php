@@ -161,11 +161,12 @@ class DashboardSharingTest extends TestCase
         $this->assertDatabaseMissing('dashboard_sources', ['id' => $source->id]);
     }
 
-    public function test_system_dashboards_open_as_an_editable_personal_copy(): void
+    public function test_system_dashboards_are_viewable_by_all_but_edit_is_admin_only(): void
     {
         $viewer = User::factory()->president()->create();
-        $sharer = User::factory()->superadmin()->create();
 
+        // A custom-named system row (the three canonical ones redirect to
+        // their pages — see SystemDashboardsTest).
         $system = DashboardModel::create([
             'owner_id' => null,
             'name' => 'Company overview',
@@ -173,32 +174,21 @@ class DashboardSharingTest extends TestCase
             'layout' => ['version' => 1, 'widgets' => []],
         ]);
 
-        DashboardShare::create([
-            'dashboard_id' => $system->id,
-            'user_id' => $viewer->id,
-            'permission' => 'view',
-            'shared_by' => $sharer->id,
-        ]);
-
-        // Opening the shared template lands on the user's editable copy.
+        // Viewable with no share at all: core rows are shared by definition.
         $this->actingAs($viewer)
             ->get(route('dashboards.show', $system))
-            ->assertRedirect();
+            ->assertOk();
 
-        $copy = DashboardModel::query()
-            ->where('owner_id', $viewer->id)
-            ->where('name', 'Company overview')
-            ->first();
+        // No personal copy is ever created anymore.
+        $this->assertSame(0, DashboardModel::query()->where('owner_id', $viewer->id)->count());
 
-        $this->assertNotNull($copy);
-        $this->assertFalse($copy->is_system);
-
+        // And a viewer cannot edit the shared row.
         Livewire::actingAs($viewer)
-            ->test(Dashboard::class, ['dashboard' => $copy])
+            ->test(Dashboard::class, ['dashboard' => $system])
             ->call('toggleCustomizing')
-            ->assertHasNoErrors();
+            ->assertForbidden();
 
-        // The shared template itself is never mutated.
+        // The shared row itself is never mutated.
         $this->assertSame([], $system->fresh()->layout['widgets']);
     }
 

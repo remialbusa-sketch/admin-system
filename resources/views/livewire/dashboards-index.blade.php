@@ -38,7 +38,7 @@
                                         <h3 class="flex items-center gap-2 truncate text-base font-bold text-base-content">
                                             {{ $dashboard->name }}
                                             @if ($dashboard->is_system)
-                                                <span class="rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary" title="Shared template — superadmins curate it; opening it gives everyone else an editable copy">Template</span>
+                                                <span class="rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary" title="Core dashboard — every role views the shared layout; superadmin/admin curate it">Core</span>
                                             @endif
                                         </h3>
                                         <p class="mt-1 text-xs text-base-content/50">
@@ -46,11 +46,13 @@
                                             &middot; {{ count($dashboard->layout['widgets'] ?? []) }} widget{{ count($dashboard->layout['widgets'] ?? []) === 1 ? '' : 's' }}
                                         </p>
                                     </div>
-                                    @if (($dashboard->owner_id === auth()->id() || $isSuperadmin) && (! $dashboard->is_system || $isSuperadmin))
+                                    @if ($dashboard->is_system ? $canEditCore : ($dashboard->owner_id === auth()->id() || $isSuperadmin))
                                         <div class="flex shrink-0 items-center gap-1">
-                                            <button type="button" wire:click="startRename({{ $dashboard->id }}, @js($dashboard->name))" class="admin-icon-button" aria-label="Rename">
-                                                <x-mary-icon name="o-pencil" class="h-4 w-4" />
-                                            </button>
+                                            @unless ($dashboard->is_system)
+                                                <button type="button" wire:click="startRename({{ $dashboard->id }}, @js($dashboard->name))" class="admin-icon-button" aria-label="Rename">
+                                                    <x-mary-icon name="o-pencil" class="h-4 w-4" />
+                                                </button>
+                                            @endunless
                                             <button type="button" wire:click="deleteDashboard({{ $dashboard->id }})" wire:confirm="Archive this dashboard? You can restore it from the Archived section." class="admin-icon-button" aria-label="Archive">
                                                 <x-mary-icon name="o-archive-box" class="h-4 w-4" />
                                             </button>

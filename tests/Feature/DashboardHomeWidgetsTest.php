@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Livewire\Dashboard;
-use App\Models\DashboardLayout;
+use App\Models\Dashboard as DashboardModel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -67,6 +67,7 @@ class DashboardHomeWidgetsTest extends TestCase
     public function test_home_headlines_can_be_deleted_and_reset_restores_them(): void
     {
         $owner = User::factory()->superadmin()->create();
+        $home = DashboardModel::query()->where('is_system', true)->where('name', 'Home')->firstOrFail();
 
         $component = Livewire::actingAs($owner)
             ->test(Dashboard::class)
@@ -76,14 +77,16 @@ class DashboardHomeWidgetsTest extends TestCase
         $component->call('syncLayout', []);
         $component->call('saveLayout', [])->assertHasNoErrors();
 
-        $this->assertSame([], DashboardLayout::query()->where('user_id', $owner->id)->firstOrFail()->layout['widgets']);
+        // Home's layout lives on the shared system row, not a personal row.
+        $this->assertSame([], $home->fresh()->layout['widgets']);
 
         Livewire::actingAs($owner)
             ->test(Dashboard::class)
             ->call('resetLayout')
             ->assertHasNoErrors();
 
-        $this->assertFalse(DashboardLayout::query()->where('user_id', $owner->id)->exists());
+        // Reset restores the shipped default on the shared row.
+        $this->assertCount(18, $home->fresh()->layout['widgets']);
 
         Livewire::actingAs($owner)
             ->test(Dashboard::class)

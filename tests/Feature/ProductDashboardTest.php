@@ -143,12 +143,13 @@ class ProductDashboardTest extends TestCase
             ->assertDontSee('Visayas Hospital');
     }
 
-    public function test_home_for_non_superadmin_is_empty_onboarding(): void
+    public function test_home_for_non_superadmin_shows_the_shared_home(): void
     {
         $this->actingAs(User::factory()->regionalManager('NCR')->create())
             ->get('/dashboard')
             ->assertOk()
-            ->assertSee('No dashboard yet');
+            ->assertSee('Installed products')
+            ->assertDontSee('No dashboard yet');
     }
 
     public function test_president_route_redirects_to_consolidated_home(): void

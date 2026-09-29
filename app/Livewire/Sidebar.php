@@ -41,6 +41,8 @@ class Sidebar extends Component
             : Dashboard::query()
                 ->where(fn ($query) => $query
                     ->where('owner_id', $user->id)
+                    // Core (system) dashboards are shared with everyone.
+                    ->orWhere('is_system', true)
                     ->orWhereHas('shares', fn ($share) => $share->where('user_id', $user->id)))
                 ->orderBy('name')
                 ->limit(10)

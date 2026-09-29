@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Livewire\Dashboard;
 use App\Models\Account;
 use App\Models\Dashboard as DashboardModel;
-use App\Models\DashboardLayout;
 use App\Models\Installation;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -39,6 +38,21 @@ class DashboardGridTest extends TestCase
             'installation_date' => now()->subMonths(2),
             ...$overrides,
         ]);
+    }
+
+    /**
+     * Home's layout lives on the shared system row now (one layout for
+     * everyone); legacy per-user dashboard_layouts rows are never written.
+     */
+    private function homeRow(): DashboardModel
+    {
+        return DashboardModel::query()->where('is_system', true)->where('name', 'Home')->firstOrFail();
+    }
+
+    /** The widget with the given id from Home's persisted shared layout. */
+    private function savedHomeWidget(string $id): array
+    {
+        return collect($this->homeRow()->fresh()->layout['widgets'])->firstWhere('id', $id) ?? [];
     }
 
     public function test_home_renders_one_of_every_standard_widget(): void
@@ -93,7 +107,7 @@ class DashboardGridTest extends TestCase
                 ['id' => 'kpi-activation', 'type' => 'kpi_card', 'w' => 4, 'h' => 2],
             ]);
 
-        $this->assertDatabaseHas('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertCount(2, $this->homeRow()->fresh()->layout['widgets']);
 
         // The saved layout replaces the default: widgets not in it are gone.
         Livewire::actingAs($user)
@@ -121,7 +135,7 @@ class DashboardGridTest extends TestCase
             ->assertSet('draftLayout.widgets.0.w', 8);
 
         // ...and nothing is persisted yet.
-        $this->assertDatabaseMissing('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertCount(18, $this->homeRow()->fresh()->layout['widgets']);
 
         // Done commits the draft and exits edit mode.
         $component
@@ -131,7 +145,7 @@ class DashboardGridTest extends TestCase
             ])
             ->assertSet('customizing', false);
 
-        $this->assertDatabaseHas('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertCount(2, $this->homeRow()->fresh()->layout['widgets']);
     }
 
     public function test_cancel_discards_the_draft_without_persisting(): void
@@ -149,7 +163,7 @@ class DashboardGridTest extends TestCase
             ->assertSet('customizing', false)
             ->assertSet('draftLayout', []);
 
-        $this->assertDatabaseMissing('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertCount(18, $this->homeRow()->fresh()->layout['widgets']);
     }
 
     public function test_add_widget_appends_a_configured_widget_to_the_draft(): void
@@ -169,7 +183,8 @@ class DashboardGridTest extends TestCase
             ->assertSee('New stat')
             ->call('saveLayout', []);
 
-        $this->assertDatabaseHas('dashboard_layouts', ['user_id' => $user->id]);
+        // The new widget joined the 18 shipped ones on the shared row.
+        $this->assertCount(19, $this->homeRow()->fresh()->layout['widgets']);
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -194,7 +209,7 @@ class DashboardGridTest extends TestCase
             ->assertSee('Fleet activation')
             ->assertDontSee('New stat');
 
-        $this->assertDatabaseMissing('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertCount(18, $this->homeRow()->fresh()->layout['widgets']);
     }
 
     public function test_widget_settings_apply_to_the_draft_and_persist_on_done(): void
@@ -218,7 +233,7 @@ class DashboardGridTest extends TestCase
             ->assertSee('Activated fleet')
             ->call('saveLayout', []);
 
-        $this->assertDatabaseHas('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertSame('Activated fleet', $this->savedHomeWidget('kpi-activation')['props']['label'] ?? null);
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -277,13 +292,10 @@ class DashboardGridTest extends TestCase
 
         // A ternary formula cannot be drawn on the canvas: tree must be
         // null so the UI shows the advanced fallback instead of rewriting.
-        DashboardLayout::create([
-            'user_id' => $user->id,
-            'layout' => ['version' => 1, 'widgets' => [
-                ['id' => 'ternary-kpi', 'type' => 'kpi_card', 'w' => 4, 'h' => 2,
-                    'props' => ['label' => 'Advanced', 'formula' => "active_ratio >= 90 ? 100 : 0"]],
-            ]],
-        ]);
+        $this->homeRow()->update(['layout' => ['version' => 1, 'widgets' => [
+            ['id' => 'ternary-kpi', 'type' => 'kpi_card', 'w' => 4, 'h' => 2,
+                'props' => ['label' => 'Advanced', 'formula' => 'active_ratio >= 90 ? 100 : 0']],
+        ]]]);
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -308,7 +320,10 @@ class DashboardGridTest extends TestCase
             ->assertSet('draftLayout.widgets.17.props.current', '((active / installed) * 100)')
             ->call('saveLayout', []);
 
-        $this->assertDatabaseHas('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertSame(
+            '((active / installed) * 100)',
+            $this->savedHomeWidget('progress-warranty')['props']['current'] ?? null,
+        );
 
         // Reopening the settings after Apply must re-extract the full
         // visual graph from the stored string — the built blocks survive.
@@ -358,7 +373,10 @@ class DashboardGridTest extends TestCase
             ->assertSet('settingsSchema.1.graph.nodes.2.x', 190)
             ->call('saveLayout', []);
 
-        $this->assertDatabaseHas('dashboard_layouts', ['user_id' => $user->id]);
+        $this->assertSame(
+            '*',
+            $this->savedHomeWidget('progress-warranty')['props']['current_tree']['nodes'][2]['value'] ?? null,
+        );
     }
 
     public function test_blocks_survive_close_done_and_a_fresh_page_load(): void
@@ -427,24 +445,22 @@ class DashboardGridTest extends TestCase
     {
         $user = User::factory()->superadmin()->create();
 
-        // A layout saved before the widget-library replacement.
-        DashboardLayout::create([
-            'user_id' => $user->id,
-            'layout' => ['version' => 1, 'widgets' => [
-                ['id' => 'kpi-activation', 'type' => 'kpi', 'w' => 4, 'h' => 2,
-                    'props' => ['label' => 'Fleet activation', 'formula' => 'pct(active, installed)']],
-                ['id' => 'goal-warranty', 'type' => 'goal', 'w' => 4, 'h' => 2,
-                    'props' => ['label' => 'Warranty coverage goal', 'current' => 'warranty_ratio', 'goal' => '60']],
-                ['id' => 'trend-installs', 'type' => 'trend', 'w' => 8, 'h' => 3,
-                    'props' => ['label' => 'Installation momentum', 'dataset' => 'install_trend', 'value_key' => 'count']],
-                ['id' => 'pivot-regions', 'type' => 'pivot', 'w' => 6, 'h' => 3,
-                    'props' => ['label' => 'Regional pivot']],
-                ['id' => 'sla-warranty', 'type' => 'sla', 'w' => 4, 'h' => 3,
-                    'props' => ['label' => 'Warranty expiry countdown']],
-                // No equivalent in the standard library: dropped.
-                ['id' => 'insights-signals', 'type' => 'insights', 'w' => 12, 'h' => 2, 'props' => []],
-            ]],
-        ]);
+        // A layout saved before the widget-library replacement, now sitting
+        // on Home's shared system row.
+        $this->homeRow()->update(['layout' => ['version' => 1, 'widgets' => [
+            ['id' => 'kpi-activation', 'type' => 'kpi', 'w' => 4, 'h' => 2,
+                'props' => ['label' => 'Fleet activation', 'formula' => 'pct(active, installed)']],
+            ['id' => 'goal-warranty', 'type' => 'goal', 'w' => 4, 'h' => 2,
+                'props' => ['label' => 'Warranty coverage goal', 'current' => 'warranty_ratio', 'goal' => '60']],
+            ['id' => 'trend-installs', 'type' => 'trend', 'w' => 8, 'h' => 3,
+                'props' => ['label' => 'Installation momentum', 'dataset' => 'install_trend', 'value_key' => 'count']],
+            ['id' => 'pivot-regions', 'type' => 'pivot', 'w' => 6, 'h' => 3,
+                'props' => ['label' => 'Regional pivot']],
+            ['id' => 'sla-warranty', 'type' => 'sla', 'w' => 4, 'h' => 3,
+                'props' => ['label' => 'Warranty expiry countdown']],
+            // No equivalent in the standard library: dropped.
+            ['id' => 'insights-signals', 'type' => 'insights', 'w' => 12, 'h' => 2, 'props' => []],
+        ]]]);
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -462,16 +478,13 @@ class DashboardGridTest extends TestCase
     {
         $user = User::factory()->superadmin()->create();
 
-        DashboardLayout::create([
-            'user_id' => $user->id,
-            'layout' => ['version' => 1, 'widgets' => [
-                ['id' => 'evil', 'type' => 'iframe', 'w' => 12, 'h' => 2, 'props' => ['src' => 'https://evil.example']],
-                [
-                    'id' => 'kpi-activation', 'type' => 'kpi_card', 'w' => 4, 'h' => 2,
-                    'props' => ['label' => 'Fleet activation', 'formula' => 'pct(active, installed)'],
-                ],
-            ]],
-        ]);
+        $this->homeRow()->update(['layout' => ['version' => 1, 'widgets' => [
+            ['id' => 'evil', 'type' => 'iframe', 'w' => 12, 'h' => 2, 'props' => ['src' => 'https://evil.example']],
+            [
+                'id' => 'kpi-activation', 'type' => 'kpi_card', 'w' => 4, 'h' => 2,
+                'props' => ['label' => 'Fleet activation', 'formula' => 'pct(active, installed)'],
+            ],
+        ]]]);
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -484,14 +497,11 @@ class DashboardGridTest extends TestCase
     {
         $user = User::factory()->superadmin()->create();
 
-        DashboardLayout::create([
-            'user_id' => $user->id,
-            'layout' => ['version' => 1, 'widgets' => [
-                // Unknown variable = config mistake (not empty data) → error card.
-                ['id' => 'bad', 'type' => 'kpi_card', 'w' => 4, 'h' => 2, 'props' => ['label' => 'Broken', 'formula' => 'not_a_metric + 1']],
-                ['id' => 'stat-ok', 'type' => 'stat', 'w' => 4, 'h' => 2, 'props' => ['label' => 'Still fine', 'metric' => 'installed']],
-            ]],
-        ]);
+        $this->homeRow()->update(['layout' => ['version' => 1, 'widgets' => [
+            // Unknown variable = config mistake (not empty data) → error card.
+            ['id' => 'bad', 'type' => 'kpi_card', 'w' => 4, 'h' => 2, 'props' => ['label' => 'Broken', 'formula' => 'not_a_metric + 1']],
+            ['id' => 'stat-ok', 'type' => 'stat', 'w' => 4, 'h' => 2, 'props' => ['label' => 'Still fine', 'metric' => 'installed']],
+        ]]]);
 
         Livewire::actingAs($user)
             ->test(Dashboard::class)
@@ -541,4 +551,3 @@ class DashboardGridTest extends TestCase
             ->assertSee('NCR Hospital');
     }
 }
-

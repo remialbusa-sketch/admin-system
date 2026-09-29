@@ -76,6 +76,17 @@ class User extends Authenticatable implements FilamentUser, MustVerifyEmail
         return $this->isSuperadmin() || $this->permission === UserPermission::Admin;
     }
 
+    /**
+     * May this account edit the core (system) dashboards and their one shared
+     * widget layout? Superadmin or admin level only — editors are excluded
+     * by design: the three core pages are shared with everyone, so their
+     * layouts must not be casually editable.
+     */
+    public function canEditCoreDashboards(): bool
+    {
+        return $this->isSuperadmin() || $this->permission === UserPermission::Admin;
+    }
+
     public function importBatches(): HasMany
     {
         return $this->hasMany(ImportBatch::class, 'run_by');

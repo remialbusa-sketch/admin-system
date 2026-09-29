@@ -3,9 +3,9 @@
 namespace Tests\Feature;
 
 use App\Livewire\TechnicalServiceAnalysis;
-use App\Models\PageWidgetLayout;
 use App\Models\TechnicalReport;
 use App\Models\User;
+use App\Support\SystemDashboards;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -94,7 +94,14 @@ class TsaWidgetConversionTest extends TestCase
 
         $component->call('saveWidgetGrid', [], 'tsa')->assertHasNoErrors();
 
-        $this->assertTrue(PageWidgetLayout::query()->where('user_id', $owner->id)->where('page', 'tsa')->exists());
+        // The saved layout lands on the shared system row — one layout for
+        // every user, not a personal one.
+        $row = SystemDashboards::coreRow('Technical Service Analysis');
+        $this->assertNotNull($row);
+        $this->assertSame(
+            'My reports',
+            collect($row->fresh()->layout['widgets'])->firstWhere('id', 'tsa-reports')['props']['label'] ?? null,
+        );
     }
 
     public function test_tsa_reset_restores_the_shipped_cards(): void
@@ -112,7 +119,11 @@ class TsaWidgetConversionTest extends TestCase
             ->call('resetWidgetGrid', 'tsa')
             ->assertHasNoErrors();
 
-        $this->assertFalse(PageWidgetLayout::query()->where('user_id', $owner->id)->where('page', 'tsa')->exists());
+        // Reset clears the shared row's layout: the shipped default applies
+        // again through the page's fallback.
+        $this->assertNull(
+            SystemDashboards::coreRow('Technical Service Analysis')->fresh()->layout,
+        );
 
         Livewire::actingAs($owner)
             ->test(TechnicalServiceAnalysis::class)

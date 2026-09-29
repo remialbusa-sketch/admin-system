@@ -3,9 +3,9 @@
 namespace Tests\Feature;
 
 use App\Livewire\TspAnalytics;
-use App\Models\PageWidgetLayout;
 use App\Models\TechnicalPersonnel;
 use App\Models\User;
+use App\Support\SystemDashboards;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -83,7 +83,14 @@ class TspWidgetConversionTest extends TestCase
 
         $component->call('saveWidgetGrid', [], 'tsp')->assertHasNoErrors();
 
-        $this->assertTrue(PageWidgetLayout::query()->where('user_id', $owner->id)->where('page', 'tsp')->exists());
+        // The saved layout lands on the shared system row — one layout for
+        // every user, not a personal one.
+        $row = SystemDashboards::coreRow('TSP Analytics');
+        $this->assertNotNull($row);
+        $this->assertSame(
+            'My filtered',
+            collect($row->fresh()->layout['widgets'])->firstWhere('id', 'tsp-filtered')['props']['label'] ?? null,
+        );
     }
 
     public function test_tsp_reset_restores_the_shipped_cards(): void

@@ -133,6 +133,11 @@ class WidgetWizard extends Component
             ->where(function ($query) use ($user): void {
                 $query->where('owner_id', $user->id)
                     ->orWhereHas('shares', fn ($share) => $share->where('user_id', $user->id)->where('permission', 'edit'));
+
+                // Core dashboards: admins may add widgets to the shared rows.
+                if ($user?->canEditCoreDashboards()) {
+                    $query->orWhere('is_system', true);
+                }
             })
             ->orderBy('name')
             ->get();

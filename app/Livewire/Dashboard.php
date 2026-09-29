@@ -23,6 +23,7 @@ use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\GridLayoutNormalizer;
 use App\Support\Dashboard\WidgetRegistry;
 use App\Support\DashboardAudit;
+use App\Support\SystemDashboards;
 use App\Support\TableCatalog;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Log;
@@ -129,17 +130,29 @@ class Dashboard extends Component
             abort(503, 'Dashboard tables are missing on this server — run `php artisan migrate --force`.');
         }
 
-        if ($dashboard !== null) {
+        if ($dashboard === null) {
+            // Home is the shared system row: everyone views the same layout,
+            // admins edit it (Dashboard::permissionFor is_system branch).
+            $home = SystemDashboards::coreRow('Home');
+
+            if ($home !== null) {
+                $this->dashboardId = $home->id;
+                $this->dashboardName = $home->name;
+                $this->dashboardPermission = $home->permissionFor($user) ?? 'view';
+            }
+        } else {
             abort_unless($dashboard->canBeViewedBy($user), 403);
 
-            // System dashboards are templates: opening one lands the user on
-            // their editable personal copy (created once). Superadmins curate
-            // the template directly (audited); others may only open a system
-            // board if a superadmin has shared it, then they get a copy.
-            if ($dashboard->is_system && $user !== null && ! $user->isSuperadmin()) {
-                abort_unless($dashboard->shares()->where('user_id', $user->id)->exists(), 403);
+            // The core dashboards ARE their canonical pages: opening a system
+            // row lands on the page that renders its shared layout (the old
+            // per-user template copy is gone). Custom system rows (unknown
+            // name) render directly below.
+            $route = $dashboard->is_system
+                ? SystemDashboards::routeNameFor($dashboard->name)
+                : null;
 
-                $this->redirectRoute('dashboards.show', $this->personalCopyOf($dashboard, $user), navigate: true);
+            if ($route !== null) {
+                $this->redirectRoute($route, navigate: true);
 
                 return;
             }
@@ -158,8 +171,9 @@ class Dashboard extends Component
     }
 
     /**
-     * The dashboard model for the current view (null = Home). Queried fresh
-     * so permission checks can never trust a tampered snapshot property.
+     * The dashboard model for the current view (null = Home only when the
+     * system row is missing). Queried fresh so permission checks can never
+     * trust a tampered snapshot property.
      */
     private function dashboard(): ?DashboardModel
     {
@@ -168,52 +182,13 @@ class Dashboard extends Component
             : null;
     }
 
-    /**
-     * The user's editable copy of a system dashboard template: found by name
-     * or created once (layout + sources copied). Idempotent, so re-opening
-     * the template always returns the same copy.
-     */
-    private function personalCopyOf(DashboardModel $system, User $user): DashboardModel
-    {
-        // Include trashed copies: re-opening a template after archiving your
-        // copy restores it instead of creating a duplicate with the same name.
-        $copy = DashboardModel::withTrashed()
-            ->where('owner_id', $user->id)
-            ->where('name', $system->name)
-            ->first();
-
-        if ($copy !== null) {
-            if ($copy->trashed()) {
-                $copy->restore();
-            }
-
-            return $copy;
-        }
-
-        $copy = DashboardModel::create([
-            'owner_id' => $user->id,
-            'name' => $system->name,
-            'description' => $system->description,
-            'layout' => $system->layout,
-        ]);
-
-        foreach ($system->sources()->get() as $source) {
-            $copy->sources()->create([
-                'table_key' => $source->table_key,
-                'alias' => $source->alias,
-                'position' => $source->position,
-                'settings' => $source->settings,
-            ]);
-        }
-
-        return $copy;
-    }
-
     private function canEditDashboard(): bool
     {
         $dashboard = $this->dashboard();
 
-        return $dashboard === null || $dashboard->canBeEditedBy(auth()->user());
+        // No dashboard row = nowhere to persist edits (the legacy per-user
+        // layout path is read-only now that Home resolves to its system row).
+        return $dashboard !== null && $dashboard->canBeEditedBy(auth()->user());
     }
 
     public function startHeaderEdit(): void
@@ -255,6 +230,10 @@ class Dashboard extends Component
         $name = trim($this->editingName);
         $description = trim((string) $this->editingDescription);
         $description = $description !== '' ? $description : null;
+
+        // Core dashboard names identify their canonical route — admins may
+        // still curate the description, but the name is fixed.
+        abort_if($dashboard->is_system && $name !== $dashboard->name, 403, 'Core dashboard names are fixed.');
 
         $dashboard->update(['name' => $name, 'description' => $description]);
 
@@ -722,11 +701,11 @@ class Dashboard extends Component
         $dashboard = $this->dashboard();
 
         // Deep-copy so the draft never aliases the config default.
-        // Home starts from its headline widgets; owned boards without a
+        // The system Home row owns Home's layout; owned boards without a
         // saved layout fall back to the shipped default.
         $source = $dashboard?->layout
             ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null)
-            ?? ($this->dashboardId === null ? $this->homeFallbackLayout() : config('dashboard.default_layout'));
+            ?? ($this->dashboardId === null ? SystemDashboards::homeLayout() : config('dashboard.default_layout'));
 
         $this->draftLayout = json_decode(json_encode($source), true)
             ?: ['version' => 1, 'widgets' => []];
@@ -803,117 +782,10 @@ class Dashboard extends Component
     }
 
     /**
-     * The shipped Home headlines as real widgets: same cards, same numbers,
-     * fully customizable. Used until the user saves a personal layout
-     * (Reset returns here). Live route() links keep drill-downs working.
-     *
-     * @return array{version: int, widgets: array<int, array<string, mixed>>}
+     * Back to the shipped default layout: for the core rows that means the
+     * shipped default again (null = pages fall back to it); personal boards
+     * drop the saved layout. Then exit edit mode.
      */
-    private function defaultHomeWidgets(): array
-    {
-        return ['version' => 1, 'widgets' => [
-            [
-                'id' => 'home-installed', 'type' => 'headline_kpi', 'w' => 4, 'h' => 3,
-                'props' => [
-                    'label' => 'Installed products', 'variant' => 'lead', 'metric' => 'installed',
-                    'formula' => '', 'suffix' => '', 'decimals' => 0,
-                    'context' => '', 'context_metric' => 'accounts', 'context_prefix' => '',
-                    'context_suffix' => ' accounts on file', 'context_decimals' => 0,
-                    'caption' => 'units installed', 'href' => route('installed-products'),
-                ],
-            ],
-            [
-                'id' => 'home-active', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
-                'props' => [
-                    'label' => 'Active products', 'variant' => 'card', 'metric' => 'active',
-                    'formula' => '', 'suffix' => '', 'decimals' => 0,
-                    'context' => '', 'context_metric' => 'active_ratio', 'context_prefix' => '',
-                    'context_suffix' => '% of installed', 'context_decimals' => 1,
-                    'caption' => '', 'href' => route('installed-products', ['status' => 'Active']),
-                ],
-            ],
-            [
-                'id' => 'home-warranty', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
-                'props' => [
-                    'label' => 'Warranty covered', 'variant' => 'card', 'metric' => 'warranty_covered',
-                    'formula' => '', 'suffix' => '', 'decimals' => 0,
-                    'context' => '', 'context_metric' => 'warranty_ratio', 'context_prefix' => '',
-                    'context_suffix' => '% of installed', 'context_decimals' => 1,
-                    'caption' => '', 'href' => route('installed-products', ['warranty' => 'covered']),
-                ],
-            ],
-            [
-                'id' => 'home-contracts', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
-                'props' => [
-                    'label' => 'Service contracts', 'variant' => 'card', 'metric' => 'contracts',
-                    'formula' => '', 'suffix' => '', 'decimals' => 0,
-                    'context' => 'active + renewal',
-                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
-                    'caption' => '', 'href' => route('installed-products', ['contract' => '1']),
-                ],
-            ],
-            [
-                'id' => 'home-annual', 'type' => 'headline_kpi', 'w' => 4, 'h' => 2,
-                'props' => [
-                    'label' => 'Annual BU charges', 'variant' => 'card', 'metric' => '',
-                    'formula' => 'round(annual_bu_charges / 1000000, 1)', 'suffix' => 'M', 'decimals' => 1,
-                    'context' => 'sum of annual charges on file',
-                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
-                    'caption' => '', 'href' => route('installed-products'),
-                ],
-            ],
-            [
-                'id' => 'home-missing-pms', 'type' => 'supporting_kpi', 'w' => 4, 'h' => 1,
-                'props' => [
-                    'label' => 'Missing PMS frequency', 'metric' => 'missing_pms',
-                    'formula' => '', 'suffix' => '', 'decimals' => 0,
-                    'context' => '', 'context_metric' => 'missing_pms_ratio', 'context_prefix' => '',
-                    'context_suffix' => '% of installed', 'context_decimals' => 1,
-                    'href' => route('installed-products', ['pms' => 'missing']), 'icon' => '', 'tone' => 'error',
-                ],
-            ],
-            [
-                'id' => 'home-warranty-expiring', 'type' => 'supporting_kpi', 'w' => 4, 'h' => 1,
-                'props' => [
-                    'label' => 'Warranties expiring (90 days)', 'metric' => 'warranty_expiring_90d',
-                    'formula' => '', 'suffix' => '', 'decimals' => 0,
-                    'context' => '', 'context_metric' => 'warranty_expired', 'context_prefix' => '',
-                    'context_suffix' => ' already past end date', 'context_decimals' => 0,
-                    'href' => route('installed-products', ['warranty' => 'expiring_90d']), 'icon' => '', 'tone' => 'warning',
-                ],
-            ],
-            [
-                'id' => 'home-pulled-out', 'type' => 'supporting_kpi', 'w' => 4, 'h' => 1,
-                'props' => [
-                    'label' => 'Pulled out', 'metric' => 'pulled_out',
-                    'formula' => '', 'suffix' => '', 'decimals' => 0,
-                    'context' => 'removed from service',
-                    'context_metric' => '', 'context_prefix' => '', 'context_suffix' => '', 'context_decimals' => 0,
-                    'href' => route('installed-products', ['status' => 'Pulledout']), 'icon' => '', 'tone' => 'primary',
-                ],
-            ],
-        ]];
-    }
-
-    /**
-     * Home fallback: the headline widgets first, then the full shipped
-     * operations grid. Nothing is dropped — users delete what they don't
-     * want (Reset returns here).
-     *
-     * @return array{version: int, widgets: array<int, array<string, mixed>>}
-     */
-    private function homeFallbackLayout(): array
-    {
-        $widgets = $this->defaultHomeWidgets()['widgets'];
-
-        foreach (config('dashboard.default_layout.widgets', []) as $widget) {
-            $widgets[] = $widget;
-        }
-
-        return ['version' => 1, 'widgets' => $widgets];
-    }
-
-    /** Back to the shipped default layout: drop the saved one and exit. */
     public function resetLayout(): void
     {
         $this->guardEdit();
@@ -921,7 +793,11 @@ class Dashboard extends Component
         $dashboard = $this->dashboard();
 
         if ($dashboard !== null) {
-            $dashboard->update(['layout' => null]);
+            $dashboard->update([
+                'layout' => $dashboard->is_system
+                    ? SystemDashboards::defaultLayout($dashboard->name)
+                    : null,
+            ]);
 
             DashboardAudit::log($dashboard, 'layout_reset');
         } else {
@@ -1448,85 +1324,6 @@ class Dashboard extends Component
 
         $filters = $this->filterScope();
 
-        // Home for non-superadmins is empty onboarding (no PDB default, no redirect).
-        // Superadmin keeps the Product Database overview as Home.
-        $isEmptyHome = $this->dashboardId === null && $user !== null && ! $user->isSuperadmin();
-
-        if ($isEmptyHome) {
-            $summary = [
-                'metrics' => [],
-                'regions' => [],
-                'regionMax' => ['products' => 1, 'warranty' => 1],
-                'installTrend' => [],
-                'installArea' => ['area' => '', 'line' => '', 'dots' => []],
-                'machineTypes' => [],
-                'typeMax' => 1,
-                'topAccounts' => [],
-                'fleetDonut' => [],
-                'fleetTotal' => 1,
-                'brandDonut' => [],
-                'brandTotal' => 1,
-                'kpis' => [],
-                'sla' => [],
-                'attentionSignals' => [],
-                'installDelta' => null,
-                'trendMonths' => 12,
-                'filters' => $filters,
-                'regionOptions' => ['All regions', ...ProductDashboardService::REGIONS],
-                'freshness' => 'no data yet',
-                'selectedRegion' => $region,
-                'scopeNote' => $region,
-            ];
-            $context = DashboardContext::fromSummary($region, $this->period, $summary)
-                ->withSources([])
-                ->withFilters($filters);
-            $layout = ['version' => 1, 'widgets' => []];
-            $grid = $engine->build($layout, $context);
-
-            $hasActiveFilters = $this->branchFilter !== 'All branches'
-                || $this->statusFilter !== 'All statuses'
-                || trim($this->dateFrom) !== ''
-                || trim($this->dateTo) !== '';
-
-            // Flag every widget with its data provenance (connected source,
-            // Product Database, or not configured) for the edit-mode chips.
-            // Editorial only — nothing is connected here.
-            foreach ($grid['widgets'] as $index => $widget) {
-                $grid['widgets'][$index]['provenance'] = $this->widgetProvenance($widget);
-            }
-
-            return view('livewire.dashboard', [
-                'regionLocked' => $this->regionLocked,
-                'periodOptions' => array_keys(ProductDashboardService::PERIODS),
-                'branchOptions' => $this->branchOptions(),
-                'statusOptions' => $this->statusOptions(),
-                'hasActiveFilters' => $hasActiveFilters,
-                'activeFilters' => array_filter([
-                    'branch' => $filters['branch'] ?? null,
-                    'status' => $filters['status'] ?? null,
-                    'from' => $filters['date_from'] ?? null,
-                    'to' => $filters['date_to'] ?? null,
-                ]),
-                'grid' => $grid,
-                'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
-                'metricLabels' => config('dashboard.metric_labels', []),
-                'metricValues' => [],
-                'datasetOptions' => $this->datasetOptions(),
-                'metricOptions' => $this->metricOptions(),
-                'allowAddWidgets' => (bool) config('dashboard.allow_add_widgets'),
-                'dashboard' => null,
-                'canEditDashboard' => false,
-                'shares' => collect(),
-                'sources' => collect(),
-                'userOptions' => collect(),
-                'tableOptions' => $this->tableOptions(),
-                'isEmptyHome' => true,
-                ...$summary,
-            ])
-                ->layout('layouts.dashboard')
-                ->title('Dashboards');
-        }
-
         $summary = $service->summary($region === 'All regions' ? null : $region, $this->period, $filters);
 
         // Re-resolve the dashboard + permission from the DB (never trust the
@@ -1549,12 +1346,16 @@ class Dashboard extends Component
             ->withFilters($filters);
         $savedLayout = $dashboard?->layout
             ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null)
-            ?? ($this->dashboardId === null ? $this->homeFallbackLayout() : null);
+            ?? ($this->dashboardId === null ? SystemDashboards::homeLayout() : null);
 
         // Owned dashboards created via Branch A start empty (no PDB default).
-        // A null layout on an owned board means empty, not Home's default.
+        // A null layout on an owned board means empty, not Home's default —
+        // but a core row with no layout falls back to the shipped default
+        // (Reset and "never migrated yet" both resolve here).
         if ($dashboard !== null && $dashboard->layout === null) {
-            $savedLayout = ['version' => 1, 'widgets' => []];
+            $savedLayout = $dashboard->is_system
+                ? (SystemDashboards::defaultLayout($dashboard->name) ?? ['version' => 1, 'widgets' => []])
+                : ['version' => 1, 'widgets' => []];
         }
 
         $layout = $this->customizing && $this->draftLayout !== []

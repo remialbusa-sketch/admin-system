@@ -11,7 +11,7 @@ class SystemDashboardsTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_the_three_curated_dashboards_are_seeded(): void
+    public function test_the_three_core_dashboards_are_seeded(): void
     {
         $systems = DashboardModel::query()->where('is_system', true)->orderBy('name')->get();
 
@@ -23,80 +23,51 @@ class SystemDashboardsTest extends TestCase
         foreach ($systems as $system) {
             $this->assertNull($system->owner_id);
             $this->assertNotEmpty($system->layout['widgets'] ?? []);
-            $this->assertGreaterThan(0, $system->sources()->count());
         }
+
+        // Home speaks the bare Product Database vocabulary (no sources — a
+        // source would shrink widget options to `pdb.*` only).
+        $this->assertSame(0, $systems->firstWhere('name', 'Home')->sources()->count());
 
         $tsa = $systems->firstWhere('name', 'Technical Service Analysis');
         $this->assertSame('tr', $tsa->sources()->first()->alias);
         $this->assertSame('technical-reports', $tsa->sources()->first()->table_key);
+
+        // The rows carry the pages' widget layouts (bare metric keys — the
+        // pages are their only renderer).
+        $this->assertCount(7, $tsa->layout['widgets']);
+        $this->assertSame(
+            'reports_total',
+            collect($tsa->layout['widgets'])->firstWhere('id', 'tsa-reports')['props']['metric'] ?? null,
+        );
+        $this->assertCount(4, $systems->firstWhere('name', 'TSP Analytics')->layout['widgets']);
     }
 
-    public function test_opening_a_template_creates_one_editable_copy_and_reuses_it(): void
+    public function test_opening_a_core_row_redirects_to_its_page_without_creating_a_copy(): void
     {
         $user = User::factory()->president()->create();
         $system = DashboardModel::query()->where('is_system', true)->where('name', 'Technical Service Analysis')->firstOrFail();
-        $sharer = User::factory()->superadmin()->create();
-        \App\Models\DashboardShare::create(['dashboard_id' => $system->id, 'user_id' => $user->id, 'permission' => 'view', 'shared_by' => $sharer->id]);
 
-        $this->actingAs($user)->get(route('dashboards.show', $system))->assertRedirect();
-
-        $copy = DashboardModel::query()
-            ->where('owner_id', $user->id)
-            ->where('name', 'Technical Service Analysis')
-            ->first();
-
-        $this->assertNotNull($copy);
-        $this->assertCount($system->sources()->count(), $copy->sources()->get());
-        $this->assertCount(count($system->layout['widgets']), $copy->layout['widgets']);
-
-        // Re-opening the template returns the same copy (no duplicates).
-        $this->actingAs($user)->get(route('dashboards.show', $system))->assertRedirect(route('dashboards.show', $copy));
-
-        $this->assertSame(
-            1,
-            DashboardModel::query()->where('owner_id', $user->id)->where('name', 'Technical Service Analysis')->count(),
-        );
-    }
-
-    public function test_a_copy_renders_live_widget_data_from_its_sources(): void
-    {
-        // A regular user gets the personal copy (superadmins curate the
-        // template directly — see DashboardSuperadminTest).
-        $user = User::factory()->president()->create();
-        $system = DashboardModel::query()->where('is_system', true)->where('name', 'TSP Analytics')->firstOrFail();
-        $sharer = User::factory()->superadmin()->create();
-        \App\Models\DashboardShare::create(['dashboard_id' => $system->id, 'user_id' => $user->id, 'permission' => 'view', 'shared_by' => $sharer->id]);
-
-        $this->actingAs($user)->get(route('dashboards.show', $system));
-
-        $copy = DashboardModel::query()
-            ->where('owner_id', $user->id)
-            ->where('name', 'TSP Analytics')
-            ->firstOrFail();
-
-        // The seeded widgets must resolve through the real engine (no error
-        // cards) even with empty source tables.
+        // No share required: core rows are viewable by everyone.
         $this->actingAs($user)
-            ->get(route('dashboards.show', $copy))
-            ->assertOk()
-            ->assertSee('Requests by region')
-            ->assertSee('Personnel by position');
+            ->get(route('dashboards.show', $system))
+            ->assertRedirect(route('technical-service-analysis'));
+
+        // The personal-copy flow is gone: opening never creates a row.
+        $this->assertSame(0, DashboardModel::query()->where('owner_id', $user->id)->count());
     }
 
-    public function test_a_superadmin_edits_the_template_directly_without_a_copy(): void
+    public function test_a_superadmin_opening_a_core_row_lands_on_the_same_page(): void
     {
         $superadmin = User::factory()->superadmin()->create();
         $system = DashboardModel::query()->where('is_system', true)->where('name', 'TSP Analytics')->firstOrFail();
 
         $this->actingAs($superadmin)
             ->get(route('dashboards.show', $system))
-            ->assertOk()
-            ->assertSee('Requests by region');
+            ->assertRedirect(route('tsp-analytics'));
 
-        // No personal copy is created for a superadmin.
-        $this->assertSame(
-            0,
-            DashboardModel::query()->where('owner_id', $superadmin->id)->where('name', 'TSP Analytics')->count(),
-        );
+        // No copy for anyone — editors edit the shared row's layout from
+        // the page itself.
+        $this->assertSame(0, DashboardModel::query()->where('owner_id', $superadmin->id)->count());
     }
 }

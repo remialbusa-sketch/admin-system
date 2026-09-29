@@ -4,6 +4,8 @@ namespace App\Livewire;
 
 use App\Models\Dashboard;
 use App\Models\DashboardShare;
+use App\Models\DashboardSource;
+use App\Models\DynamicTable;
 use App\Models\User;
 use App\Support\DashboardAudit;
 use App\Support\TableCatalog;
@@ -72,7 +74,7 @@ class DashboardsIndex extends Component
 
         $dashboard->sources()->create([
             'table_key' => $this->newDashboardTableKey,
-            'alias' => \App\Models\DashboardSource::uniqueAliasFor($dashboard, $alias),
+            'alias' => DashboardSource::uniqueAliasFor($dashboard, $alias),
             'position' => 0,
         ]);
 
@@ -124,6 +126,9 @@ class DashboardsIndex extends Component
 
         abort_unless($this->mayManage($dashboard), 403);
 
+        // Core dashboard names identify their canonical route — fixed.
+        abort_if($dashboard->is_system, 403, 'Core dashboard names are fixed.');
+
         $dashboard->update(['name' => trim($this->renamingName)]);
 
         DashboardAudit::log($dashboard, 'renamed', ['name' => trim($this->renamingName)]);
@@ -135,17 +140,13 @@ class DashboardsIndex extends Component
 
     /**
      * Archive (soft delete). Owners may archive their own dashboards;
-     * superadmins may archive any, including system templates (restorable).
+     * superadmin/admin may archive core rows too (restorable).
      */
     public function deleteDashboard(int $id): void
     {
         $dashboard = Dashboard::query()->findOrFail($id);
 
         abort_unless($this->mayManage($dashboard), 403);
-
-        if ($dashboard->is_system && ! auth()->user()?->isSuperadmin()) {
-            abort(403);
-        }
 
         $dashboard->delete();
 
@@ -185,9 +186,13 @@ class DashboardsIndex extends Component
         $this->dispatch('dashboard-list-updated');
     }
 
-    /** Owner of the dashboard, or any superadmin. */
+    /** Owner of the dashboard, superadmin, or (for core rows) admin level. */
     private function mayManage(Dashboard $dashboard): bool
     {
+        if ($dashboard->is_system) {
+            return (bool) auth()->user()?->canEditCoreDashboards();
+        }
+
         return $dashboard->owner_id === auth()->id()
             || (bool) auth()->user()?->isSuperadmin();
     }
@@ -213,13 +218,13 @@ class DashboardsIndex extends Component
                 ->whereHas('shares', fn ($query) => $query->where('user_id', $user?->id))
                 ->orderBy('name')
                 ->get(),
-            'system' => $isSuperadmin
-                ? Dashboard::query()
-                    ->with('sources')
-                    ->where('is_system', true)
-                    ->orderBy('name')
-                    ->get()
-                : collect(),
+            // The three core dashboards are viewable by everyone; only
+            // superadmin/admin get the manage controls (blade, canEditCore).
+            'system' => Dashboard::query()
+                ->with('sources')
+                ->where('is_system', true)
+                ->orderBy('name')
+                ->get(),
             // Superadmin-only global view: every dashboard (owned, shared or
             // private), searchable and capped. Never rendered for other roles.
             'all' => $isSuperadmin
@@ -234,15 +239,22 @@ class DashboardsIndex extends Component
                     ->limit(100)
                     ->get()
                 : collect(),
-            // Archived (soft-deleted) dashboards: the user's own, or every
-            // archived dashboard for a superadmin.
+            // Archived (soft-deleted) dashboards: the user's own, the core
+            // rows for admins, or everything for a superadmin.
             'archived' => Dashboard::onlyTrashed()
                 ->with('sources')
-                ->when(! $isSuperadmin, fn ($query) => $query->where('owner_id', $user?->id))
+                ->when(! $isSuperadmin, fn ($query) => $query->where(function ($query) use ($user): void {
+                    $query->where('owner_id', $user?->id);
+
+                    if ($user?->canEditCoreDashboards()) {
+                        $query->orWhere('is_system', true);
+                    }
+                }))
                 ->orderBy('name')
                 ->limit(100)
                 ->get(),
             'isSuperadmin' => $isSuperadmin,
+            'canEditCore' => (bool) $user?->canEditCoreDashboards(),
             'tableOptions' => $this->tableOptions(),
             'userOptions' => $isSuperadmin || $user !== null
                 ? User::query()->whereKeyNot($user?->id)->orderBy('name')->get(['id', 'name', 'email'])
@@ -266,7 +278,7 @@ class DashboardsIndex extends Component
             ->values()
             ->all();
 
-        $dynamic = \App\Models\DynamicTable::query()
+        $dynamic = DynamicTable::query()
             ->orderBy('name')
             ->get(['key', 'name'])
             ->map(fn ($table): array => ['key' => $table->key, 'label' => $table->name])

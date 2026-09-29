@@ -74,6 +74,15 @@ class Dashboard extends Model
             return self::PERMISSION_EDIT;
         }
 
+        // Core (system) dashboards are shared with every account: view for
+        // all, edit only for superadmin/admin (User::canEditCoreDashboards).
+        // Checked before shares — a share never widens access to core rows.
+        if ($this->is_system) {
+            return $user->canEditCoreDashboards()
+                ? self::PERMISSION_EDIT
+                : self::PERMISSION_VIEW;
+        }
+
         if ($this->owner_id === $user->id) {
             return self::PERMISSION_EDIT;
         }
