@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\DynamicTable;
+use App\Models\User;
 
 /**
  * Central catalog of tables — both the built-in (core) tables and user-created
@@ -86,5 +87,27 @@ class TableCatalog
         }
 
         return DynamicTable::query()->where('key', $key)->exists();
+    }
+
+    /**
+     * Selectable tables for data-source / widget pickers: the core five
+     * plus the dynamic tables the user may open (owner, superadmin, or a
+     * share). Single shared boundary for every picker in the app.
+     *
+     * @return array<int, array{key: string, label: string}>
+     */
+    public function optionsFor(?User $user): array
+    {
+        $core = collect(self::CORE)
+            ->map(fn (array $table, string $key): array => ['key' => $key, 'label' => $table['label']])
+            ->values();
+
+        $dynamic = DynamicTable::query()
+            ->visibleTo($user)
+            ->orderBy('name')
+            ->get(['key', 'name'])
+            ->map(fn (DynamicTable $table): array => ['key' => $table->key, 'label' => $table->name]);
+
+        return $core->concat($dynamic)->all();
     }
 }

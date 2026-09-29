@@ -118,28 +118,36 @@ class TablePinTest extends TestCase
         $this->assertSame('Equipment', $items[0]['label']);
     }
 
-    public function test_sidebar_component_shows_only_pinned_tables(): void
+    public function test_sidebar_shows_core_tables_plus_pinned_tables(): void
     {
         $user = User::factory()->create();
-        DynamicTable::create(['key' => 'equipment', 'name' => 'Equipment', 'created_by' => null]);
+        DynamicTable::create(['key' => 'equipment', 'name' => 'Equipment', 'created_by' => $user->id]);
         DynamicTable::create(['key' => 'fleet', 'name' => 'Fleet', 'created_by' => null]);
 
-        // Pin one dynamic table + one core table.
+        // Pin one dynamic table.
         TablePin::create(['user_id' => $user->id, 'table_key' => 'equipment', 'position' => 0]);
 
-        // No pins yet for Personnel -> not shown.
+        // The five core tables always show; the pinned own table shows;
+        // an unpinned table does not.
         Livewire::actingAs($user)
             ->test(Sidebar::class)
+            ->assertSee('Product Database')
             ->assertSee('Equipment')
-            ->assertDontSee('Technical Personnel')
+            ->assertDontSee('Fleet')
             ->assertSee('All tables');
 
-        // Pin a second -> sidebar Livewire refreshes and shows it on render.
-        TablePin::create(['user_id' => $user->id, 'table_key' => 'personnel', 'position' => 1]);
+        // Personnel is core — visible without a pin of its own.
+        Livewire::actingAs($user)
+            ->test(Sidebar::class)
+            ->assertSee('Technical Personnel');
+
+        // A pin pointing at a table the user cannot open (ownerless tables
+        // are superadmin-only) is dropped instead of rendering a dead link.
+        TablePin::create(['user_id' => $user->id, 'table_key' => 'fleet', 'position' => 1]);
 
         Livewire::actingAs($user)
             ->test(Sidebar::class)
             ->assertSee('Equipment')
-            ->assertSee('Technical Personnel');
+            ->assertDontSee('Fleet');
     }
 }

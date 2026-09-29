@@ -4,7 +4,6 @@ namespace App\Livewire;
 
 use App\Models\Dashboard;
 use App\Models\DashboardSource;
-use App\Models\DynamicTable;
 use App\Services\TableAggregationService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\GridLayoutNormalizer;
@@ -452,17 +451,6 @@ class WidgetWizard extends Component
     /** @return array<int, array{key: string, label: string}> */
     private function tableOptions(): array
     {
-        $catalog = app(TableCatalog::class);
-
-        $core = collect(TableCatalog::CORE)
-            ->map(fn (array $table, string $key): array => ['key' => $key, 'label' => $table['label']])
-            ->values();
-
-        $dynamic = DynamicTable::query()
-            ->orderBy('name')
-            ->get(['key', 'name'])
-            ->map(fn ($table): array => ['key' => $table->key, 'label' => $table->name]);
-
-        return $core->concat($dynamic)->all();
+        return app(TableCatalog::class)->optionsFor(auth()->user());
     }
 }

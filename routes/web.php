@@ -48,18 +48,19 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:import');
 
     // Classic non-Livewire import (bypasses /livewire/update entirely).
+    // can:importTable also requires table-level edit for user-created tables.
     Route::get('tables/{table}/import-classic', [ClassicImportController::class, 'show'])
         ->name('tables.import.classic')
-        ->middleware('can:import');
+        ->middleware(['can:import', 'can:importTable,table']);
     Route::post('tables/{table}/import-classic/analyze', [ClassicImportController::class, 'analyze'])
         ->name('tables.import.classic.analyze')
-        ->middleware('can:import');
+        ->middleware(['can:import', 'can:importTable,table']);
     Route::post('tables/{table}/import-classic/execute', [ClassicImportController::class, 'execute'])
         ->name('tables.import.classic.execute')
-        ->middleware('can:import');
+        ->middleware(['can:import', 'can:importTable,table']);
     Route::get('tables/{table}/import-classic/failed-rows/{batch}', [ClassicImportController::class, 'failedRows'])
         ->name('tables.import.classic.failed-rows')
-        ->middleware('can:import');
+        ->middleware(['can:import', 'can:importTable,table']);
 
     Route::get('installed-products', InstalledProductsTable::class)->name('installed-products');
     Route::get('service-requests', ServiceRequestTable::class)->name('service-requests');

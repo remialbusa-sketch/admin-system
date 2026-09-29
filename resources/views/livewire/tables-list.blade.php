@@ -66,6 +66,10 @@
                 </div>
                 <a href="{{ $table['url'] }}" wire:navigate class="admin-secondary-button mt-4 w-full justify-center">Open table</a>
                 @if (($table['is_dynamic'] ?? false) && (($table['created_by'] ?? null) === auth()->id() || ($isSuperadmin ?? false)))
+                    <button type="button" wire:click="openShareModal('{{ $table['key'] }}')" class="admin-secondary-button mt-2 w-full justify-center text-xs">
+                        <x-mary-icon name="o-user-plus" class="h-4 w-4" />
+                        Share table
+                    </button>
                     <button type="button" wire:click="archiveTable('{{ $table['key'] }}')" wire:confirm="Archive this table? You can restore it from the Archived section." class="admin-secondary-button mt-2 w-full justify-center text-xs">
                         <x-mary-icon name="o-archive-box" class="h-4 w-4" />
                         Archive table
@@ -263,4 +267,52 @@
         </div>
     </x-admin.modal>
     @endcan
+
+    {{-- People sharing: view or edit access per person (owner/superadmin manage). --}}
+    <x-admin.modal name="table-share" title="Share table" description="Give specific people access. Viewers can open the table; editors can also add and change records." size="lg">
+        <div class="space-y-4">
+            <div class="divide-y divide-base-300 rounded-md border border-base-300">
+                @forelse ($tableShares as $share)
+                    <div class="flex items-center justify-between gap-3 px-4 py-3">
+                        <div class="min-w-0">
+                            <p class="truncate text-sm font-semibold text-base-content">{{ $share->user?->name }}</p>
+                            <p class="truncate text-xs text-base-content/50">{{ $share->user?->email }}</p>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-3">
+                            <span class="rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] {{ $share->permission === 'edit' ? 'bg-primary/10 text-primary' : 'bg-base-200 text-base-content/60' }}">
+                                {{ $share->permission }}
+                            </span>
+                            <button type="button" wire:click="unshareTable({{ $share->id }})" wire:confirm="Remove this person's access?" class="admin-icon-button" aria-label="Remove access">
+                                <x-mary-icon name="o-x-mark" class="h-4 w-4" />
+                            </button>
+                        </div>
+                    </div>
+                @empty
+                    <p class="px-4 py-6 text-center text-sm text-base-content/50">Not shared with anyone yet — only you can open it.</p>
+                @endforelse
+            </div>
+
+            <form wire:submit="shareTable" class="grid gap-3 sm:grid-cols-[1fr_auto_auto] sm:items-end">
+                <div class="min-w-0">
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55" for="table-share-user">Person</label>
+                    <select id="table-share-user" wire:model="shareUserId" class="admin-control w-full">
+                        <option value="">Choose a person…</option>
+                        @foreach ($userOptions as $person)
+                            <option value="{{ $person->id }}">{{ $person->name }} ({{ $person->email }})</option>
+                        @endforeach
+                    </select>
+                    @error('shareUserId') <p class="mt-1 text-xs text-error">{{ $message }}</p> @enderror
+                </div>
+                <div>
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-[0.08em] text-base-content/55" for="table-share-permission">Access</label>
+                    <select id="table-share-permission" wire:model="sharePermission" class="admin-control">
+                        <option value="view">View</option>
+                        <option value="edit">Edit</option>
+                    </select>
+                    @error('sharePermission') <p class="mt-1 text-xs text-error">{{ $message }}</p> @enderror
+                </div>
+                <button type="submit" class="admin-primary-button">Share</button>
+            </form>
+        </div>
+    </x-admin.modal>
 </div>

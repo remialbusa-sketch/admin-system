@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -45,6 +46,76 @@ class DynamicTable extends Model
     public function columns(): HasMany
     {
         return $this->hasMany(CustomTableColumn::class, 'table_key', 'key')->orderBy('position');
+    }
+
+    public function shares(): HasMany
+    {
+        return $this->hasMany(TableShare::class, 'dynamic_table_id');
+    }
+
+    public const PERMISSION_VIEW = 'view';
+
+    public const PERMISSION_EDIT = 'edit';
+
+    /**
+     * The effective permission $user has on this table: edit for the
+     * superadmin and the owner, whatever an explicit share grants, null
+     * when nobody shared it with them (ownerless tables are therefore
+     * superadmin-only). Mirrors Dashboard::permissionFor.
+     */
+    public function permissionFor(?User $user): ?string
+    {
+        if ($user === null) {
+            return null;
+        }
+
+        if ($user->isSuperadmin()) {
+            return self::PERMISSION_EDIT;
+        }
+
+        if ($this->created_by !== null && $this->created_by === $user->id) {
+            return self::PERMISSION_EDIT;
+        }
+
+        $share = $this->shares()->where('user_id', $user->id)->first();
+
+        if ($share === null) {
+            return null;
+        }
+
+        return $share->permission === self::PERMISSION_EDIT
+            ? self::PERMISSION_EDIT
+            : self::PERMISSION_VIEW;
+    }
+
+    public function canBeViewedBy(?User $user): bool
+    {
+        return $this->permissionFor($user) !== null;
+    }
+
+    public function canBeEditedBy(?User $user): bool
+    {
+        return $this->permissionFor($user) === self::PERMISSION_EDIT;
+    }
+
+    /**
+     * The tables a user may open: everything for a superadmin, otherwise
+     * their own plus the ones shared with them.
+     */
+    public function scopeVisibleTo(Builder $query, ?User $user): Builder
+    {
+        if ($user === null) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        if ($user->isSuperadmin()) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $query) use ($user): void {
+            $query->where('created_by', $user->id)
+                ->orWhereHas('shares', fn (Builder $share) => $share->where('user_id', $user->id));
+        });
     }
 
     /**

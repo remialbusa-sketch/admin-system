@@ -11,8 +11,10 @@ use App\Models\Installation;
 use App\Models\RecordEditLog;
 use App\Models\ServiceRequest;
 use App\Models\TablePin;
+use App\Models\TableShare;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
+use App\Models\User;
 use App\Services\ColumnTypeRegistry;
 use App\Services\ImportUndoService;
 use App\Support\TableCatalog;
@@ -32,6 +34,13 @@ class TablesList extends Component
 
     /** Table keys the current user has pinned to their sidebar. */
     public array $pinnedKeys = [];
+
+    /** Share modal state: which table is being shared, and the new grant. */
+    public ?string $shareTableKey = null;
+
+    public string $shareUserId = '';
+
+    public string $sharePermission = 'view';
 
     public function mount(): void
     {
@@ -200,6 +209,63 @@ class TablesList extends Component
     {
         return $table->created_by === auth()->id()
             || (bool) auth()->user()?->isSuperadmin();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | People sharing — owner/superadmin manage grants (mirrors dashboards)
+    |--------------------------------------------------------------------------
+    */
+
+    public function openShareModal(string $tableKey): void
+    {
+        $table = DynamicTable::query()->where('key', $tableKey)->firstOrFail();
+
+        abort_unless($this->mayManageTable($table), 403);
+
+        $this->shareTableKey = $table->key;
+        $this->reset('shareUserId');
+        $this->sharePermission = 'view';
+
+        $this->dispatch('open-modal', name: 'table-share');
+    }
+
+    public function shareTable(): void
+    {
+        abort_unless($this->shareTableKey !== null, 403);
+
+        $table = DynamicTable::query()->where('key', $this->shareTableKey)->firstOrFail();
+
+        abort_unless($this->mayManageTable($table), 403);
+
+        $this->validate([
+            'shareUserId' => ['required', 'integer', 'exists:users,id'],
+            'sharePermission' => ['required', 'in:view,edit'],
+        ]);
+
+        if ($table->created_by !== null && (int) $this->shareUserId === $table->created_by) {
+            $this->addError('shareUserId', 'That person already owns this table.');
+
+            return;
+        }
+
+        TableShare::updateOrCreate(
+            ['dynamic_table_id' => $table->id, 'user_id' => (int) $this->shareUserId],
+            ['permission' => $this->sharePermission, 'shared_by' => auth()->id()],
+        );
+
+        $this->reset('shareUserId');
+        $this->sharePermission = 'view';
+    }
+
+    public function unshareTable(int $shareId): void
+    {
+        $share = TableShare::query()->findOrFail($shareId);
+        $table = DynamicTable::query()->whereKey($share->dynamic_table_id)->firstOrFail();
+
+        abort_unless($this->mayManageTable($table), 403);
+
+        $share->delete();
     }
 
     /**
@@ -427,19 +493,23 @@ class TablesList extends Component
             ],
         ];
 
-        $dynamicTables = DynamicTable::query()->orderBy('name')->get()->map(function (DynamicTable $table): array {
-            return [
-                'key' => $table->key,
-                'label' => $table->name,
-                'description' => (string) ($table->description ?: 'User-created table'),
-                'icon' => $table->icon ?? 'o-table-cells',
-                'url' => route('tables.show', ['table' => $table->key]),
-                'count' => $table->rows()->count(),
-                'source' => $table->monday_board_id ? 'monday.com board '.$table->monday_board_id : 'Manual',
-                'is_dynamic' => true,
-                'created_by' => $table->created_by,
-            ];
-        });
+        $dynamicTables = DynamicTable::query()
+            ->visibleTo(auth()->user())
+            ->orderBy('name')
+            ->get()
+            ->map(function (DynamicTable $table): array {
+                return [
+                    'key' => $table->key,
+                    'label' => $table->name,
+                    'description' => (string) ($table->description ?: 'User-created table'),
+                    'icon' => $table->icon ?? 'o-table-cells',
+                    'url' => route('tables.show', ['table' => $table->key]),
+                    'count' => $table->rows()->count(),
+                    'source' => $table->monday_board_id ? 'monday.com board '.$table->monday_board_id : 'Manual',
+                    'is_dynamic' => true,
+                    'created_by' => $table->created_by,
+                ];
+            });
 
         $tables = collect(array_merge($coreTables, $dynamicTables->all()))
             ->map(fn (array $table): array => $table + ['pinned' => isset($pinnedKeys[$table['key']])])
@@ -447,6 +517,17 @@ class TablesList extends Component
 
         $imports = ImportBatch::query()->latest()->limit(10)->get();
         $recentEdits = RecordEditLog::query()->with('user:id,name')->latest()->limit(12)->get();
+
+        // Share modal data: grants for the open table (empty when closed) and
+        // the people the owner may add.
+        $shareTable = $this->shareTableKey !== null
+            ? DynamicTable::query()->where('key', $this->shareTableKey)->first()
+            : null;
+        $tableShares = $shareTable?->shares()->with('user:id,name,email')->get() ?? collect();
+        $userOptions = User::query()
+            ->whereKeyNot(auth()->id())
+            ->orderBy('name')
+            ->get(['id', 'name', 'email']);
 
         $archivedTables = DynamicTable::onlyTrashed()
             ->when(! auth()->user()?->isSuperadmin(), fn ($query) => $query->where('created_by', auth()->id()))
@@ -473,6 +554,8 @@ class TablesList extends Component
             'columnTypeOptions' => app(ColumnTypeRegistry::class)->all(),
             'archivedTables' => $archivedTables,
             'isSuperadmin' => (bool) auth()->user()?->isSuperadmin(),
+            'tableShares' => $tableShares,
+            'userOptions' => $userOptions,
         ])->layout('layouts.dashboard')->title('Tables');
     }
 }

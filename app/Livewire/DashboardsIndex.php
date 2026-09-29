@@ -5,7 +5,6 @@ namespace App\Livewire;
 use App\Models\Dashboard;
 use App\Models\DashboardShare;
 use App\Models\DashboardSource;
-use App\Models\DynamicTable;
 use App\Models\User;
 use App\Support\DashboardAudit;
 use App\Support\TableCatalog;
@@ -265,25 +264,13 @@ class DashboardsIndex extends Component
     }
 
     /**
-     * Selectable tables for the dashboard's required data source.
+     * Selectable tables for the dashboard's required data source (core +
+     * the dynamic tables this user may open — TableCatalog::optionsFor).
      *
      * @return array<int, array{key: string, label: string}>
      */
     private function tableOptions(): array
     {
-        $catalog = app(TableCatalog::class);
-
-        $options = collect(TableCatalog::CORE)
-            ->map(fn (array $meta, string $key): array => ['key' => $key, 'label' => $meta['label']])
-            ->values()
-            ->all();
-
-        $dynamic = DynamicTable::query()
-            ->orderBy('name')
-            ->get(['key', 'name'])
-            ->map(fn ($table): array => ['key' => $table->key, 'label' => $table->name])
-            ->all();
-
-        return array_merge($options, $dynamic);
+        return app(TableCatalog::class)->optionsFor(auth()->user());
     }
 }

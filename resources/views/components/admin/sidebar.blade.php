@@ -1,10 +1,27 @@
 @php
-    // The sidebar's "Tables" group shows ONLY the tables the current user has
-    // pinned on the /tables page (all tables live there). Unpinned tables are
-    // reached by opening "Import table" (the Tables page).
-    $dataItems = auth()->check()
-        ? app(\App\Support\TableCatalog::class)->navForKeys(\App\Models\TablePin::keysFor(auth()->id()))
-        : [];
+    // The sidebar's "Tables" group always lists the five core tables, plus
+    // the tables the current user has pinned on the /tables page. Pins to
+    // tables the user can no longer open (share revoked, ownerless table)
+    // are dropped instead of rendering a dead link.
+    $sidebarUser = auth()->user();
+    $sidebarCatalog = app(\App\Support\TableCatalog::class);
+
+    $sidebarKeys = [];
+
+    if ($sidebarUser !== null) {
+        $coreKeys = array_keys(\App\Support\TableCatalog::CORE);
+        $openableKeys = array_merge(
+            $coreKeys,
+            \App\Models\DynamicTable::query()->visibleTo($sidebarUser)->pluck('key')->all(),
+        );
+
+        $sidebarKeys = array_values(array_unique([
+            ...$coreKeys,
+            ...array_intersect(\App\Models\TablePin::keysFor($sidebarUser->id), $openableKeys),
+        ]));
+    }
+
+    $dataItems = $sidebarCatalog->navForKeys($sidebarKeys);
 
     $analyticsItems = [
         ['route' => 'dashboard', 'label' => 'Home', 'description' => 'Executive command view', 'icon' => 'o-home'],

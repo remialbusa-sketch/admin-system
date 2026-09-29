@@ -41,16 +41,50 @@ class DynamicTable extends ManagedTable
 
     public string $connectBoardId = '';
 
+    /**
+     * Fresh registry row for this request's permission checks — never
+     * trusted across requests (Livewire resets private props per call).
+     */
+    private ?DynamicTableModel $registryCache = null;
+
+    private function registry(): ?DynamicTableModel
+    {
+        return $this->registryCache ??= DynamicTableModel::query()
+            ->where('key', $this->dynamicKey)
+            ->first();
+    }
+
     public function mount(string $table): void
     {
         $registry = DynamicTableModel::query()->where('key', $table)->firstOrFail();
 
+        // Personal tables are private: owner, superadmin, or a share only.
+        abort_unless($registry->canBeViewedBy(auth()->user()), 403);
+
+        $this->registryCache = $registry;
         $this->dynamicKey = $registry->key;
         $this->dynamicName = $registry->name;
         $this->dynamicDescription = (string) $registry->description;
         $this->mondayBoardId = $registry->monday_board_id;
 
         $this->mondayEnabled = (bool) MondaySyncSetting::forDomain($this->dynamicKey)->enabled;
+    }
+
+    /**
+     * Row/column mutations need the global edit role AND table-level edit
+     * (owner/superadmin/edit share) — a view-only share never writes.
+     */
+    public function canEdit(): bool
+    {
+        return parent::canEdit()
+            && $this->registry()?->canBeEditedBy(auth()->user()) === true;
+    }
+
+    /** Importing/live-pull writes rows too: same table-level edit bar. */
+    public function canImport(): bool
+    {
+        return parent::canImport()
+            && $this->registry()?->canBeEditedBy(auth()->user()) === true;
     }
 
     public function tableKey(): string
@@ -265,6 +299,10 @@ class DynamicTable extends ManagedTable
 
     public function render(): View
     {
+        // Re-check on every Livewire request: mount only runs on the first,
+        // so a revoked share must still close the page here.
+        abort_unless($this->registry()?->canBeViewedBy(auth()->user()) === true, 403);
+
         $rows = $this->rows();
         $columns = $this->orderedColumns();
 

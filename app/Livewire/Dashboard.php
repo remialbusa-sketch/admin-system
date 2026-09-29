@@ -7,7 +7,6 @@ use App\Models\Dashboard as DashboardModel;
 use App\Models\DashboardLayout;
 use App\Models\DashboardShare;
 use App\Models\DashboardSource;
-use App\Models\DynamicTable;
 use App\Models\HistoricalTsmsReport;
 use App\Models\Installation;
 use App\Models\ServiceRequest;
@@ -1410,23 +1409,13 @@ class Dashboard extends Component
     }
 
     /**
-     * Selectable tables for the data-sources picker: core + dynamic.
+     * Selectable tables for the data-sources picker: core + the dynamic
+     * tables this user may open (TableCatalog::optionsFor).
      *
      * @return array<int, array{key: string, label: string}>
      */
     private function tableOptions(): array
     {
-        $catalog = app(TableCatalog::class);
-
-        $core = collect(TableCatalog::CORE)
-            ->map(fn (array $table, string $key): array => ['key' => $key, 'label' => $table['label']])
-            ->values();
-
-        $dynamic = DynamicTable::query()
-            ->orderBy('name')
-            ->get(['key', 'name'])
-            ->map(fn ($table): array => ['key' => $table->key, 'label' => $table->name]);
-
-        return $core->concat($dynamic)->all();
+        return app(TableCatalog::class)->optionsFor(auth()->user());
     }
 }
