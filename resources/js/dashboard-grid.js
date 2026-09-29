@@ -1,5 +1,6 @@
 // Dashboard grid layout editor: in customize mode, drag widgets to reorder,
-// drag the bottom-right handle to resize (snapped to the 12-column grid),
+// resize from the right edge (width), the bottom edge (height) or the
+// corner (both at once, snapped to the 12-column grid and row units),
 // remove widgets, add widgets and tune their settings.
 //
 // The editor works on a DRAFT: every change is synced to the Livewire
@@ -127,8 +128,13 @@ const initGrid = (grid) => {
         }
     });
 
-    // --- Resize width via the corner handle -----------------------------
+    // --- Resize: right edge = width, bottom edge = height, corner = both.
+    // Width snaps to the 12 columns, height to row spans (1-6, mirroring the
+    // server clamp in mergeWidgetGeometry). Feedback is inline grid spans,
+    // cleared on release so the draft classes take over after rerender. -----
     let resizing = null;
+
+    const resizeCursor = (mode) => (mode === 'y' ? 'ns-resize' : mode === 'xy' ? 'nwse-resize' : 'ew-resize');
 
     grid.addEventListener('pointerdown', (event) => {
         const handle = event.target.closest('[data-widget-resize]');
@@ -140,21 +146,34 @@ const initGrid = (grid) => {
         event.preventDefault();
 
         const section = handle.closest('[data-widget-id]');
+        const mode = handle.dataset.widgetResize || 'x';
         const gridRect = grid.getBoundingClientRect();
         const styles = getComputedStyle(grid);
-        const gap = parseFloat(styles.columnGap || styles.gap || '0') || 0;
-        const colWidth = (gridRect.width - gap * 11) / 12;
+        const colGap = parseFloat(styles.columnGap || '0') || 0;
+        const rowGap = parseFloat(styles.rowGap || styles.columnGap || '0') || 0;
+        const colWidth = (gridRect.width - colGap * 11) / 12;
+        const startH = parseInt(section.dataset.h || '2', 10);
+        // Row heights are `auto` (content-driven), so derive the row unit
+        // from this widget's own rendered height.
+        const rowUnit = startH > 0 && section.offsetHeight > 0
+            ? (section.offsetHeight - rowGap * (startH - 1)) / startH
+            : 92;
 
         resizing = {
             section,
+            mode,
             startX: event.clientX,
+            startY: event.clientY,
             startW: parseInt(section.dataset.w || '4', 10),
+            startH,
             colWidth,
-            gap,
+            colGap,
+            rowUnit,
+            rowGap,
         };
 
         section.classList.add('is-dragging');
-        document.body.style.cursor = 'ew-resize';
+        document.body.style.cursor = resizeCursor(mode);
         document.body.style.userSelect = 'none';
     });
 
@@ -163,14 +182,24 @@ const initGrid = (grid) => {
             return;
         }
 
-        const deltaCols = Math.round((event.clientX - resizing.startX) / (resizing.colWidth + resizing.gap));
-        const next = Math.min(12, Math.max(1, resizing.startW + deltaCols));
+        if (resizing.mode === 'x' || resizing.mode === 'xy') {
+            const deltaCols = Math.round((event.clientX - resizing.startX) / (resizing.colWidth + resizing.colGap));
+            const next = Math.min(12, Math.max(1, resizing.startW + deltaCols));
 
-        if (next !== parseInt(resizing.section.dataset.w, 10)) {
-            resizing.section.dataset.w = String(next);
-            // Inline span for immediate feedback; cleared on release so the
-            // draft classes take over after the Livewire rerender.
-            resizing.section.style.gridColumn = `span ${next} / span ${next}`;
+            if (next !== parseInt(resizing.section.dataset.w, 10)) {
+                resizing.section.dataset.w = String(next);
+                resizing.section.style.gridColumn = `span ${next} / span ${next}`;
+            }
+        }
+
+        if (resizing.mode === 'y' || resizing.mode === 'xy') {
+            const deltaRows = Math.round((event.clientY - resizing.startY) / (resizing.rowUnit + resizing.rowGap));
+            const next = Math.min(6, Math.max(1, resizing.startH + deltaRows));
+
+            if (next !== parseInt(resizing.section.dataset.h, 10)) {
+                resizing.section.dataset.h = String(next);
+                resizing.section.style.gridRow = `span ${next} / span ${next}`;
+            }
         }
     });
 
@@ -181,6 +210,7 @@ const initGrid = (grid) => {
 
         resizing.section.classList.remove('is-dragging');
         resizing.section.style.gridColumn = '';
+        resizing.section.style.gridRow = '';
         syncDraft(grid);
         resizing = null;
         document.body.style.cursor = '';

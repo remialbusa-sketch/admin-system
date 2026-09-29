@@ -1102,17 +1102,48 @@
 
 .widget-resize-handle {
     position: absolute;
+    z-index: 10;
+    touch-action: none;
+}
+
+.widget-resize-xy {
     right: 0;
     bottom: 0;
-    z-index: 10;
     width: 16px;
     height: 16px;
-    cursor: ew-resize;
+    cursor: nwse-resize;
     border-bottom-right-radius: var(--radius-box);
     /* Grip texture: two diagonal notches, not a color gradient. */
     background:
         linear-gradient(135deg, transparent 0 46%, color-mix(in oklab, var(--color-primary) 65%, transparent) 46% 54%, transparent 54%),
         linear-gradient(135deg, transparent 0 66%, color-mix(in oklab, var(--color-primary) 65%, transparent) 66% 74%, transparent 74%);
+}
+
+/* Edge handles: thin full-length grab zones, tinted on hover only. */
+.widget-resize-x,
+.widget-resize-y {
+    background: transparent;
+}
+
+.widget-resize-x:hover,
+.widget-resize-y:hover {
+    background: color-mix(in oklab, var(--color-primary) 25%, transparent);
+}
+
+.widget-resize-x {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 10px;
+    cursor: ew-resize;
+}
+
+.widget-resize-y {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 10px;
+    cursor: ns-resize;
 }
 
 /* Expression tree editor canvas: dotted grid surface for the drag-drop

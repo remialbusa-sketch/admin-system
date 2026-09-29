@@ -41,7 +41,11 @@
             </div>
 
             @if ($editing)
-                <span class="widget-resize-handle no-print" data-widget-resize title="Drag to resize" aria-hidden="true"></span>
+                {{-- Resize handles: right edge = width, bottom edge = height,
+                     corner = both (diagonal). The editor snaps to grid units. --}}
+                <span class="widget-resize-handle widget-resize-x no-print" data-widget-resize="x" title="Drag to resize width" aria-hidden="true"></span>
+                <span class="widget-resize-handle widget-resize-y no-print" data-widget-resize="y" title="Drag to resize height" aria-hidden="true"></span>
+                <span class="widget-resize-handle widget-resize-xy no-print" data-widget-resize="xy" title="Drag to resize" aria-hidden="true"></span>
             @endif
         </section>
     @empty
