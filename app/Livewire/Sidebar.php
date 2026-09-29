@@ -41,9 +41,11 @@ class Sidebar extends Component
             : Dashboard::query()
                 ->where(fn ($query) => $query
                     ->where('owner_id', $user->id)
-                    // Core (system) dashboards are shared with everyone.
-                    ->orWhere('is_system', true)
                     ->orWhereHas('shares', fn ($share) => $share->where('user_id', $user->id)))
+                // Core (system) rows are excluded on purpose: they already
+                // have dedicated top-level Analytics links, so listing them
+                // here too would duplicate them (and inflate the badge).
+                ->where('is_system', false)
                 ->orderBy('name')
                 ->limit(10)
                 ->get();

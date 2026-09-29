@@ -158,15 +158,29 @@ class CoreDashboardAccessTest extends TestCase
         $this->assertSame(0, DashboardModel::query()->where('owner_id', $user->id)->count());
     }
 
-    public function test_core_dashboards_are_listed_for_everyone_in_sidebar_and_index(): void
+    public function test_core_dashboards_stay_out_of_the_sidebar_dashboards_list(): void
     {
         $user = $this->viewer();
 
-        // The sidebar's Dashboards sub-list tags system rows with "Tpl".
+        DashboardModel::create([
+            'owner_id' => $user->id,
+            'name' => 'My personal board',
+            'layout' => ['version' => 1, 'widgets' => []],
+        ]);
+
+        // Core rows live under their dedicated Analytics links — they must
+        // never appear as Tpl entries inside the Dashboards sub-list, nor
+        // inflate its badge. Personal dashboards still list normally.
         Livewire::actingAs($user)
             ->test(Sidebar::class)
-            ->assertSee('Tpl');
+            ->assertDontSee('Tpl')
+            ->assertSee('My personal board')
+            ->assertViewHas('dashboards', function ($dashboards): bool {
+                return $dashboards->count() === 1
+                    && $dashboards->every(fn (DashboardModel $dashboard): bool => ! $dashboard->is_system);
+            });
 
+        // The index page still shows the System dashboards section (by design).
         $this->actingAs($user)
             ->get(route('dashboards.index'))
             ->assertOk()
