@@ -1,5 +1,5 @@
 <div class="flex h-full flex-col">
-    <x-dashboard.widget-header :tone="$tone" tag="SHARE" :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
+    <x-dashboard.widget-header :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
 
     @if (count($items) === 0)
         <div class="mt-4 flex flex-1 flex-col items-start justify-center rounded-lg border border-dashed border-base-300 p-4">

@@ -9,7 +9,7 @@
     $isNumeric = is_numeric($value);
 @endphp
 <div class="flex h-full flex-col">
-    <x-dashboard.widget-header :tone="$tone" tag="KPI" :title="$label" :subtitle="$scope" />
+    <x-dashboard.widget-header :title="$label" :subtitle="$scope" />
     <div class="mt-auto pt-5">
         <div class="flex items-end justify-between gap-3">
             <p class="metric-value text-5xl font-semibold leading-none tracking-tight">

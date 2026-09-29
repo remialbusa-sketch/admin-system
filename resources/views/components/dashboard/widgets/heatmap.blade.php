@@ -1,5 +1,5 @@
 <div class="flex h-full flex-col">
-    <x-dashboard.widget-header :tone="$tone" tag="HEATMAP" :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
+    <x-dashboard.widget-header :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
     <div class="admin-scrollbar mt-5 flex-1 overflow-x-auto">
         <table class="w-full min-w-[440px] border-separate border-spacing-0 text-left">
             <thead>

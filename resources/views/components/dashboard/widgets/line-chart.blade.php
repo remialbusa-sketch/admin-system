@@ -1,6 +1,6 @@
 <div class="flex h-full flex-col">
     <div class="flex items-start justify-between gap-3">
-        <x-dashboard.widget-header :tone="$tone" tag="TREND" :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
+        <x-dashboard.widget-header :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
         @if ($delta)
             <span class="inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold {{ $delta['direction'] === 'up' ? 'bg-success/15 text-success' : 'bg-error/15 text-error' }}">
                 <span aria-hidden="true">{{ $delta['direction'] === 'up' ? '▲' : '▼' }}</span>{{ number_format(abs($delta['value']), 1) }}%

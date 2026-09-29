@@ -4,7 +4,7 @@
     $decimals = fmod($current, 1.0) == 0.0 && fmod($goal, 1.0) == 0.0 ? 0 : 1;
 @endphp
 <div class="flex h-full flex-col">
-    <x-dashboard.widget-header :tone="$tone" tag="GOAL" :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
+    <x-dashboard.widget-header :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
     <div class="mt-auto pt-5">
         <div class="flex items-end justify-between gap-3">
             <p class="metric-value text-4xl font-semibold leading-none tracking-tight">

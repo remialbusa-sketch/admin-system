@@ -25,7 +25,7 @@
     $amberTick = $tick($amberAbove);
 @endphp
 <div class="flex h-full flex-col">
-    <x-dashboard.widget-header :tone="$tone" tag="GAUGE" :title="$label" :subtitle="$scope" />
+    <x-dashboard.widget-header :title="$label" :subtitle="$scope" />
     <div class="mt-auto flex flex-col items-center pt-2">
         <svg viewBox="0 0 220 128" class="w-full max-w-[240px]" role="img" aria-label="{{ $label }}: {{ $value === null ? 'no data' : number_format($value, 1).' of '.number_format($max, 0) }}">
             <path d="M 26 105 A {{ $radius }} {{ $radius }} 0 0 1 194 105" fill="none" stroke="var(--color-base-200)" stroke-width="15" stroke-linecap="round" />

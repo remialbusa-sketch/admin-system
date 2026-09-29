@@ -1,6 +1,6 @@
 <div class="flex h-full flex-col">
     <div class="flex items-start justify-between gap-3">
-        <x-dashboard.widget-header :tone="$tone" tag="SLA" :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
+        <x-dashboard.widget-header :title="$label" :subtitle="trim($context) !== '' ? $context : $scope" />
         <span class="shrink-0 rounded-full bg-warning/15 px-2.5 py-1 text-[11px] font-bold text-warning-content" title="Commitments with an end date inside the 90-day window">
             {{ number_format($expiring) }} {{ $metricLabel }}
         </span>
