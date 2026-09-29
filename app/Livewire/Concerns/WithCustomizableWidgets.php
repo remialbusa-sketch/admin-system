@@ -7,6 +7,7 @@ use App\Support\Dashboard\DashboardLayoutEngine;
 use App\Support\Dashboard\ExpressionEngine;
 use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\GridLayoutNormalizer;
+use App\Support\Dashboard\WidgetPresets;
 use App\Support\Dashboard\WidgetRegistry;
 use Livewire\Attributes\On;
 
@@ -19,7 +20,7 @@ use Livewire\Attributes\On;
  * `dashboard-layout-sync` / `dashboard-layout-save` events with a grid key.
  *
  * Deliberately leaner than the Dashboard component: no data sources, no
- * add-widget flow, no audit — converted KPI cards plus full settings.
+ * audit — converted KPI cards plus full settings and preset adds.
  */
 trait WithCustomizableWidgets
 {
@@ -164,6 +165,41 @@ trait WithCustomizableWidgets
 
         $this->clearWidgetLayout($grid);
         $this->forgetWidgetGridState($grid);
+    }
+
+    /**
+     * Append a one-click preset (fully-configured widget) to the grid's
+     * draft. Same gate as every other grid mutation, plus the preset must
+     * belong to this grid's page — presets only resolve inside their own
+     * page vocabulary.
+     */
+    public function addWidgetFor(string $grid, string $preset): void
+    {
+        abort_unless($this->canCustomizeWidgets(), 403);
+
+        $state = $this->widgetGridState($grid);
+
+        if (! $state['customizing']) {
+            return;
+        }
+
+        $definition = WidgetPresets::find($preset);
+
+        if ($definition === null
+            || $definition['page'] !== (WidgetPresets::PAGE_FOR_GRID[$grid] ?? null)) {
+            return;
+        }
+
+        $widget = WidgetPresets::make($preset);
+
+        if ($widget === null) {
+            return;
+        }
+
+        $draft = $state['draftLayout'];
+        $draft['widgets'][] = $widget;
+
+        $this->patchWidgetGridState($grid, ['draftLayout' => $draft]);
     }
 
     /** @param array<int, array<string, mixed>> $geometry */

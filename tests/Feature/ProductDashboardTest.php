@@ -7,6 +7,8 @@ use App\Models\Account;
 use App\Models\Dashboard as DashboardModel;
 use App\Models\Installation;
 use App\Models\User;
+use App\Support\Dashboard\WidgetPresets;
+use App\Support\SystemDashboards;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -50,6 +52,20 @@ class ProductDashboardTest extends TestCase
             'installation_date' => now()->subYear(),
         ]);
 
+        // The default shipped grid plus the three presets that replaced the
+        // retired hardcoded sections — same data, now through widgets.
+        SystemDashboards::storeLayout('Home', [
+            'version' => 1,
+            'widgets' => array_merge(
+                SystemDashboards::homeLayout()['widgets'],
+                [
+                    WidgetPresets::make('brand-mix'),
+                    WidgetPresets::make('equipment-types'),
+                    WidgetPresets::make('largest-accounts'),
+                ],
+            ),
+        ]);
+
         Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->assertOk()
@@ -58,9 +74,9 @@ class ProductDashboardTest extends TestCase
             ->assertSee('Active products')
             ->assertSee('Warranty covered')
             ->assertSee('Service contracts')
-            ->assertSee('Leading installed brands')
+            ->assertSee('Brand mix')
             ->assertSee('Equipment types')
-            ->assertSee('Largest installed accounts')
+            ->assertSee('Largest accounts')
             ->assertSee('SYSMEX')
             ->assertSee('PORTABLE DEVICE')
             ->assertSee('Example Hospital')
@@ -91,6 +107,11 @@ class ProductDashboardTest extends TestCase
             'source_system' => 'product_database',
             'source_record_id' => '11-bbbbbbbbbbbbbbbbbbbbbbbb',
             'brand' => 'TERUMO',
+        ]);
+
+        SystemDashboards::storeLayout('Home', [
+            'version' => 1,
+            'widgets' => [WidgetPresets::make('brand-mix')],
         ]);
 
         Livewire::actingAs(User::factory()->superadmin()->create())

@@ -20,6 +20,7 @@ use App\Support\Dashboard\DashboardLayoutEngine;
 use App\Support\Dashboard\ExpressionEngine;
 use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\GridLayoutNormalizer;
+use App\Support\Dashboard\WidgetPresets;
 use App\Support\Dashboard\WidgetRegistry;
 use App\Support\DashboardAudit;
 use App\Support\SystemDashboards;
@@ -860,6 +861,65 @@ class Dashboard extends Component
         $this->dispatch('close-modal', name: 'add-widget');
     }
 
+    /**
+     * Append a one-click preset (fully-configured widget) to the draft.
+     * Same gates as addWidget, plus the preset must belong to this page —
+     * core presets only resolve inside their own page vocabulary.
+     */
+    public function addPreset(string $key): void
+    {
+        $this->guardEdit();
+
+        if (! config('dashboard.allow_add_widgets')) {
+            return;
+        }
+
+        if (! $this->customizing) {
+            return;
+        }
+
+        $preset = WidgetPresets::find($key);
+
+        if ($preset === null || $preset['page'] !== $this->presetPage()) {
+            return;
+        }
+
+        $widget = WidgetPresets::make($key);
+
+        if ($widget === null) {
+            return;
+        }
+
+        $this->draftLayout['widgets'][] = $widget;
+
+        $this->dispatch('close-modal', name: 'add-widget');
+    }
+
+    /**
+     * Grid-aware settings entry point for the shared grid partial (which
+     * always passes its grid key). This component renders the default grid
+     * only, so every call lands on editWidget().
+     */
+    public function editWidgetFor(string $grid, string $id): void
+    {
+        $this->editWidget($id);
+    }
+
+    /**
+     * Which preset page this render is: 'home' for the Home system row,
+     * null everywhere else (personal dashboards offer bare types only).
+     */
+    private function presetPage(): ?string
+    {
+        $dashboard = $this->dashboard();
+
+        if ($dashboard?->is_system && SystemDashboards::routeNameFor($dashboard->name) === 'dashboard') {
+            return 'home';
+        }
+
+        return null;
+    }
+
     /** Open the settings modal for one widget in the draft. */
     public function editWidget(string $id): void
     {
@@ -1389,6 +1449,9 @@ class Dashboard extends Component
             ]),
             'grid' => $grid,
             'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
+            'widgetPresets' => ($presetPage = $this->presetPage()) !== null
+                ? WidgetPresets::forPage($presetPage)
+                : [],
             'metricLabels' => config('dashboard.metric_labels', []),
             'metricValues' => array_filter(is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [], 'is_numeric'),
             'datasetOptions' => $this->datasetOptions(),

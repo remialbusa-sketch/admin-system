@@ -57,13 +57,6 @@ class TspAnalyticsService
             ? $regionalData
             : collect($regionalData)->where('region', $region)->values()->all();
 
-        $activeTsp = (int) collect($visibleRegions)->sum('active');
-        $openRecords = (int) collect($visibleRegions)->sum('open');
-
-        $totalReports = TechnicalReport::query()->count();
-        $completedReports = TechnicalReport::query()->where('service_status', 'Completed')->count();
-        $resolutionRate = $totalReports > 0 ? round(($completedReports / $totalReports) * 100, 1) : 0;
-
         $trend = collect(range(3, 0))->map(function (int $weeksAgo) {
             $start = Carbon::today()->subWeeks($weeksAgo + 1);
             $end = Carbon::today()->subWeeks($weeksAgo);
@@ -78,15 +71,7 @@ class TspAnalyticsService
             ];
         })->all();
 
-        $kpis = [
-            ['label' => 'Active TSPs', 'value' => number_format($activeTsp), 'context' => 'company service/field personnel', 'icon' => 'o-users', 'tone' => 'primary'],
-            ['label' => 'Open records', 'value' => number_format($openRecords), 'context' => 'in selected scope', 'icon' => 'o-inbox-stack', 'tone' => 'info'],
-            ['label' => 'Resolution rate', 'value' => $resolutionRate.'%', 'context' => 'completed technical reports', 'icon' => 'o-shield-check', 'tone' => 'success'],
-            ['label' => 'Total reports', 'value' => number_format($totalReports), 'context' => 'technical report records', 'icon' => 'o-document-text', 'tone' => 'warning'],
-        ];
-
         return [
-            'kpis' => $kpis,
             'regionalData' => $visibleRegions,
             'trend' => $trend,
             'totalActive' => $totalActive,
@@ -140,13 +125,6 @@ class TspAnalyticsService
 
         $avgRepair = (clone $query)->whereNotNull('repair_time_hours')->avg('repair_time_hours');
 
-        $kpis = [
-            ['label' => 'Reports (filtered)', 'value' => number_format($totalReports), 'context' => 'matching filters', 'icon' => 'o-document-text', 'tone' => 'primary'],
-            ['label' => 'Distinct TSPs', 'value' => number_format($distinctTsp), 'context' => 'in current scope', 'icon' => 'o-users', 'tone' => 'info'],
-            ['label' => 'Completion rate', 'value' => ($totalReports > 0 ? round(($completed / $totalReports) * 100, 1) : 0).'%', 'context' => 'completed reports', 'icon' => 'o-shield-check', 'tone' => 'success'],
-            ['label' => 'Avg repair time', 'value' => round((float) $avgRepair, 2).'h', 'context' => 'per report', 'icon' => 'o-clock', 'tone' => 'warning'],
-        ];
-
         // Scalar metrics for customizable widgets. Note: the TSP page merges
         // summary + details with details winning, so THESE are the metrics
         // the visible strip resolves — not summary()'s region scope.
@@ -198,7 +176,6 @@ class TspAnalyticsService
             ->all();
 
         return [
-            'kpis' => $kpis,
             'metrics' => $metrics,
             'topTsp' => $top,
             'filteredReports' => $totalReports,

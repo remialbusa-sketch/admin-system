@@ -9,6 +9,7 @@ use App\Models\CustomTableColumnValue;
 use App\Models\DynamicRow;
 use App\Models\DynamicTable as DynamicTableModel;
 use App\Models\TableColumnPreference;
+use App\Models\TableShare;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -243,8 +244,16 @@ class TableColumnOverflowTest extends TestCase
             ->call('clearSort')
             ->assertSet('sortField', null);
 
-        // Sorting is view state: viewers may sort too.
-        Livewire::actingAs(User::factory()->president()->create())
+        // Sorting is view state: viewers may sort tables shared with them.
+        $viewer = User::factory()->president()->create();
+        TableShare::create([
+            'dynamic_table_id' => $table->id,
+            'user_id' => $viewer->id,
+            'permission' => 'view',
+            'shared_by' => $table->created_by,
+        ]);
+
+        Livewire::actingAs($viewer)
             ->test(DynamicTable::class, ['table' => $table->key])
             ->call('setSort', $this->customKey($table, 'Brand'), 'asc')
             ->assertHasNoErrors();
@@ -256,6 +265,15 @@ class TableColumnOverflowTest extends TestCase
         $status = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Status')->firstOrFail();
 
         $viewer = User::factory()->president()->create();
+
+        // A view share opens the table (private since Phase B) but every
+        // structural action below must still 403 on the edit gate.
+        TableShare::create([
+            'dynamic_table_id' => $table->id,
+            'user_id' => $viewer->id,
+            'permission' => 'view',
+            'shared_by' => $table->created_by,
+        ]);
 
         Livewire::actingAs($viewer)
             ->test(DynamicTable::class, ['table' => $table->key])

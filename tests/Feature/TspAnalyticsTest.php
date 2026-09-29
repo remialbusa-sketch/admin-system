@@ -5,6 +5,9 @@ namespace Tests\Feature;
 use App\Livewire\TspAnalytics;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
+use App\Services\TspAnalyticsService;
+use App\Support\Dashboard\WidgetPresets;
+use App\Support\SystemDashboards;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -32,11 +35,18 @@ class TspAnalyticsTest extends TestCase
             'region' => 'NCR',
         ]);
 
+        SystemDashboards::storeLayout('TSP Analytics', [
+            'version' => 1,
+            'widgets' => [
+                WidgetPresets::make('regional-table'),
+                WidgetPresets::make('tsp-table'),
+            ],
+        ]);
+
         Livewire::test(TspAnalytics::class)
             ->assertOk()
-            ->assertSee('Active TSPs')
-            ->assertSee('Per-TSP performance')
-            ->assertSee('Regional performance')
+            ->assertSee('Regional table')
+            ->assertSee('Per-TSP table')
             ->assertSee('NCR')
             ->assertDontSee('Updated 10 minutes ago');
     }
@@ -127,7 +137,7 @@ class TspAnalyticsTest extends TestCase
             'tsp_name' => 'team-32875, team-32875',
         ]);
 
-        $options = app(\App\Services\TspAnalyticsService::class)->tspOptions();
+        $options = app(TspAnalyticsService::class)->tspOptions();
 
         // One normalized identity per person, not one per workbook ID.
         $this->assertSame([
@@ -168,10 +178,10 @@ class TspAnalyticsTest extends TestCase
             ->set('tspName', 'Warren Suba')
             ->assertSee('Warren Suba');
 
-        $details = app(\App\Services\TspAnalyticsService::class)->details('Warren Suba');
+        $details = app(TspAnalyticsService::class)->details('Warren Suba');
 
         $this->assertSame(2, $details['filteredReports']);
-        $this->assertSame('1', $details['kpis'][1]['value']);
+        $this->assertSame(1, $details['metrics']['distinct_tsps']);
         $this->assertCount(1, $details['topTsp']);
         $this->assertSame('Warren Suba', $details['topTsp'][0]['tsp_name']);
         $this->assertSame(2, $details['topTsp'][0]['reports']);

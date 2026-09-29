@@ -6,6 +6,8 @@ use App\Livewire\TechnicalReportTable;
 use App\Livewire\TechnicalServiceAnalysis;
 use App\Models\TechnicalReport;
 use App\Models\User;
+use App\Support\Dashboard\WidgetPresets;
+use App\Support\SystemDashboards;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -143,6 +145,11 @@ class TechnicalServiceAnalysisTest extends TestCase
 
     public function test_tsp_widget_shows_display_names_not_workbook_ids(): void
     {
+        SystemDashboards::storeLayout('Technical Service Analysis', [
+            'version' => 1,
+            'widgets' => [WidgetPresets::make('tsp-workload')],
+        ]);
+
         Livewire::actingAs(User::factory()->president()->create())
             ->test(TechnicalServiceAnalysis::class)
             ->assertSee('Dexter Lim');
@@ -163,6 +170,11 @@ class TechnicalServiceAnalysisTest extends TestCase
 
     public function test_brand_donut_segments_get_unique_colors(): void
     {
+        SystemDashboards::storeLayout('Technical Service Analysis', [
+            'version' => 1,
+            'widgets' => [WidgetPresets::make('serviced-brands')],
+        ]);
+
         Livewire::actingAs(User::factory()->president()->create())
             ->test(TechnicalServiceAnalysis::class)
             // Two brands → two distinct categorical colors (not one flat tone).
@@ -172,14 +184,25 @@ class TechnicalServiceAnalysisTest extends TestCase
 
     public function test_analysis_page_ships_drill_links_and_period_options(): void
     {
+        SystemDashboards::storeLayout('Technical Service Analysis', [
+            'version' => 1,
+            'widgets' => [
+                WidgetPresets::make('report-status'),
+                WidgetPresets::make('completions-trend'),
+                WidgetPresets::make('tsp-workload'),
+                WidgetPresets::make('serviced-brands'),
+            ],
+        ]);
+
         Livewire::actingAs(User::factory()->president()->create())
             ->test(TechnicalServiceAnalysis::class)
             ->assertOk()
             ->assertSee('Technical Reports')
-            ->assertSee('Reports completed')
-            ->assertSee('Top TSPs by reports')
+            ->assertSee('Report status mix')
+            ->assertSee('Completions trend')
+            ->assertSee('Workload by TSP')
             ->assertSee('Most serviced brands')
-            ->assertSee('technical-reports?completed=')
+            ->assertSee('technical-reports?completed_from=')
             ->assertSee('technical-reports?tsp=Alice')
             ->assertSee('technical-reports?brand=SYSMEX')
             ->assertSee('technical-reports?status=Completed')
@@ -192,6 +215,11 @@ class TechnicalServiceAnalysisTest extends TestCase
 
     public function test_period_selector_recomputes_the_window(): void
     {
+        SystemDashboards::storeLayout('Technical Service Analysis', [
+            'version' => 1,
+            'widgets' => [WidgetPresets::make('completions-trend')],
+        ]);
+
         Livewire::actingAs(User::factory()->president()->create())
             ->test(TechnicalServiceAnalysis::class)
             // 30D uses weekly buckets (range links); TR-3 (10 days old) is in one.

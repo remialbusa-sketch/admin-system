@@ -69,7 +69,6 @@ class TechnicalServiceAnalysisService
             $cursor->addDays($bucketDays);
         }
         $trendTotal = array_sum(array_column($trend, 'count'));
-        $trendMax = max(1, (int) collect($trend)->max('count'));
 
         // Status mix donut (top 4 + Other) + full breakdown, both drill via ?status=.
         $statusRows = TechnicalReport::query()
@@ -85,13 +84,6 @@ class TechnicalServiceAnalysisService
         if ($statusOthers > 0) {
             $statusDonut[] = ['label' => 'Other', 'value' => $statusOthers, 'tone' => 'neutral', 'href' => null];
         }
-        $statusTotal = max(1, array_sum(array_column($statusDonut, 'value')));
-        $byStatus = $statusRows->map(fn ($row): array => [
-            'label' => $row->label,
-            'count' => (int) $row->total,
-            'href' => $row->label === 'Unassigned' ? null : route('technical-reports', ['status' => $row->label]),
-        ])->all();
-
         // TSP workload (top 8) — rows deep-link via ?tsp= (the stable ID);
         // the LABEL is the real display name (workbook IDs like person-777… mean nothing to people).
         $byTsp = TechnicalReport::query()
@@ -100,7 +92,6 @@ class TechnicalServiceAnalysisService
             ->groupBy('tsp_name')->orderByDesc('total')->limit(8)->get()
             ->map(fn ($row): array => ['label' => $row->label ?: $row->tsp_name, 'total' => (int) $row->total, 'href' => route('technical-reports', ['tsp' => $row->tsp_name])])
             ->all();
-        $tspMax = max(1, (int) collect($byTsp)->max('total'));
 
         // Brand mix donut (top 6 + Other) — segments deep-link via ?brand=.
         // Each segment gets its own categorical color (unique per slice).
@@ -119,20 +110,6 @@ class TechnicalServiceAnalysisService
         if ($brandOthers > 0) {
             $brandDonut[] = ['label' => 'Others', 'value' => $brandOthers, 'tone' => 'neutral', 'color' => ChartPalette::neutral(), 'href' => null];
         }
-        $brandTotal = max(1, array_sum(array_column($brandDonut, 'value')));
-
-        $kpis = [
-            ['label' => 'Technical reports', 'value' => $totalReports, 'context' => 'imported service reports', 'tone' => 'primary', 'icon' => 'o-document-text', 'rag' => 'green', 'href' => route('technical-reports')],
-            ['label' => 'Completed', 'value' => $completedAny, 'context' => 'have a completion time', 'tone' => 'success', 'icon' => 'o-check-circle', 'rag' => 'green', 'href' => route('technical-reports', ['completed' => 'any'])],
-            ['label' => 'Assigned TSP', 'value' => $assignedTsp, 'context' => $unassigned.' unassigned', 'tone' => 'info', 'icon' => 'o-users', 'rag' => $unassigned > 0 ? 'amber' : 'green', 'href' => route('technical-reports', ['assigned' => '1'])],
-            ['label' => 'Avg repair time', 'value' => $avgRepair, 'suffix' => 'h', 'decimals' => 1, 'context' => 'mean per report', 'tone' => 'warning', 'icon' => 'o-clock', 'rag' => 'green', 'href' => route('technical-reports')],
-        ];
-
-        $secondary = [
-            ['label' => 'Avg response time', 'value' => $avgResponse, 'suffix' => 'h', 'decimals' => 1, 'context' => 'from report data', 'tone' => 'primary', 'icon' => 'o-clock', 'rag' => 'green', 'href' => route('technical-reports')],
-            ['label' => 'Completed · '.$days.'d', 'value' => $trendTotal, 'context' => 'in the selected window', 'tone' => 'success', 'icon' => 'o-calendar', 'rag' => 'green', 'href' => route('technical-reports', ['completed_from' => $trendFrom->toDateString(), 'completed_to' => now()->toDateString()])],
-            ['label' => 'Unassigned reports', 'value' => $unassigned, 'context' => 'no TSP on record', 'tone' => 'error', 'icon' => 'o-user-minus', 'rag' => $unassigned > 0 ? 'amber' : 'green', 'href' => route('technical-reports', ['assigned' => '0'])],
-        ];
 
         // Data freshness: latest report update timestamp.
         $freshness = Carbon::parse(
@@ -140,10 +117,8 @@ class TechnicalServiceAnalysisService
         )->format('M j, Y H:i');
 
         return [
-            'kpis' => $kpis,
-            'secondary' => $secondary,
             // Scalar metrics for customizable widgets (kpi_card props resolve
-            // these keys; the display kpis above stay exactly as rendered).
+            // these keys).
             'metrics' => [
                 'reports_total' => $totalReports,
                 'completed' => $completedAny,
@@ -153,28 +128,10 @@ class TechnicalServiceAnalysisService
                 'avg_response_hours' => round($avgResponse, 2),
                 'window_completed' => $trendTotal,
             ],
-            // Status colors keyed by metric for headline widgets.
-            'metric_rag' => [
-                'reports_total' => 'green',
-                'completed' => 'green',
-                'assigned_tsp' => $unassigned > 0 ? 'amber' : 'green',
-                'avg_repair_hours' => 'green',
-                'avg_response_hours' => 'green',
-                'window_completed' => 'green',
-                'unassigned' => $unassigned > 0 ? 'amber' : 'green',
-            ],
             'statusDonut' => $statusDonut,
-            'statusTotal' => $statusTotal,
-            'byStatus' => $byStatus,
             'trend' => $trend,
-            'trendTotal' => $trendTotal,
-            'trendMax' => $trendMax,
-            'trendDays' => $days,
             'byTsp' => $byTsp,
-            'tspMax' => $tspMax,
             'brandDonut' => $brandDonut,
-            'brandTotal' => $brandTotal,
-            'avgResponse' => $avgResponse,
             'freshness' => $freshness,
         ];
     }

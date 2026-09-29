@@ -6,6 +6,7 @@ use App\Livewire\Concerns\WithCustomizableWidgets;
 use App\Services\TechnicalServiceAnalysisService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\DashboardLayoutEngine;
+use App\Support\Dashboard\WidgetPresets;
 use App\Support\SystemDashboards;
 use Illuminate\Contracts\View\View;
 use Livewire\Component;
@@ -68,7 +69,12 @@ class TechnicalServiceAnalysis extends Component
 
     protected function widgetDatasetVocabulary(string $grid): array
     {
-        return [];
+        return [
+            'status' => 'Report status mix',
+            'trend' => 'Completions trend',
+            'by_tsp' => 'Workload by TSP',
+            'brands' => 'Most serviced brands',
+        ];
     }
 
     protected function widgetScopeLabel(string $grid): string
@@ -80,7 +86,14 @@ class TechnicalServiceAnalysis extends Component
     {
         $summary = $service->summary($this->period);
         $metrics = is_array($summary['metrics'] ?? null) ? $summary['metrics'] : [];
-        $context = new DashboardContext('All regions', $this->period, $metrics, [], [], []);
+        // Chart/table widgets read the retired hardcoded sections' queries
+        // as named datasets (same rows, same numbers).
+        $context = new DashboardContext('All regions', $this->period, $metrics, [
+            'status' => $summary['statusDonut'] ?? [],
+            'trend' => $summary['trend'] ?? [],
+            'by_tsp' => $summary['byTsp'] ?? [],
+            'brands' => $summary['brandDonut'] ?? [],
+        ], [], []);
 
         $state = $this->widgetGridState(self::GRID);
         $stored = $this->loadWidgetLayout(self::GRID);
@@ -97,6 +110,7 @@ class TechnicalServiceAnalysis extends Component
             'canCustomizeTsa' => $this->canCustomizeWidgets(),
             'tsaMetricLabels' => self::METRIC_LABELS,
             'tsaMetricValues' => array_filter($metrics, 'is_numeric'),
+            'tsaPresets' => WidgetPresets::forPage('tsa'),
         ])
             ->layout('layouts.dashboard')
             ->title('Technical Service Analysis');

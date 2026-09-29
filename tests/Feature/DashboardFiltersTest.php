@@ -6,6 +6,8 @@ use App\Livewire\Dashboard;
 use App\Models\Account;
 use App\Models\Installation;
 use App\Models\User;
+use App\Support\Dashboard\WidgetPresets;
+use App\Support\SystemDashboards;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -59,21 +61,32 @@ class DashboardFiltersTest extends TestCase
         ]);
     }
 
+    /**
+     * The grid under test: a brand-mix preset widget, so brand names render
+     * through the widget grid (the retired hardcoded sections are gone).
+     */
+    private function storeBrandMix(): void
+    {
+        SystemDashboards::storeLayout('Home', [
+            'version' => 1,
+            'widgets' => [WidgetPresets::make('brand-mix')],
+        ]);
+    }
+
     public function test_branch_filter_narrows_every_widget(): void
     {
         $this->seedTwoBranches();
+        $this->storeBrandMix();
 
         Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
             ->assertDontSee('Clear filters')
-            ->assertSee('Makati')
-            ->assertSee('Cebu')
+            ->assertSee('SYSMEX')
             ->assertSee('TERUMO')
             ->set('branchFilter', 'Makati')
             ->assertSee('Clear filters')
             ->assertSee('SYSMEX')
             ->assertDontSee('TERUMO')
-            ->assertDontSee('Cebu Hospital')
             ->call('clearFilters')
             ->assertDontSee('Clear filters')
             ->assertSee('TERUMO');
@@ -82,6 +95,7 @@ class DashboardFiltersTest extends TestCase
     public function test_status_filter_narrows_every_widget(): void
     {
         $this->seedTwoBranches();
+        $this->storeBrandMix();
 
         Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)
@@ -96,6 +110,7 @@ class DashboardFiltersTest extends TestCase
     public function test_date_range_filter_narrows_every_widget(): void
     {
         $this->seedTwoBranches();
+        $this->storeBrandMix();
 
         Livewire::actingAs(User::factory()->superadmin()->create())
             ->test(Dashboard::class)

@@ -6,6 +6,7 @@ use App\Livewire\Concerns\WithCustomizableWidgets;
 use App\Services\TspAnalyticsService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\DashboardLayoutEngine;
+use App\Support\Dashboard\WidgetPresets;
 use App\Support\SystemDashboards;
 use Illuminate\Contracts\View\View;
 use Livewire\Attributes\Url;
@@ -90,7 +91,11 @@ class TspAnalytics extends Component
 
     protected function widgetDatasetVocabulary(string $grid): array
     {
-        return [];
+        return [
+            'trend' => 'Completed reports by week',
+            'top_tsp' => 'Per-TSP performance',
+            'regional' => 'Regional performance',
+        ];
     }
 
     protected function widgetScopeLabel(string $grid): string
@@ -109,7 +114,13 @@ class TspAnalytics extends Component
         );
 
         $metrics = is_array($details['metrics'] ?? null) ? $details['metrics'] : [];
-        $context = new DashboardContext($this->region, $this->period, $metrics, [], [], []);
+        // Chart/table widgets read the retired hardcoded sections' queries
+        // as named datasets (same rows, same numbers).
+        $context = new DashboardContext($this->region, $this->period, $metrics, [
+            'trend' => $summary['trend'] ?? [],
+            'top_tsp' => $details['topTsp'] ?? [],
+            'regional' => $summary['regionalData'] ?? [],
+        ], [], []);
 
         $state = $this->widgetGridState(self::GRID);
         $stored = $this->loadWidgetLayout(self::GRID);
@@ -126,6 +137,7 @@ class TspAnalytics extends Component
             'canCustomizeTsp' => $this->canCustomizeWidgets(),
             'tspMetricLabels' => self::METRIC_LABELS,
             'tspMetricValues' => array_filter($metrics, 'is_numeric'),
+            'tspPresets' => WidgetPresets::forPage('tsp'),
         ]))
             ->layout('layouts.dashboard')
             ->title('TSP Analytics');

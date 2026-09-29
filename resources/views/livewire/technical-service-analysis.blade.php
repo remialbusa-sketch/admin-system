@@ -1,29 +1,3 @@
-@php
-    $toneFill = ['primary' => 'bg-primary', 'success' => 'bg-success', 'info' => 'bg-info', 'warning' => 'bg-warning', 'error' => 'bg-error', 'neutral' => 'bg-base-300'];
-    $ragBg = ['green' => 'bg-success', 'amber' => 'bg-warning', 'red' => 'bg-error'];
-    $ragText = ['green' => 'text-success', 'amber' => 'text-warning', 'red' => 'text-error'];
-    $ragGlyph = ['green' => '✓', 'amber' => '!', 'red' => '✕'];
-    $ragLabel = ['green' => 'on track', 'amber' => 'watch', 'red' => 'critical'];
-    $chartColors = [
-        'primary' => 'var(--color-primary)',
-        'success' => 'var(--color-success)',
-        'warning' => 'var(--color-warning)',
-        'info' => 'var(--color-info)',
-        'error' => 'var(--color-error)',
-        'secondary' => 'var(--color-secondary)',
-        'accent' => 'var(--color-accent)',
-        'neutral' => 'var(--color-base-300)',
-    ];
-
-    // Brand donut tones (cycled), Others neutral.
-    $brandTones = ['primary', 'success', 'warning', 'info', 'error', 'secondary'];
-    $brandSegments = collect($brandDonut)->map(function ($segment, $i) use ($brandTones) {
-        $segment['tone'] = $segment['tone'] ?? $brandTones[$i % count($brandTones)];
-
-        return $segment;
-    })->all();
-@endphp
-
 <div class="mx-auto w-full max-w-none space-y-8 pb-4">
     <header class="border-b border-base-300 pb-6 pt-2">
         <div class="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
@@ -71,6 +45,7 @@
             <div class="no-print flex flex-wrap items-center gap-2">
                 @if ($tsaCustomizing)
                     <span class="hidden text-[11px] font-semibold text-base-content/45 sm:inline">Drag to reorder · corner to resize · gear to configure — saved on Done</span>
+                    <button type="button" x-on:click="$dispatch('open-modal', { name: 'add-widget' })" class="admin-secondary-button">Add widget</button>
                     <button type="button" wire:click="resetWidgetGrid('tsa')" wire:confirm="Reset this grid to the shipped cards? Your changes will be removed." class="admin-secondary-button">Reset</button>
                     <button type="button" wire:click="toggleCustomizingFor('tsa')" class="admin-secondary-button">Cancel</button>
                     <button type="button" data-grid-done="tsa" class="admin-primary-button">Done</button>
@@ -81,6 +56,20 @@
         </div>
         <x-dashboard.grid :widgets="$tsaGrid['widgets']" :editing="$tsaCustomizing" grid-key="tsa" />
     </section>
+
+    {{-- Add widget: one-click presets for this page (same datasets as the grid). --}}
+    @if ($tsaCustomizing)
+        <x-admin.modal name="add-widget" title="Add widget" description="Pick a preset — it lands at the end of the grid with settings you can tune from its gear icon." size="lg">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                @foreach ($tsaPresets as $key => $preset)
+                    <button type="button" wire:click="addWidgetFor('tsa', '{{ $key }}')" class="group flex flex-col items-start gap-1 rounded-lg border border-primary/30 bg-primary/5 p-4 text-left transition duration-150 hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-lg hover:shadow-primary/10">
+                        <span class="text-sm font-bold text-base-content transition-colors group-hover:text-primary">{{ $preset['title'] }}</span>
+                        <span class="text-xs leading-5 text-base-content/55">{{ $preset['description'] }}</span>
+                    </button>
+                @endforeach
+            </div>
+        </x-admin.modal>
+    @endif
 
     @include('components.dashboard.widget-settings-modal', [
         'wsModal' => $this->widgetSettingsModalName('tsa'),
@@ -93,165 +82,6 @@
         'wsCancel' => "cancelWidgetSettingsFor('tsa')",
         'wsHint' => 'No data selected — pick a metric above.',
     ])
-
-    <section aria-label="Status mix and completion trend" class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.35fr)]">
-        <div class="admin-surface flex h-full flex-col p-6 sm:p-7" x-data="{ active: null }">
-            <p class="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">01 · Status mix</p>
-            <h2 class="mt-2 font-display text-xl font-semibold tracking-tight">Report status</h2>
-            <p class="mt-1 text-xs text-base-content/50">Hover to focus · click a segment or row to open the reports</p>
-            <div class="mt-7 flex flex-1 flex-col items-center justify-center gap-7">
-                <div class="relative h-40 w-40 shrink-0">
-                    <svg viewBox="0 0 42 42" class="h-40 w-40 -rotate-90" role="img" aria-label="Report status mix">
-                        @php $offset = 0; $circ = 2 * pi() * 15.9155; @endphp
-                        @foreach ($statusDonut as $i => $seg)
-                            @php
-                                $frac = $statusTotal > 0 ? $seg['value'] / $statusTotal : 0;
-                                $len = $frac * $circ;
-                            @endphp
-                            @if ($seg['href'])
-                                <a href="{{ $seg['href'] }}" wire:navigate x-on:mouseenter="active = {{ $i }}" x-on:mouseleave="active = null"
-                                    class="cursor-pointer" style="transition: opacity .2s ease" :style="active !== null && active !== {{ $i }} ? 'opacity: .3' : ''">
-                                    <title>{{ $seg['label'] }} — view the {{ number_format($seg['value']) }} matching reports</title>
-                                    <circle cx="21" cy="21" r="15.9155" fill="none" stroke="{{ $chartColors[$seg['tone']] }}" stroke-width="6"
-                                        stroke-dasharray="{{ round($len, 2) }} {{ round($circ - $len, 2) }}" stroke-dashoffset="{{ round(-$offset, 2) }}"
-                                        style="transition: stroke-width .2s ease" :style="active === {{ $i }} ? 'stroke-width: 9' : ''"></circle>
-                                </a>
-                            @else
-                                <g x-on:mouseenter="active = {{ $i }}" x-on:mouseleave="active = null" style="transition: opacity .2s ease" :style="active !== null && active !== {{ $i }} ? 'opacity: .3' : ''">
-                                    <circle cx="21" cy="21" r="15.9155" fill="none" stroke="{{ $chartColors[$seg['tone']] }}" stroke-width="6"
-                                        stroke-dasharray="{{ round($len, 2) }} {{ round($circ - $len, 2) }}" stroke-dashoffset="{{ round(-$offset, 2) }}"></circle>
-                                </g>
-                            @endif
-                            @php $offset += $len; @endphp
-                        @endforeach
-                        <circle cx="21" cy="21" r="12.9" fill="var(--color-base-100)" />
-                    </svg>
-                    <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                        <span class="font-display text-2xl font-semibold tabular-nums">{{ number_format($statusTotal) }}</span>
-                        <span class="text-[9px] font-bold uppercase tracking-[0.14em] text-base-content/40">reports</span>
-                    </div>
-                </div>
-                <ul class="w-full min-w-0 space-y-3">
-                    @foreach ($statusDonut as $i => $seg)
-                        <li x-on:mouseenter="active = {{ $i }}" x-on:mouseleave="active = null" style="transition: opacity .2s ease" :style="active !== null && active !== {{ $i }} ? 'opacity: .45' : ''">
-                            <a @if ($seg['href']) href="{{ $seg['href'] }}" wire:navigate @endif class="flex items-center gap-3 text-sm {{ $seg['href'] ? 'cursor-pointer transition-colors hover:text-primary' : '' }}" @if ($seg['href']) title="View the {{ number_format($seg['value']) }} {{ strtolower($seg['label']) }} reports" @endif>
-                                <span class="h-2.5 w-2.5 shrink-0 rounded-full {{ $toneFill[$seg['tone']] }} transition-transform duration-200" :style="active === {{ $i }} ? 'transform: scale(1.5)' : ''"></span>
-                                <span class="min-w-0 flex-1 truncate text-base-content/65">{{ $seg['label'] }}</span>
-                                <span class="font-semibold tabular-nums">{{ number_format($seg['value']) }}</span>
-                                <span class="w-12 text-right text-[11px] tabular-nums text-base-content/35">{{ round(($seg['value'] / $statusTotal) * 100) }}%</span>
-                            </a>
-                        </li>
-                    @endforeach
-                </ul>
-            </div>
-        </div>
-
-        <div class="admin-surface flex flex-col p-6 sm:p-7">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                    <p class="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">02 · Completion trend</p>
-                    <h2 class="mt-2 font-display text-xl font-semibold tracking-tight">Reports completed</h2>
-                    <p class="mt-1 text-xs text-base-content/50">By completion date · last {{ $trendDays }} days — click a bar to open those reports</p>
-                </div>
-                <span class="inline-flex shrink-0 items-center gap-2 self-start rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">
-                    <span class="text-[10px] opacity-70">total</span>
-                    {{ number_format($trendTotal) }}
-                </span>
-            </div>
-            @if ($trendTotal > 0)
-                <div class="mt-7 flex flex-1 items-end gap-2 border-b border-l border-base-300 px-4 pb-0 pt-4 sm:gap-3">
-                    @foreach ($trend as $point)
-                        <a href="{{ $point['href'] }}" wire:navigate class="group flex h-full flex-1 cursor-pointer flex-col items-center justify-end gap-2" title="{{ $point['label'] }} · {{ number_format($point['count']) }} reports completed — click to view">
-                            <span class="tabular-nums text-[10px] font-bold text-base-content/45 transition-colors group-hover:text-primary">{{ $point['count'] }}</span>
-                            <div class="w-full max-w-12 rounded-t-sm bg-primary/75 transition-all duration-200 group-hover:bg-primary group-hover:shadow-md group-hover:shadow-primary/30" style="height: {{ max(4, round(($point['count'] / $trendMax) * 100)) }}%"></div>
-                            <span class="text-[10px] font-bold text-base-content/45 transition-colors group-hover:text-primary">{{ $point['label'] }}</span>
-                        </a>
-                    @endforeach
-                </div>
-            @else
-                <div class="mt-6 flex flex-1 items-center justify-center">
-                    <div class="w-full rounded-lg border border-dashed border-base-300 p-6 text-center">
-                        <p class="text-sm font-semibold text-base-content/70">No reports completed in the last {{ $trendDays }} days</p>
-                        <p class="mt-1 text-xs text-base-content/45">Completion dates in the imported data are older than this window.</p>
-                    </div>
-                </div>
-            @endif
-        </div>
-    </section>
-
-    <section aria-label="Workload and brand mix" class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div class="admin-surface flex h-full flex-col p-6 sm:p-7">
-            <p class="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">03 · Engineer workload</p>
-            <h2 class="mt-2 font-display text-xl font-semibold tracking-tight">Top TSPs by reports</h2>
-            <p class="mt-1 text-xs text-base-content/50">Click a row to open that engineer's reports</p>
-            <div class="mt-6 space-y-3">
-                @forelse ($byTsp as $i => $row)
-                    <a href="{{ $row['href'] }}" wire:navigate class="group flex items-center gap-3 rounded-md transition duration-200 hover:bg-base-200/50" title="View the {{ number_format($row['total']) }} reports by {{ $row['label'] }}">
-                        <span class="w-5 shrink-0 text-right text-[11px] font-black tabular-nums text-base-content/30">{{ $i + 1 }}</span>
-                        <span class="w-44 shrink-0 truncate text-sm font-medium text-base-content/80" title="{{ $row['label'] }}">{{ $row['label'] }}</span>
-                        <div class="h-6 flex-1 overflow-hidden rounded-full bg-base-200/80">
-                            <div class="h-full rounded-full bg-gradient-to-r from-primary to-primary/60 transition-all duration-200 group-hover:to-primary" style="width: {{ round(($row['total'] / $tspMax) * 100) }}%"></div>
-                        </div>
-                        <span class="w-10 shrink-0 text-right text-xs font-bold tabular-nums text-base-content/70">{{ number_format($row['total']) }}</span>
-                        <x-mary-icon name="o-chevron-right" class="h-3.5 w-3.5 shrink-0 -translate-x-1 text-primary opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-100" />
-                    </a>
-                @empty
-                    <p class="text-sm text-base-content/45">No TSP workload data available.</p>
-                @endforelse
-            </div>
-        </div>
-
-        <div class="admin-surface flex h-full flex-col p-6 sm:p-7" x-data="{ active: null }">
-            <p class="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">04 · Equipment serviced</p>
-            <h2 class="mt-2 font-display text-xl font-semibold tracking-tight">Most serviced brands</h2>
-            <p class="mt-1 text-xs text-base-content/50">Hover to focus · click a segment or row to open the reports</p>
-            <div class="my-auto mt-7 flex flex-col items-center gap-8 lg:flex-row lg:items-center">
-                <div class="relative h-40 w-40 shrink-0">
-                    <svg viewBox="0 0 42 42" class="h-40 w-40 -rotate-90" role="img" aria-label="Most serviced brands">
-                        @php $offset = 0; $circ = 2 * pi() * 15.9155; @endphp
-                        @foreach ($brandSegments as $i => $seg)
-                            @php $len = ($seg['value'] / $brandTotal) * $circ; @endphp
-                            @if ($seg['href'])
-                                <a href="{{ $seg['href'] }}" wire:navigate x-on:mouseenter="active = {{ $i }}" x-on:mouseleave="active = null"
-                                    class="cursor-pointer" style="transition: opacity .2s ease" :style="active !== null && active !== {{ $i }} ? 'opacity: .3' : ''">
-                                    <title>{{ $seg['label'] }} — view the {{ number_format($seg['value']) }} {{ $seg['label'] }} reports</title>
-                                    <circle cx="21" cy="21" r="15.9155" fill="none" stroke="{{ $seg['color'] }}" stroke-width="6"
-                                        stroke-dasharray="{{ round($len, 2) }} {{ round($circ - $len, 2) }}" stroke-dashoffset="{{ round(-$offset, 2) }}"
-                                        style="transition: stroke-width .2s ease" :style="active === {{ $i }} ? 'stroke-width: 9' : ''"></circle>
-                                </a>
-                            @else
-                                <g x-on:mouseenter="active = {{ $i }}" x-on:mouseleave="active = null" style="transition: opacity .2s ease" :style="active !== null && active !== {{ $i }} ? 'opacity: .3' : ''">
-                                    <circle cx="21" cy="21" r="15.9155" fill="none" stroke="{{ $seg['color'] }}" stroke-width="6"
-                                        stroke-dasharray="{{ round($len, 2) }} {{ round($circ - $len, 2) }}" stroke-dashoffset="{{ round(-$offset, 2) }}"></circle>
-                                </g>
-                            @endif
-                            @php $offset += $len; @endphp
-                        @endforeach
-                        <circle cx="21" cy="21" r="12.9" fill="var(--color-base-100)" />
-                    </svg>
-                    <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                        <span class="font-display text-2xl font-semibold tabular-nums">{{ number_format($brandTotal) }}</span>
-                        <span class="text-[9px] font-bold uppercase tracking-[0.14em] text-base-content/40">reports</span>
-                    </div>
-                </div>
-                <ul class="w-full min-w-0 flex-1 space-y-2.5">
-                    @forelse ($brandSegments as $i => $seg)
-                        <li x-on:mouseenter="active = {{ $i }}" x-on:mouseleave="active = null" style="transition: opacity .2s ease" :style="active !== null && active !== {{ $i }} ? 'opacity: .45' : ''">
-                            <a @if ($seg['href']) href="{{ $seg['href'] }}" wire:navigate @endif class="flex items-center gap-2.5 text-sm {{ $seg['href'] ? 'cursor-pointer transition-colors hover:text-primary' : '' }}" @if ($seg['href']) title="View the {{ number_format($seg['value']) }} {{ $seg['label'] }} reports" @endif>
-                                <span class="h-2.5 w-2.5 shrink-0 rounded-full transition-transform duration-200" style="background: {{ $seg['color'] }}" :style="active === {{ $i }} ? 'transform: scale(1.5)' : ''"></span>
-                                <span class="min-w-0 flex-1 truncate text-base-content/65">{{ $seg['label'] }}</span>
-                                <span class="font-semibold tabular-nums">{{ number_format($seg['value']) }}</span>
-                                <span class="w-11 text-right text-[11px] tabular-nums text-base-content/35">{{ round(($seg['value'] / $brandTotal) * 100) }}%</span>
-                            </a>
-                        </li>
-                    @empty
-                        <li class="text-sm text-base-content/45">No brand data available.</li>
-                    @endforelse
-                </ul>
-            </div>
-            <p class="mt-4 border-t border-base-300 pt-4 text-xs text-base-content/45">Average response time: {{ number_format($avgResponse, 1) }}h</p>
-        </div>
-    </section>
 
     <footer class="flex flex-col gap-2 px-1 text-[11px] text-base-content/35 sm:flex-row sm:items-center sm:justify-between">
         <span>Technical Reports overview · click any card, segment, or bar to open the reports behind it — the grid arrives pre-filtered, with a one-click clear.</span>

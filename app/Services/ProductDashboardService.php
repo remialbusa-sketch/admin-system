@@ -156,11 +156,6 @@ class ProductDashboardService
             ];
         })->all();
 
-        $regionMax = [
-            'products' => max(1, (int) collect($regions)->max('products')),
-            'warranty' => max(1, (int) collect($regions)->max('warranty')),
-        ];
-
         // Fleet state donut (≤4 segments + Other). Each segment deep-links to
         // the exact rows behind it (?status=…).
         $fleetRows = (clone $base)
@@ -183,7 +178,6 @@ class ProductDashboardService
         if ($otherFleet > 0) {
             $fleetDonut[] = ['label' => 'Other', 'value' => $otherFleet, 'tone' => 'neutral', 'href' => null];
         }
-        $fleetTotal = max(1, array_sum(array_column($fleetDonut, 'value')));
 
         // Leading brands donut (top 6 + Others). Real brands deep-link via ?brand=.
         // Each segment gets its own categorical color (unique per slice).
@@ -202,7 +196,6 @@ class ProductDashboardService
         if ($brandOthers > 0) {
             $brandDonut[] = ['label' => 'Others', 'value' => $brandOthers, 'tone' => 'neutral', 'color' => ChartPalette::neutral(), 'href' => null];
         }
-        $brandTotal = max(1, array_sum(array_column($brandDonut, 'value')));
 
         // Machine-type mix (top 5 + Others). Real types deep-link via ?machine_type=.
         $typeRows = (clone $base)
@@ -214,7 +207,6 @@ class ProductDashboardService
         if ($typeOthers > 0) {
             $machineTypes[] = ['label' => 'Others', 'total' => $typeOthers, 'href' => null];
         }
-        $typeMax = max(1, (int) collect($machineTypes)->max('total'));
 
         // Top accounts by installed products.
         $topAccounts = Installation::query()
@@ -239,13 +231,6 @@ class ProductDashboardService
                 'href' => route('installed-products', ['customer' => $row->customer ?: '']),
             ])->all();
 
-        // Attention signals with real actions.
-        $attentionSignals = [
-            ['title' => number_format($warrantyExpiring).' warranties expire within 90 days', 'detail' => 'Review warranty end dates in Product Database.', 'tone' => $warrantyExpiring > 0 ? 'warning' : 'success', 'icon' => 'o-shield-exclamation'],
-            ['title' => number_format($warrantyExpired).' warranties on file are already past end date', 'detail' => 'Confirm renewals or update warranty status.', 'tone' => $warrantyExpired > 0 ? 'danger' : 'success', 'icon' => 'o-shield-check'],
-            ['title' => number_format($missingPms).' product records have no PMS frequency', 'detail' => 'Superadmin can complete this manual-only field.', 'tone' => 'warning', 'icon' => 'o-wrench-screwdriver'],
-        ];
-
         // Data freshness: latest completed Product Database import.
         $latestBatch = DB::table('import_batches')
             ->where('source_system', 'product_database')
@@ -256,22 +241,9 @@ class ProductDashboardService
             ? Carbon::parse($latestBatch->completed_at)->format('M j, Y H:i')
             : 'no imports yet';
 
-        $kpis = [
-            ['label' => 'Installed products', 'value' => $totalProducts, 'context' => $accountCount.' accounts on file', 'tone' => 'primary', 'icon' => 'o-cube', 'rag' => 'green', 'href' => route('installed-products')],
-            ['label' => 'Active products', 'value' => $activeProducts, 'context' => $activeRatio.'% of installed', 'tone' => 'success', 'icon' => 'o-check-circle', 'rag' => $ragActive, 'href' => route('installed-products', ['status' => 'Active'])],
-            ['label' => 'Warranty covered', 'value' => $warrantyCovered, 'context' => $warrantyRatio.'% of installed', 'tone' => 'info', 'icon' => 'o-shield-check', 'rag' => $ragWarranty, 'href' => route('installed-products', ['warranty' => 'covered'])],
-            ['label' => 'Service contracts', 'value' => $contracts, 'context' => 'active + renewal', 'tone' => 'info', 'icon' => 'o-document-text', 'rag' => 'green', 'href' => route('installed-products', ['contract' => '1'])],
-            ['label' => 'Annual BU charges', 'value' => round($annualBuCharge / 1_000_000, 1), 'suffix' => 'M', 'decimals' => 1, 'context' => 'sum of annual charges on file', 'tone' => 'warning', 'icon' => 'o-banknotes', 'rag' => 'green', 'href' => route('installed-products')],
-            ['label' => 'Missing PMS frequency', 'value' => $missingPms, 'context' => $missingPmsRatio.'% of installed', 'tone' => 'error', 'icon' => 'o-wrench-screwdriver', 'rag' => $ragPms, 'href' => route('installed-products', ['pms' => 'missing'])],
-            ['label' => 'Warranty expiring · 90d', 'value' => $warrantyExpiring, 'context' => number_format($warrantyExpired).' already past end date', 'tone' => 'warning', 'icon' => 'o-shield-exclamation', 'rag' => $ragWarrantyOutlook, 'href' => route('installed-products', ['warranty' => 'expiring_90d'])],
-            ['label' => 'Pulled out', 'value' => $pulledOut, 'context' => 'removed from service', 'tone' => 'neutral', 'icon' => 'o-arrow-right-on-rectangle', 'rag' => 'green', 'href' => route('installed-products', ['status' => 'Pulledout'])],
-        ];
-
         return [
-            'selectedRegion' => $isAll ? 'All regions' : $region,
             'regionOptions' => ['All regions', ...self::REGIONS],
             'freshness' => $freshness,
-            'kpis' => $kpis,
             // Status colors keyed by metric for headline widgets.
             'metric_rag' => [
                 'installed' => 'green',
@@ -303,48 +275,13 @@ class ProductDashboardService
             ],
             'sla' => $slaUpcoming,
             'regions' => $regions,
-            'regionMax' => $regionMax,
             'fleetDonut' => $fleetDonut,
-            'fleetTotal' => $fleetTotal,
             'brandDonut' => $brandDonut,
-            'brandTotal' => $brandTotal,
             'machineTypes' => $machineTypes,
-            'typeMax' => $typeMax,
             'topAccounts' => $topAccounts,
-            'attentionSignals' => $attentionSignals,
             'installTrend' => $installTrend,
-            'installArea' => $this->areaPaths($installTrend, 'count', 640, 120),
             'installDelta' => $installDelta,
-            'trendMonths' => $months,
-            'scopeNote' => $isAll ? 'All regions' : $region,
             'filters' => $filters,
         ];
-    }
-
-    /**
-     * Build SVG area + line path strings from a list of {valueKey} points.
-     * Pure geometry — no data invented.
-     */
-    private function areaPaths(array $items, string $valueKey, int $w, int $h, int $pad = 6): array
-    {
-        $counts = array_values(array_column($items, $valueKey));
-        $n = count($counts);
-        if ($n < 2) {
-            return ['area' => '', 'line' => '', 'dots' => []];
-        }
-        $max = max(1, (float) max($counts));
-        $stepX = ($w - $pad * 2) / ($n - 1);
-        $points = [];
-        $dots = [];
-        foreach ($counts as $i => $c) {
-            $x = $pad + $i * $stepX;
-            $y = $h - $pad - (($c / $max) * ($h - $pad * 2));
-            $points[] = [round($x, 1), round($y, 1)];
-            $dots[] = [round($x, 1), round($y, 1)];
-        }
-        $line = 'M '.implode(' L ', array_map(fn ($p) => "{$p[0]} {$p[1]}", $points));
-        $area = "M {$pad},".($h - $pad).' L '.implode(' L ', array_map(fn ($p) => "{$p[0]} {$p[1]}", $points)).' L '.($w - $pad).','.($h - $pad).' Z';
-
-        return ['area' => $area, 'line' => $line, 'dots' => $dots];
     }
 }
