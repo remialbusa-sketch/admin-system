@@ -302,6 +302,9 @@ class ClassicImportController extends Controller
             // managed flows may send newColumns ("＋ New column…" drafts).
             'mapping' => ['array'],
             'newColumns' => ['sometimes', 'array'],
+            // Step-3 type picks for columns connected to an existing custom
+            // field (letter => type). New columns carry their type inline.
+            'columnTypes' => ['sometimes', 'array'],
         ]);
 
         $targets = ImportTargetResolver::for($table);
@@ -356,6 +359,7 @@ class ClassicImportController extends Controller
         $newColumns = collect($request->input('newColumns', []))->values();
         $allowedTypes = array_keys($this->importableColumnTypes());
         $seenNames = [];
+        $notices = [];
 
         foreach ($newColumns as $index => $entry) {
             $position = $index + 1;
@@ -379,6 +383,7 @@ class ClassicImportController extends Controller
                 return response()->json(['message' => "Column '{$name}': unknown column type."], 422);
             }
 
+            $type = $this->importColumnType($type, $name, $notices);
             $options = $this->normalizeOptions($entry['options'] ?? null, $type, $name);
 
             if ($options instanceof JsonResponse) {
@@ -401,6 +406,19 @@ class ClassicImportController extends Controller
             $usedLetters->push($entry['letter']);
         }
 
+        // Step-3 type picks for columns connected to an EXISTING custom field.
+        // These used to travel for new columns only, so re-typing a connected
+        // column was silently dropped and the file landed as the old type.
+        $typePicks = collect($request->input('columnTypes', []))->mapWithKeys(
+            fn (mixed $type, mixed $letter): array => [strtoupper(trim((string) $letter)) => trim((string) $type)]
+        );
+
+        foreach ($typePicks as $letter => $type) {
+            if (! in_array($type, $allowedTypes, true)) {
+                return response()->json(['message' => "Column {$letter}: unknown column type."], 422);
+            }
+        }
+
         // Name-based match: a draft whose name equals an existing custom
         // column of this table overwrites it instead of duplicating it.
         $existingColumns = CustomTableColumn::query()
@@ -408,9 +426,45 @@ class ClassicImportController extends Controller
             ->get()
             ->keyBy(fn (CustomTableColumn $column): string => $this->normalizeColumnName($column->name));
 
+        // Every mapped target that already owns a custom column, so a stale
+        // one (kept from a previous file) can be told apart from a live one.
+        $mappedColumnIds = collect($mapping)
+            ->filter(fn (string $letter): bool => $letter !== '')
+            ->keys()
+            ->filter(fn (string $key): bool => str_starts_with($key, 'custom_'))
+            ->map(fn (string $key): int => (int) substr($key, 7));
+
+        $existingById = CustomTableColumn::query()
+            ->where('table_key', $table)
+            ->get()
+            ->keyBy('id');
+
         $resolved = [];
         $toCreate = [];
+        // column id => ['column' => model, 'type' => string, 'options' => ?array]
         $toConvert = [];
+
+        // A type pick on a column already connected to a custom field
+        // retypes that field. Fixed (managed) fields are ignored: their
+        // schema comes from the table, not from the import.
+        foreach ($mapping as $key => $letter) {
+            if ($letter === '' || ! str_starts_with($key, 'custom_')) {
+                continue;
+            }
+
+            $picked = $typePicks[$letter] ?? null;
+            $column = $existingById->get((int) substr($key, 7));
+
+            if ($picked === null || $column === null) {
+                continue;
+            }
+
+            $type = $this->importColumnType($picked, $column->name, $notices);
+
+            if ($type !== $column->type) {
+                $toConvert[$column->id] = ['column' => $column, 'type' => $type, 'options' => null];
+            }
+        }
 
         foreach ($newColumns as $entry) {
             $existing = $existingColumns->get($this->normalizeColumnName($entry['name']));
@@ -421,12 +475,18 @@ class ClassicImportController extends Controller
                 // Same name, different type: reuse must convert the column,
                 // otherwise the matched type is silently dropped.
                 if ($existing->type !== $entry['type']) {
-                    $toConvert[] = ['column' => $existing, 'type' => $entry['type'], 'options' => $entry['options']];
+                    $toConvert[$existing->id] = ['column' => $existing, 'type' => $entry['type'], 'options' => $entry['options']];
                 }
             } else {
                 $toCreate[] = $entry;
             }
         }
+
+        // Columns this import keeps: name-matched drafts reuse their column,
+        // so their ids survive the stale sweep below too.
+        $resolvedKeys = collect(array_keys($resolved))
+            ->filter(fn (string $key): bool => str_starts_with($key, 'custom_'))
+            ->map(fn (string $key): int => (int) substr($key, 7));
 
         foreach ($resolved as $key => $letter) {
             if (($mapping[$key] ?? '') !== '' && $mapping[$key] !== $letter) {
@@ -434,7 +494,14 @@ class ClassicImportController extends Controller
             }
         }
 
-        if (($toCreate !== [] || $toConvert !== []) && ! $request->user()?->canEditRecords()) {
+        // Replace-all, structure-wise: the file defines the table's custom
+        // columns, so a column left over from a previous file is dropped
+        // rather than lingering forever (the purge only removes rows).
+        $stale = $existingById
+            ->reject(fn (CustomTableColumn $column, int $id): bool => $mappedColumnIds->contains($id) || $resolvedKeys->contains($id))
+            ->keys();
+
+        if (($toCreate !== [] || $toConvert !== [] || $stale->isNotEmpty()) && ! $request->user()?->canEditRecords()) {
             return response()->json(['message' => 'Your role cannot add or change columns to this table.'], 403);
         }
 
@@ -450,6 +517,15 @@ class ClassicImportController extends Controller
             app(ImportUndoService::class)->purgeTable($table);
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        // purgeTable already dropped every value; this only removes the
+        // columns themselves. forceDelete: a soft-deleted column would still
+        // come back through the table's column queries and be offered again
+        // as a mapping target on the next import.
+        if ($stale->isNotEmpty()) {
+            CustomTableColumnValue::query()->whereIn('custom_column_id', $stale)->delete();
+            CustomTableColumn::query()->whereIn('id', $stale)->forceDelete();
         }
 
         // Reuse first, create after the purge so a rejected import never
@@ -503,7 +579,27 @@ class ClassicImportController extends Controller
             'processed' => $batch->processed_rows,
             'failed' => $batch->failed_rows,
             'batchId' => $batch->id,
+            'notices' => $notices,
         ]);
+    }
+
+    /**
+     * A workbook carries file *names*, never uploads, and the files type only
+     * accepts stored file IDs — so every such cell failed and took its row
+     * with it. Import those columns as text instead, so the data lands, and
+     * say so in the result.
+     *
+     * @param  array<int, string>  $notices
+     */
+    private function importColumnType(string $type, string $columnName, array &$notices): string
+    {
+        if ($type !== 'files') {
+            return $type;
+        }
+
+        $notices[] = "'{$columnName}' was imported as text — spreadsheets cannot carry file uploads.";
+
+        return 'text';
     }
 
     /**
@@ -517,6 +613,7 @@ class ClassicImportController extends Controller
 
         $entries = collect($request->input('columns', []))->values();
         $titleLetter = strtoupper(trim((string) $request->input('titleLetter', '')));
+        $notices = [];
 
         if ($entries->isEmpty()) {
             return response()->json(['message' => 'Select at least one column to import.'], 422);
@@ -554,6 +651,7 @@ class ClassicImportController extends Controller
                 return $options;
             }
 
+            $type = $this->importColumnType($type, $name, $notices);
             $seenNames[] = mb_strtolower($name);
             $validated[] = ['letter' => $letter, 'name' => $name, 'type' => $type, 'options' => $options];
         }
@@ -620,6 +718,7 @@ class ClassicImportController extends Controller
             'processed' => $batch->processed_rows,
             'failed' => $batch->failed_rows,
             'batchId' => $batch->id,
+            'notices' => $notices,
         ]);
     }
 

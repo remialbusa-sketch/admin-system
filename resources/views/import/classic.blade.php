@@ -51,6 +51,11 @@
                 <div x-show="result" x-cloak class="rounded-md border p-4 text-sm" :class="(result?.failed > 0 || result?.status === 'failed') ? 'border-warning/40 bg-warning/10 text-warning-content' : 'border-success/30 bg-success/10 text-success'">
                     <p class="font-semibold" x-text="result ? `Import ${result.status.replaceAll('_',' ')}.` : ''"></p>
                     <p class="mt-0.5 text-xs opacity-80" x-text="result ? `${Number(result.processed).toLocaleString()} processed, ${Number(result.failed).toLocaleString()} failed · batch #${result.batchId}` : ''"></p>
+                    <ul x-show="result && (result.notices || []).length" x-cloak class="mt-2 list-inside list-disc text-xs opacity-90">
+                        <template x-for="(notice, i) in (result?.notices || [])" :key="i">
+                            <li x-text="notice"></li>
+                        </template>
+                    </ul>
                     <div class="mt-3 flex flex-wrap items-center gap-2">
                         <a :href="backUrl" class="admin-primary-button">Back to table</a>
                         <button type="button" @click="reset()" class="admin-secondary-button">Import another file</button>
@@ -936,15 +941,19 @@
                 },
 
                 /**
-                 * Note under the type list: managed columns feeding an existing
-                 * field keep that field's fixed schema — the chosen type only
-                 * takes effect if the column is imported as a new custom column.
+                 * Note under the type list. A column feeding a custom field
+                 * retypes that field. A column feeding a fixed (managed) field
+                 * cannot: that schema comes from the table, not the import, so
+                 * the pick only applies if the column becomes a new custom one.
                  */
                 typeMenuNote() {
                     if (this.isDynamic || !this.typeMenu) return '';
                     const target = this.columnTarget(this.typeMenu.letter);
                     if (!target || target === '__new__') return '';
-                    return 'This column feeds an existing field — its fixed schema applies. The chosen type takes effect only if the column is imported as a new custom column.';
+                    if (target.startsWith('custom_')) {
+                        return 'This column feeds a column of this table — the chosen type replaces that column\'s type.';
+                    }
+                    return 'This column feeds a fixed field of this table — its type cannot be changed by an import. The chosen type takes effect only if the column is imported as a new custom column.';
                 },
 
                 /** Skipped (managed) or unchecked (dynamic) columns stay visible, just dimmed. */
@@ -1014,6 +1023,22 @@
                         });
                 },
 
+                /**
+                 * Step-3 type picks for columns connected to an existing custom
+                 * field, keyed by source letter. Managed new-column types already
+                 * ride inside newColumnsPayload(); this carries the ones that map
+                 * to a column which already exists, which the server applies.
+                 */
+                columnTypesPayload() {
+                    const out = {};
+                    Object.entries(this.mapping || {}).forEach(([key, letter]) => {
+                        if (key.startsWith('custom_') && letter) {
+                            out[letter] = this.colTypes[letter] || 'text';
+                        }
+                    });
+                    return out;
+                },
+
                 /** First 10 data records as they will land. */
                 previewRows() {
                     return (this.preview?.topRows || [])
@@ -1071,6 +1096,7 @@
                                 dataStart: this.dataStart,
                                 mapping: this.mapping,
                                 newColumns: this.isDynamic ? [] : this.newColumnsPayload(),
+                                columnTypes: this.isDynamic ? {} : this.columnTypesPayload(),
                                 titleLetter: this.titleColumn || '',
                                 columns: this.importColumnsPayload(),
                                 columnSignature: Object.fromEntries(

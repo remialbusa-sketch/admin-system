@@ -24,6 +24,10 @@ class ImportFormulaCalculationTest extends TestCase
      */
     public function test_preview_reads_cached_values_without_calculating_wide_formula_ranges(): void
     {
+        // Restore the environment's own limit afterwards — never a hardcoded
+        // one (see the note on memory_limit below).
+        $memoryLimit = ini_get('memory_limit');
+
         ini_set('memory_limit', '128M');
 
         $spreadsheet = new Spreadsheet;
@@ -64,7 +68,17 @@ class ImportFormulaCalculationTest extends TestCase
             );
         } finally {
             @unlink($path);
-            ini_set('memory_limit', '128M');
+            ini_set('memory_limit', $memoryLimit);
         }
+
+        // memory_limit is process-wide: a test that lowers it and restores a
+        // hardcoded value instead of the one it found starves every test that
+        // runs after it, and the whole suite dies with "Premature end of PHP
+        // process" on whichever test allocates enough to cross the cap.
+        $this->assertSame(
+            $memoryLimit,
+            ini_get('memory_limit'),
+            'This test must put memory_limit back exactly as it found it.',
+        );
     }
 }
