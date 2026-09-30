@@ -393,7 +393,7 @@ class ClassicImportController extends Controller
      * resumable prepare() below: mapping checks, "＋ New column…" drafts,
      * connected-column type picks, and the one-letter-one-target rule.
      *
-     * @return array{0: array<string, string>, 1: array<int, array{letter: string, name: string, type: string, options: array|null}>, 2: array<string, string>}|JsonResponse
+     * @return array{0: array<string, string>, 1: array<int, array{letter: string, name: string, type: string, options: array|null}>, 2: array<string, array{type: string, options: array|null}>}|JsonResponse
      */
     private function manualManagedPayload(Request $request, array $targets, array $allowedTypes, array &$notices): array|JsonResponse
     {
@@ -520,28 +520,75 @@ class ClassicImportController extends Controller
     }
 
     /**
-     * Step-3 type picks for columns connected to an EXISTING custom field
-     * (letter => type). These used to travel for new columns only, so
-     * re-typing a connected column was silently dropped and the file landed
-     * as the old type. Fixed (managed) fields are ignored downstream: their
-     * schema comes from the table, not from the import.
+     * Step-3 type picks for columns connected to an EXISTING custom field.
+     * Two payload shapes are accepted: the legacy `letter => type` string,
+     * and `letter => {type, options}` — the wizard's option editor rides
+     * along so a dropdown/status pick lands with the options the user
+     * configured instead of the default starters. Fixed (managed) fields are
+     * ignored downstream: their schema comes from the table, not the import.
      *
      * @param  array<string, string>  $allowedTypes
-     * @return array<string, string>|JsonResponse
+     * @return array<string, array{type: string, options: array<int, array{label: string, color: string}>|null}>|JsonResponse
      */
     private function normalizeTypePicks(mixed $raw, array $allowedTypes): array|JsonResponse
     {
-        $typePicks = collect(is_array($raw) ? $raw : [])->mapWithKeys(
-            fn (mixed $type, mixed $letter): array => [strtoupper(trim((string) $letter)) => trim((string) $type)]
-        );
+        $normalized = [];
 
-        foreach ($typePicks as $letter => $type) {
+        foreach (is_array($raw) ? $raw : [] as $letter => $entry) {
+            $letter = strtoupper(trim((string) $letter));
+            $type = trim((string) (is_array($entry) ? ($entry['type'] ?? '') : $entry));
+
             if (! in_array($type, $allowedTypes, true)) {
                 return response()->json(['message' => "Column {$letter}: unknown column type."], 422);
             }
+
+            $options = is_array($entry) ? $this->normalizeOptions($entry['options'] ?? null, $type, $letter) : null;
+
+            if ($options instanceof JsonResponse) {
+                return $options;
+            }
+
+            $normalized[$letter] = ['type' => $type, 'options' => $options];
         }
 
-        return $typePicks->all();
+        return $normalized;
+    }
+
+    /**
+     * A column's own option list as {label, color} pairs, so a conversion
+     * that arrives WITHOUT the step-3 editor payload keeps the options the
+     * column already had instead of resetting them to the starters. Lenient
+     * on shape (legacy plain strings, non-hex colors) — this runs on live
+     * data a 422 would reject.
+     *
+     * @return array<int, array{label: string, color: string}>|null
+     */
+    private function existingOptionList(CustomTableColumn $column): ?array
+    {
+        $list = [];
+
+        foreach ($column->settings['options'] ?? [] as $option) {
+            if (is_array($option)) {
+                $label = trim((string) ($option['label'] ?? ''));
+                $color = trim((string) ($option['color'] ?? ''));
+            } else {
+                $label = trim((string) $option);
+                $color = '';
+            }
+
+            if ($label === '') {
+                continue;
+            }
+
+            $list[] = [
+                'label' => $label,
+                'color' => preg_match('/^#[0-9A-Fa-f]{6}$/', $color) === 1
+                    ? strtoupper($color)
+                    : ImportOptionSeeder::COLORS[count($list) % count(ImportOptionSeeder::COLORS)],
+            ];
+        }
+
+        return $list === [] ? null : $list;
     }
 
     /**
@@ -551,7 +598,7 @@ class ClassicImportController extends Controller
      *
      * @param  array<string, string>  $mapping
      * @param  array<int, array{letter: string, name: string, type: string, options: array|null}>  $newColumns
-     * @param  array<string, string>  $typePicks
+     * @param  array<string, array{type: string, options: array|null}>  $typePicks
      * @param  array<int, string>  $notices
      * @return array{toCreate: array, toConvert: array, stale: Collection, nameMatched: array<string, string>}|JsonResponse
      */
@@ -583,8 +630,9 @@ class ClassicImportController extends Controller
         $toConvert = [];
 
         // A type pick on a column already connected to a custom field
-        // retypes that field. Fixed (managed) fields are ignored: their
-        // schema comes from the table, not from the import.
+        // retypes that field — and, when the step-3 option editor sent its
+        // list, stores those options too. Fixed (managed) fields are
+        // ignored: their schema comes from the table, not the import.
         foreach ($mapping as $key => $letter) {
             if ($letter === '' || ! str_starts_with($key, 'custom_')) {
                 continue;
@@ -597,10 +645,19 @@ class ClassicImportController extends Controller
                 continue;
             }
 
-            $type = $this->importColumnType($picked, $column->name, $notices);
+            $type = $this->importColumnType($picked['type'], $column->name, $notices);
+            $optionsSent = ($picked['options'] ?? null) !== null;
 
-            if ($type !== $column->type) {
-                $toConvert[$column->id] = ['column' => $column, 'type' => $type, 'options' => null];
+            // No editor payload: a conversion keeps the column's own
+            // options instead of resetting them to the starters.
+            $options = $optionsSent
+                ? $picked['options']
+                : (in_array($type, ['status', 'dropdown'], true) ? $this->existingOptionList($column) : null);
+
+            // Retype when the pick differs; also re-save when the editor
+            // sent a fresh option list for the type already in place.
+            if ($type !== $column->type || $optionsSent) {
+                $toConvert[$column->id] = ['column' => $column, 'type' => $type, 'options' => $options];
             }
         }
 

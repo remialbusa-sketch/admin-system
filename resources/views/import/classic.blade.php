@@ -1047,7 +1047,14 @@
                     const out = {};
                     Object.entries(this.mapping || {}).forEach(([key, letter]) => {
                         if (key.startsWith('custom_') && letter) {
-                            out[letter] = this.colTypes[letter] || 'text';
+                            const entry = { type: this.colTypes[letter] || 'text' };
+                            // The option editor's list rides along, so a
+                            // dropdown/status pick lands with the options the
+                            // user configured instead of default starters.
+                            if (this.isOptionType(letter) && Array.isArray(this.colOptions[letter])) {
+                                entry.options = this.colOptions[letter];
+                            }
+                            out[letter] = entry;
                         }
                     });
                     return out;
