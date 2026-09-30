@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use Carbon\Carbon;
+use DateTimeImmutable;
 use Throwable;
 
 /**
@@ -59,6 +60,21 @@ class ExcelDate
             if ($serial > self::MIN_SERIAL && $serial <= self::MAX_SERIAL) {
                 return self::fromSerial($serial);
             }
+
+            // Compact Excel-native date "20250101" is still a date. Every
+            // other out-of-window number is an ID, a quantity or garbage:
+            // Carbon::parse reads a bare numeric as a Unix timestamp, so a
+            // junk cell like -691914.37 landed on 1969-12-23 — or killed the
+            // row outright when a TIMESTAMP column rejected it.
+            if (preg_match('/^\d{8}$/', $value) === 1) {
+                $compact = DateTimeImmutable::createFromFormat('!Ymd', $value);
+
+                if ($compact !== false && $compact->format('Ymd') === $value) {
+                    return Carbon::instance($compact);
+                }
+            }
+
+            return null;
         }
 
         try {

@@ -266,4 +266,81 @@ class CoreImportChunkedTest extends TestCase
         $this->assertSame('Roel Bagasbas', $report->tsp_name);
         $this->assertSame('SR-11', $report->service_request_number);
     }
+
+    /**
+     * total_rows comes from the sheet's used range, which counts fully-empty
+     * rows; the writer skips them without counting, so processed+failed can
+     * never reach total. `done` must come from range coverage instead —
+     * otherwise one blank row strands the batch in `processing` forever and
+     * finish never runs (2026-09-30 incident: 4,038+16 stuck below 4,055).
+     */
+    public function test_an_empty_row_inside_the_data_range_cannot_stall_the_batch(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Service Requests');
+        $sheet->setCellValue('A1', 'Service Request No');
+        $sheet->setCellValue('B1', 'Customer Name');
+        $sheet->setCellValue('A2', 'SR-8001');
+        $sheet->setCellValue('B2', 'Hospital 1');
+        $sheet->setCellValue('A3', 'SR-8002');
+        $sheet->setCellValue('B3', 'Hospital 2');
+        // Row 4 stays fully empty inside the used range (row 5 has data).
+        $sheet->setCellValue('A5', 'SR-8003');
+        $sheet->setCellValue('B5', 'Hospital 3');
+
+        $path = tempnam(sys_get_temp_dir(), 'chunked-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        $spreadsheet->disconnectWorksheets();
+
+        $uploadId = str_repeat('b7', 16);
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'workbook.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'workbook.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        @unlink($path);
+
+        $prepare = $this->postJson(
+            '/tables/service-requests/import-classic/prepare',
+            $this->preparePayload($uploadId)
+        )->assertOk()->json();
+
+        // The empty row counts toward the sheet's used range.
+        $this->assertSame(4, $prepare['totalRows'], json_encode($prepare));
+
+        // Two 2-row chunks: `done` must come from the UNION of completed
+        // ranges covering every row, not from one range or from counters.
+        $first = $this->postJson(
+            '/tables/service-requests/import-classic/chunk',
+            ['batchId' => $prepare['batchId'], 'offset' => 0, 'limit' => 2]
+        )->assertOk()->json();
+
+        $this->assertSame(2, $first['processed'], json_encode($first));
+        $this->assertFalse($first['done'], 'Only half the row ranges are covered: '.json_encode($first));
+
+        $second = $this->postJson(
+            '/tables/service-requests/import-classic/chunk',
+            ['batchId' => $prepare['batchId'], 'offset' => $first['nextOffset'], 'limit' => 2]
+        )->assertOk()->json();
+
+        $this->assertSame(3, $second['processed'], json_encode($second));
+        $this->assertTrue(
+            $second['done'],
+            'The completed ranges cover every row, so the batch must report done even though counters (3) stay below total (4): '.json_encode($second)
+        );
+
+        $finish = $this->postJson(
+            '/tables/service-requests/import-classic/finish',
+            ['batchId' => $prepare['batchId']]
+        )->assertOk()->json();
+
+        $this->assertNotSame('processing', $finish['status'], json_encode($finish));
+        $this->assertSame(3, ServiceRequest::query()->count());
+    }
 }

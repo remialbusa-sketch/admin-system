@@ -1008,7 +1008,7 @@ class ClassicImportController extends Controller
         }
 
         $batch->refresh();
-        $remaining = max(0, (int) $batch->total_rows - (int) $batch->processed_rows - (int) $batch->failed_rows);
+        $remaining = app(SourceWorkbookImportService::class)->rowsRemaining($batch);
 
         if ($remaining > 0) {
             return response()->json(['message' => number_format($remaining).' row(s) are still unwritten — send the remaining chunks first.'], 422);

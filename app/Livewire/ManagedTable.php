@@ -1668,7 +1668,11 @@ abstract class ManagedTable extends Component
             'date' => $value['date'] ?? null,
             'status' => $value['label'] ?? null,
             'dropdown' => $value['labels'][0] ?? null,
-            default => null,
+            // location / person / files (and any future type) have no raw
+            // cell form: fall back to the type's own display string. The old
+            // `default => null` told the grid a stored value was empty — the
+            // "Address column shows no data" bug (values sat in the DB).
+            default => app(ColumnTypeRegistry::class)->resolve($type)->toDisplayString($value),
         };
     }
 

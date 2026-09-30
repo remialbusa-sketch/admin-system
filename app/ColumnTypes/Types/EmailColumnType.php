@@ -16,10 +16,9 @@ class EmailColumnType extends AbstractColumnType
         $input = $this->valueArray($raw);
         $email = $this->requiredString($input['email'] ?? (is_scalar($raw) ? $raw : null), 'email');
 
-        if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-            $this->fail('The email value must be valid.');
-        }
-
+        // The file wins: cells like "a@x - b@y" (two addresses) or a stray
+        // header label import verbatim instead of failing the whole row
+        // (2026-09-30 decision). Only empty values fail, via requiredString.
         return ['email' => $email];
     }
 

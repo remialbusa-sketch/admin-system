@@ -606,7 +606,13 @@ class SourceWorkbookImportService
             'failed' => $failed,
             'total' => $total,
             'nextOffset' => max(0, $rangeEnd - $dataStart + 1),
-            'done' => $processed + $failed >= $total,
+            // Range coverage, not just counters: fully-empty rows count
+            // toward total_rows (the sheet's used range) but are skipped by
+            // the writer, so processed+failed can never reach total — finish
+            // would never run and the batch stayed `processing` (2026-09-30:
+            // 4,038+16 stranded below 4,055).
+            'done' => $processed + $failed >= $total
+                || $this->rangesCover($completed, $dataStart, $dataStart + $total - 1),
         ];
     }
 
@@ -625,11 +631,68 @@ class SourceWorkbookImportService
         return $this->completeBatch($batch);
     }
 
+    /**
+     * Rows the chunk loop still owes. Zero once every physical row lies in
+     * a completed range: counters alone can never reach total_rows when the
+     * sheet's used range contains fully-empty rows (counted by prepareBatch,
+     * skipped by the writer), which stranded a batch at `processing` and
+     * made finish 422 forever (2026-09-30: 4,038+16 stuck below 4,055).
+     */
+    public function rowsRemaining(ImportBatch $batch): int
+    {
+        $total = max(0, (int) $batch->total_rows);
+        $meta = $batch->metadata ?? [];
+        $dataStart = (int) ($meta['data_start_row'] ?? 2);
+
+        if ($this->rangesCover($meta['completed_ranges'] ?? [], $dataStart, $dataStart + $total - 1)) {
+            return 0;
+        }
+
+        return max(0, $total - (int) $batch->processed_rows - (int) $batch->failed_rows);
+    }
+
     /** A [start, end] physical-row range is done when a recorded range covers it. */
     private function rangeCompleted(array $ranges, int $start, int $end): bool
     {
         foreach ($ranges as $range) {
             if (($range[0] ?? PHP_INT_MAX) <= $start && ($range[1] ?? -1) >= $end) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Every physical row in [start,end] lies in some recorded range — the
+     * UNION of completed ranges, since the chunk loop writes 250-row ranges
+     * that never cover the whole span individually.
+     */
+    private function rangesCover(array $ranges, int $start, int $end): bool
+    {
+        if ($start > $end) {
+            return true;
+        }
+
+        usort($ranges, fn (array $a, array $b): int => ($a[0] ?? 0) <=> ($b[0] ?? 0));
+
+        $cursor = $start;
+
+        foreach ($ranges as $range) {
+            $rangeStart = $range[0] ?? PHP_INT_MAX;
+            $rangeEnd = $range[1] ?? -1;
+
+            if ($rangeEnd < $cursor) {
+                continue;
+            }
+
+            if ($rangeStart > $cursor) {
+                return false; // gap: rows never written
+            }
+
+            $cursor = max($cursor, $rangeEnd + 1);
+
+            if ($cursor > $end) {
                 return true;
             }
         }

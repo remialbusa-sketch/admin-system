@@ -105,8 +105,13 @@ class ColumnTypeRegistryTest extends TestCase
             $registry->resolve('formula')->validate(42, ['expression' => '{Budget}-{Spent}']),
         );
 
-        $this->expectException(InvalidArgumentException::class);
-        $registry->resolve('email')->validate('not-an-email');
+        // Emails are stored verbatim: invalid cells ("a@x - b@y", header
+        // labels) must not fail whole import rows (2026-09-30 decision) —
+        // only empty values fail, via requiredString.
+        $this->assertSame(
+            ['email' => 'not-an-email'],
+            $registry->resolve('email')->validate('not-an-email'),
+        );
     }
 
     public function test_unknown_types_are_rejected(): void

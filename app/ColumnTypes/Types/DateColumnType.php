@@ -28,7 +28,10 @@ class DateColumnType extends AbstractColumnType
         }
 
         if ($date === null) {
-            $this->fail('The date value must be a valid date.');
+            // A present-but-unparseable cell (junk numerics, ranges like
+            // "2026-06-11 to 2026-09-29") imports as no date instead of
+            // failing the whole row; the raw cell stays in raw_data.
+            return ['date' => null];
         }
 
         $value = ['date' => $date->toDateString()];
