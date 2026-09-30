@@ -14,6 +14,10 @@
              tableKey: @js($tableKey),
              analyzeUrl: @js(route('tables.import.classic.analyze', $tableKey)),
              executeUrl: @js(route('tables.import.classic.execute', $tableKey)),
+             prepareUrl: @js(route('tables.import.classic.prepare', $tableKey)),
+             chunkUrl: @js(route('tables.import.classic.chunk', $tableKey)),
+             finishUrl: @js(route('tables.import.classic.finish', $tableKey)),
+             cancelUrl: @js(route('tables.import.classic.cancel', $tableKey)),
              failedRowsUrlTemplate: @js(route('tables.import.classic.failed-rows', ['table' => $tableKey, 'batch' => '__BATCH__'])),
              uploadUrl: @js(route('import.upload-stream')),
              uploadChunkUrl: @js(route('import.upload-chunk')),
@@ -170,6 +174,7 @@
                         <span class="text-xs text-base-content/50" x-text="titleColumn ? `First column: ${titleColumn}` : 'No first column selected — click a column above.'"></span>
                         <div class="flex flex-wrap gap-2">
                             <button type="button" @click="titleBack()" class="admin-secondary-button">Back</button>
+                            <button type="button" x-show="!isDynamic" @click="quickImport()" :disabled="executing" class="admin-secondary-button" title="Headers connect themselves; leftover columns become new table columns">Quick import</button>
                             <button type="button" @click="titleNext()" class="admin-primary-button">Next</button>
                         </div>
                     </div>
@@ -230,9 +235,9 @@
                                         <td class="px-3 py-2 align-top" :class="isDimmed(col) ? 'opacity-45' : ''">
                                             <template x-if="isDynamic">
                                                 <div class="flex items-center gap-2">
-                                                    <input type="checkbox" x-model="importCols[col.letter].include" class="checkbox checkbox-sm checkbox-primary" :disabled="col.letter === titleColumn" :aria-label="`Include column ${col.letter}`">
+                                                    <input type="checkbox" :checked="!!importCols[col.letter]?.include" @change="importCols[col.letter] && (importCols[col.letter].include = $event.target.checked)" class="checkbox checkbox-sm checkbox-primary" :disabled="col.letter === titleColumn" :aria-label="`Include column ${col.letter}`">
                                                     <span class="font-mono text-[10px] text-base-content/45" x-text="col.letter"></span>
-                                                    <input type="text" x-model="importCols[col.letter].name" maxlength="100" class="admin-control w-full min-w-0 text-xs font-semibold" :aria-label="`Name for column ${col.letter}`" placeholder="Column name">
+                                                    <input type="text" :value="importCols[col.letter]?.name || ''" @input="importCols[col.letter] && (importCols[col.letter].name = $event.target.value)" maxlength="100" class="admin-control w-full min-w-0 text-xs font-semibold" :aria-label="`Name for column ${col.letter}`" placeholder="Column name">
                                                     <span x-show="col.letter === titleColumn" x-cloak class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-primary">Title</span>
                                                 </div>
                                             </template>
@@ -240,7 +245,7 @@
                                                 <div class="flex items-center gap-2">
                                                     <span class="font-mono text-[10px] text-base-content/45" x-text="col.letter"></span>
                                                     <template x-if="columnTarget(col.letter) === '__new__'">
-                                                        <input type="text" x-model="newCols[col.letter].name" maxlength="100" class="admin-control w-full min-w-0 text-xs font-semibold" placeholder="Column name" :aria-label="`Name for column ${col.letter}`">
+                                                        <input type="text" :value="newCols[col.letter]?.name || ''" @input="newCols[col.letter] && (newCols[col.letter].name = $event.target.value)" maxlength="100" class="admin-control w-full min-w-0 text-xs font-semibold" placeholder="Column name" :aria-label="`Name for column ${col.letter}`">
                                                     </template>
                                                     <template x-if="columnTarget(col.letter) !== '__new__'">
                                                         <span class="truncate text-xs font-semibold text-base-content" :title="col.label" x-text="col.label || '(untitled)'"></span>
@@ -268,11 +273,11 @@
                     <template x-if="typeMenu">
                         <div data-type-menu
                              class="fixed z-50 max-h-[60vh] w-72 overflow-y-auto rounded-md border border-base-300 bg-base-100 p-1 shadow-xl"
-                             :style="`left:${typeMenu.left}px; top:${typeMenu.top}px`">
+                             :style="`left:${typeMenu?.left}px; top:${typeMenu?.top}px`">
                             <template x-for="(label, key) in (columnTypes || {})" :key="key">
-                                <button type="button" @click="setColumnType(typeMenu.letter, key)"
+                                <button type="button" @click="setColumnType(typeMenu?.letter, key)"
                                         class="block w-full rounded px-3 py-2 text-left transition-colors hover:bg-base-200"
-                                        :class="(colTypes[typeMenu.letter] || 'text') === key ? 'bg-primary/10' : ''">
+                                        :class="(colTypes[typeMenu?.letter] || 'text') === key ? 'bg-primary/10' : ''">
                                     <span class="block text-xs font-bold text-base-content" x-text="label"></span>
                                     <span class="block text-[11px] text-base-content/55" x-text="(columnTypeHelp || {})[key] || ''"></span>
                                 </button>
@@ -285,46 +290,46 @@
                     <template x-if="optionsMenu">
                         <div data-options-menu
                              class="fixed z-50 w-80 rounded-md border border-base-300 bg-base-100 shadow-xl"
-                             :style="`left:${optionsMenu.left}px; top:${optionsMenu.top}px`">
+                             :style="`left:${optionsMenu?.left}px; top:${optionsMenu?.top}px`">
                             <div class="border-b border-base-300 px-3 py-2">
-                                <p class="text-xs font-bold text-base-content" x-text="`Options — column ${optionsMenu.letter}`"></p>
-                                <p class="mt-0.5 text-[11px] leading-snug text-base-content/55" x-text="optionHint(optionsMenu.letter)"></p>
+                                <p class="text-xs font-bold text-base-content" x-text="`Options — column ${optionsMenu?.letter}`"></p>
+                                <p class="mt-0.5 text-[11px] leading-snug text-base-content/55" x-text="optionHint(optionsMenu?.letter)"></p>
                             </div>
                             <div class="max-h-64 space-y-1.5 overflow-y-auto px-3 py-2">
-                                <template x-for="(opt, idx) in (colOptions[optionsMenu.letter] || [])" :key="idx">
+                                <template x-for="(opt, idx) in (colOptions[optionsMenu?.letter] || [])" :key="idx">
                                     <div class="flex items-center gap-2">
                                         <input type="color" class="h-6 w-6 shrink-0 cursor-pointer rounded border border-base-300 bg-transparent p-0"
-                                               :value="opt.color" @input="setOptionColor(optionsMenu.letter, idx, $event.target.value)"
+                                               :value="opt.color" @input="setOptionColor(optionsMenu?.letter, idx, $event.target.value)"
                                                :aria-label="`Color for option ${idx + 1}`">
                                         <input type="text" class="admin-control min-w-0 flex-1 text-xs" maxlength="100" :value="opt.label"
-                                               @change="renameOption(optionsMenu.letter, idx, $event)"
+                                               @change="renameOption(optionsMenu?.letter, idx, $event)"
                                                :aria-label="`Label for option ${idx + 1}`">
-                                        <button type="button" @click="removeOption(optionsMenu.letter, idx)"
+                                        <button type="button" @click="removeOption(optionsMenu?.letter, idx)"
                                                 class="shrink-0 rounded p-1 text-base-content/40 transition-colors hover:bg-error/10 hover:text-error"
                                                 :aria-label="`Remove option ${idx + 1}`">
                                             <x-mary-icon name="o-x-mark" class="h-3.5 w-3.5" />
                                         </button>
                                     </div>
                                 </template>
-                                <p x-show="colOptions[optionsMenu.letter] === undefined" x-cloak class="py-1 text-[11px] leading-snug text-base-content/45">
+                                <p x-show="colOptions[optionsMenu?.letter] === undefined" x-cloak class="py-1 text-[11px] leading-snug text-base-content/45">
                                     Not customized yet — the defaults described above apply until you edit this list.
                                 </p>
-                                <p x-show="colOptions[optionsMenu.letter]?.length === 0" x-cloak class="py-1 text-[11px] leading-snug text-base-content/45">
+                                <p x-show="colOptions[optionsMenu?.letter]?.length === 0" x-cloak class="py-1 text-[11px] leading-snug text-base-content/45">
                                     Empty list — values found in the file are appended automatically during import.
                                 </p>
                             </div>
                             <div class="flex items-center gap-2 border-t border-base-300 px-3 py-2">
                                 <input type="text" class="admin-control min-w-0 flex-1 text-xs" maxlength="100" x-model="optionDraft"
-                                       @keydown.enter.prevent="addOption(optionsMenu.letter)" placeholder="New option label"
+                                       @keydown.enter.prevent="addOption(optionsMenu?.letter)" placeholder="New option label"
                                        aria-label="New option label">
-                                <button type="button" @click="addOption(optionsMenu.letter)" class="admin-primary-button shrink-0 px-2 py-1 text-[11px]">Add</button>
+                                <button type="button" @click="addOption(optionsMenu?.letter)" class="admin-primary-button shrink-0 px-2 py-1 text-[11px]">Add</button>
                             </div>
                             <div class="flex items-center justify-between gap-2 border-t border-base-300 px-3 py-1.5">
-                                <span class="text-[11px] tabular-nums text-base-content/45" x-text="`${(colOptions[optionsMenu.letter] || []).length} / ${optionLimit}`"></span>
-                                <button type="button" x-show="fileValues(optionsMenu.letter).length" x-cloak
-                                        @click="useFileValues(optionsMenu.letter)"
+                                <span class="text-[11px] tabular-nums text-base-content/45" x-text="`${(colOptions[optionsMenu?.letter] || []).length} / ${optionLimit}`"></span>
+                                <button type="button" x-show="fileValues(optionsMenu?.letter).length" x-cloak
+                                        @click="useFileValues(optionsMenu?.letter)"
                                         class="admin-secondary-button px-2 py-1 text-[11px]"
-                                        x-text="`Use file values (${fileValues(optionsMenu.letter).length})`"></button>
+                                        x-text="`Use file values (${fileValues(optionsMenu?.letter).length})`"></button>
                             </div>
                             <p x-show="optionError" x-cloak class="border-t border-base-300 px-3 py-1.5 text-[11px] text-error" x-text="optionError"></p>
                         </div>
@@ -352,9 +357,16 @@
                             <button type="button" @click="columnsBack()" class="admin-secondary-button">Back</button>
                             <button type="button" @click="execute()" :disabled="executing || (isDynamic ? importColumnsPayload().length === 0 : columnsMissingRequired().length > 0)" class="admin-primary-button">
                                 <span x-show="!executing" x-text="`Import ${Number(preview?.totalRows || 0).toLocaleString()} records`"></span>
-                                <span x-show="executing">Importing...</span>
+                                <span x-show="executing" x-text="isDynamic ? 'Importing...' : `Importing… ${importProgress || 0}%`"></span>
                             </button>
+                            <button type="button" x-show="executing && !isDynamic" x-cloak @click="requestCancel()" class="admin-secondary-button">Cancel</button>
                         </div>
+                    </div>
+                    <div x-show="executing && !isDynamic" x-cloak class="flex items-center gap-3">
+                        <div class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-base-200">
+                            <div class="h-full rounded-full bg-primary transition-all" :style="`width: ${importProgress || 0}%`"></div>
+                        </div>
+                        <span class="shrink-0 text-xs tabular-nums text-base-content/55" x-text="`Chunked import — each piece is quick, a dropped piece is retried`"></span>
                     </div>
                 </div>
 
@@ -369,8 +381,8 @@
 
     <script>
         document.addEventListener('alpine:init', () => {
-            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp, optionPalette, optionLimit }) => ({
-                tableKey, analyzeUrl, executeUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp, optionPalette, optionLimit,
+            Alpine.data('classicImporter', ({ tableKey, analyzeUrl, executeUrl, prepareUrl, chunkUrl, finishUrl, cancelUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp, optionPalette, optionLimit }) => ({
+                tableKey, analyzeUrl, executeUrl, prepareUrl, chunkUrl, finishUrl, cancelUrl, failedRowsUrlTemplate, uploadUrl, uploadChunkUrl, targets, isDynamic, columnTypes, columnTypeHelp, optionPalette, optionLimit,
                 backUrl: @js($backUrl),
                 step: 1,
                 phase: 'header',
@@ -389,6 +401,8 @@
                 uploading: false,
                 analyzing: false,
                 executing: false,
+                importProgress: 0,
+                cancelRequested: false,
                 progress: 0,
                 globalError: '',
                 uploadId: null,
@@ -1075,6 +1089,132 @@
                 },
 
                 async execute() {
+                    if (this.isDynamic) {
+                        await this.executeSingleShot();
+
+                        return;
+                    }
+
+                    await this.executeManaged(false);
+                },
+
+                /** Step-2 shortcut for core tables: the file maps itself. */
+                async quickImport() {
+                    await this.executeManaged(true);
+                },
+
+                /** One brief request per call: a host-killed call is retried, never fatal. */
+                async sendChunk(url, body, attempts = 3) {
+                    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                    let lastError = null;
+
+                    for (let i = 0; i < attempts; i++) {
+                        try {
+                            const resp = await fetch(url, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Accept': 'application/json',
+                                    'X-CSRF-TOKEN': csrf,
+                                    'X-Requested-With': 'XMLHttpRequest',
+                                },
+                                body: JSON.stringify(body),
+                            });
+                            const data = await this.readJson(resp);
+
+                            if (!resp.ok) {
+                                // A 503 HTML page means the host killed this
+                                // piece mid-write — safe to send again.
+                                if (resp.status === 503 && i + 1 < attempts) {
+                                    lastError = new Error(data.message || 'Import failed.');
+
+                                    continue;
+                                }
+
+                                throw new Error(data.message || 'Import failed.');
+                            }
+
+                            return data;
+                        } catch (e) {
+                            lastError = e;
+
+                            if (i + 1 < attempts && (e instanceof TypeError || /503|failed to fetch|network/i.test(e.message || ''))) {
+                                continue;
+                            }
+
+                            throw e;
+                        }
+                    }
+
+                    throw lastError || new Error('Import failed.');
+                },
+
+                /**
+                 * Core tables import in small resumable pieces: prepare opens
+                 * the batch, each chunk writes one row range, finish closes
+                 * it. Progress survives killed pieces — completed ranges are
+                 * skipped when a piece is sent again.
+                 */
+                async executeManaged(quick) {
+                    this.globalError = '';
+                    this.ensureTitleColumn();
+                    this.executing = true;
+                    this.cancelRequested = false;
+                    this.importProgress = 0;
+
+                    try {
+                        const prep = await this.sendChunk(prepareUrl, {
+                            uploadId: this.uploadId,
+                            originalName: this.originalName,
+                            sheet: this.sheet,
+                            headerRow: this.headerRow,
+                            dataStart: this.dataStart,
+                            mapping: quick ? {} : this.mapping,
+                            newColumns: quick ? [] : this.newColumnsPayload(),
+                            columnTypes: quick ? {} : this.columnTypesPayload(),
+                            autoMap: quick,
+                            columnSignature: Object.fromEntries(
+                                (this.preview?.columns || []).map((col) => [col.letter, col.label || '']),
+                            ),
+                        }, 1);
+                        const batchId = prep.batchId;
+                        const total = prep.totalRows || 0;
+                        const chunkSize = prep.chunkSize || 250;
+                        let offset = 0;
+                        let done = total === 0;
+
+                        while (!done) {
+                            if (this.cancelRequested) {
+                                try {
+                                    await this.sendChunk(cancelUrl, { batchId }, 1);
+                                } catch {}
+
+                                throw new Error('Import cancelled. Rows written so far can be removed with Undo on the table page.');
+                            }
+
+                            const chunk = await this.sendChunk(chunkUrl, { batchId, offset, limit: chunkSize });
+                            offset = chunk.nextOffset;
+                            const counted = (chunk.processed || 0) + (chunk.failed || 0);
+                            this.importProgress = total > 0 ? Math.min(99, Math.round((counted / total) * 100)) : 99;
+                            done = chunk.done;
+                        }
+
+                        const fin = await this.sendChunk(finishUrl, { batchId }, 1);
+                        this.importProgress = 100;
+                        this.result = fin;
+                        this.step = 3;
+                    } catch (e) {
+                        this.globalError = e.message || 'The import failed.';
+                    } finally {
+                        this.executing = false;
+                    }
+                },
+
+                requestCancel() {
+                    this.cancelRequested = true;
+                },
+
+                async executeSingleShot() {
                     this.globalError = '';
                     this.ensureTitleColumn();
                     this.executing = true;
@@ -1160,6 +1300,8 @@
                     this.uploadId = null;
                     this.originalName = null;
                     this.progress = 0;
+                    this.importProgress = 0;
+                    this.cancelRequested = false;
                 }
             }));
         });

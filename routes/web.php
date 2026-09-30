@@ -58,6 +58,18 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('tables/{table}/import-classic/execute', [ClassicImportController::class, 'execute'])
         ->name('tables.import.classic.execute')
         ->middleware(['can:import', 'can:importTable,table']);
+    Route::post('tables/{table}/import-classic/prepare', [ClassicImportController::class, 'prepare'])
+        ->name('tables.import.classic.prepare')
+        ->middleware(['can:import', 'can:importTable,table']);
+    Route::post('tables/{table}/import-classic/chunk', [ClassicImportController::class, 'chunk'])
+        ->name('tables.import.classic.chunk')
+        ->middleware(['can:import', 'can:importTable,table']);
+    Route::post('tables/{table}/import-classic/finish', [ClassicImportController::class, 'finish'])
+        ->name('tables.import.classic.finish')
+        ->middleware(['can:import', 'can:importTable,table']);
+    Route::post('tables/{table}/import-classic/cancel', [ClassicImportController::class, 'cancel'])
+        ->name('tables.import.classic.cancel')
+        ->middleware(['can:import', 'can:importTable,table']);
     Route::get('tables/{table}/import-classic/failed-rows/{batch}', [ClassicImportController::class, 'failedRows'])
         ->name('tables.import.classic.failed-rows')
         ->middleware(['can:import', 'can:importTable,table']);

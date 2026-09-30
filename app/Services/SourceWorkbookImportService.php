@@ -421,6 +421,222 @@ class SourceWorkbookImportService
         @ini_set('memory_limit', '512M');
     }
 
+    /**
+     * Managed table key => source system, source sheet label, row handler and
+     * stored target name. Single source of truth shared by the single-shot
+     * importMapped() and the chunked begin/range/finish trio below, so the
+     * two paths can never disagree about identity or bookkeeping.
+     *
+     * @return array{source: string, name: string, handler: string, target: string|null}
+     */
+    private function mappedPlan(string $tableKey): array
+    {
+        [$source, $name, $handler] = match ($tableKey) {
+            'installed-products' => [self::PRODUCT_SOURCE, 'PDB Data', 'upsertProductRow'],
+            'service-requests' => [self::EXECUTIVE_SOURCE, 'Service Requests', 'upsertServiceRequestRow'],
+            'technical-reports' => [self::EXECUTIVE_SOURCE, 'Technical Reports', 'upsertTechnicalReportRow'],
+            'history-reports' => [self::HISTORICAL_SOURCE, 'MCBTSi TSMS', 'upsertHistoricalRow'],
+            'personnel' => [self::PERSONNEL_SOURCE, 'Personnel list', 'upsertPersonnelRow'],
+            default => throw new \InvalidArgumentException('Unsupported table for mapped import.'),
+        };
+
+        return [
+            'source' => $source,
+            'name' => $name,
+            'handler' => $handler,
+            'target' => match ($tableKey) {
+                'installed-products' => 'installations',
+                'service-requests' => 'service_requests',
+                'technical-reports' => 'technical_reports',
+                'history-reports' => 'historical_tsms_reports',
+                'personnel' => 'technical_personnel',
+                default => null,
+            },
+        ];
+    }
+
+    /**
+     * Chunked import, step 1 of 3: create the batch and stage its row count.
+     * The controller already validated the mapping and applied the column
+     * structure (purge, conversions, creates) — this only opens the batch
+     * the chunk calls below will fill, one short request at a time.
+     */
+    public function beginMappedImport(
+        string $path,
+        string $tableKey,
+        string $sheetName,
+        array $mapping,
+        int $headerRow,
+        int $dataStart,
+        ?int $userId = null,
+    ): ImportBatch {
+        $plan = $this->mappedPlan($tableKey);
+
+        $this->prepareForHeavyWork();
+
+        $headers = (new ImportMappingService)->buildHeaderMap($mapping);
+
+        if ($headers === []) {
+            throw new \InvalidArgumentException('The column mapping does not include any source columns.');
+        }
+
+        $batch = $this->startBatch($plan['source'], $plan['name'], $sheetName !== '' ? $sheetName : $plan['name'], $path, $userId);
+        $batch->metadata = array_merge($batch->metadata ?? [], [
+            'mapped_import' => true,
+            'chunked_import' => true,
+            'table_key' => $tableKey,
+            'target_table' => $plan['target'],
+            'handler' => $plan['handler'],
+            'header_row' => $headerRow,
+            'data_start_row' => $dataStart,
+            'completed_ranges' => [],
+            'mapping' => collect($mapping)
+                ->filter(fn ($letter): bool => trim((string) $letter) !== '')
+                ->map(fn ($letter): string => strtoupper(trim((string) $letter)))
+                ->all(),
+        ]);
+        $batch->save();
+
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+
+        if ($tableKey === 'personnel' && $ext === 'csv') {
+            return $this->failBatch($batch, 'Personnel import expects an .xlsx workbook with a fixed header layout.');
+        }
+
+        $reader = $this->reader($path);
+
+        if ($ext !== 'csv' && ! in_array($sheetName, $reader->listWorksheetNames($path), true)) {
+            return $this->failBatch($batch, 'The chosen sheet was not found in the workbook.');
+        }
+
+        $this->prepareBatch($batch, $reader, $path, $ext === 'csv' ? 'CSV' : $sheetName, $dataStart);
+
+        return $batch->refresh();
+    }
+
+    /**
+     * Chunked import, step 2 of 3: write one row range [$offset,
+     * $offset+$limit) counted from the first data row. Every row upsert is
+     * idempotent (stable source ids, updateOrCreate customs), and a retried
+     * range replays its failure rows exactly — its failures are dropped
+     * first, and an already-completed range is skipped outright — so a
+     * host-killed request can simply be sent again. Success counters may
+     * over-count by the pre-kill part of one range in that rare case; the
+     * stored data stays exact.
+     *
+     * @return array{processed: int, failed: int, total: int, nextOffset: int, done: bool}
+     */
+    public function importMappedRange(ImportBatch $batch, int $offset, int $limit): array
+    {
+        $batch->refresh();
+
+        if ($batch->status !== 'processing') {
+            throw new \InvalidArgumentException('This import is no longer running.');
+        }
+
+        $meta = $batch->metadata ?? [];
+        $tableKey = (string) ($meta['table_key'] ?? '');
+        $handler = (string) ($meta['handler'] ?? '');
+        $mapping = $meta['mapping'] ?? [];
+        $dataStart = (int) ($meta['data_start_row'] ?? 2);
+        $total = max(0, (int) $batch->total_rows);
+        $path = (string) $batch->source_path;
+        $sheet = (string) ($batch->source_sheet ?? '');
+
+        if ($tableKey === '' || $handler === '' || ! is_array($mapping) || $mapping === [] || ! is_file($path)) {
+            throw new \InvalidArgumentException('The uploaded file is no longer on the server. Re-upload it.');
+        }
+
+        $this->prepareForHeavyWork();
+
+        $headers = (new ImportMappingService)->buildHeaderMap($mapping);
+        $rangeStart = $dataStart + max(0, $offset);
+        $rangeEnd = min($rangeStart + max(1, $limit) - 1, $dataStart + $total - 1);
+        $completed = $meta['completed_ranges'] ?? [];
+
+        if ($rangeStart <= $rangeEnd && ! $this->rangeCompleted($completed, $rangeStart, $rangeEnd)) {
+            $removed = ImportFailure::query()
+                ->where('import_batch_id', $batch->id)
+                ->whereBetween('row_number', [$rangeStart, $rangeEnd])
+                ->delete();
+
+            if ($removed > 0) {
+                $batch->decrement('failed_rows', min($removed, (int) $batch->failed_rows));
+            }
+
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            $reader = $this->reader($path);
+
+            // Custom-column targets (custom_{id}) carry file values the fixed
+            // upserts ignore - fetch those columns once, write per row below.
+            $customColumns = CustomTableColumn::query()
+                ->where('table_key', $tableKey)
+                ->whereIn('id', collect($mapping)->keys()
+                    ->filter(fn (string $key): bool => str_starts_with($key, 'custom_'))
+                    ->map(fn (string $key): int => (int) substr($key, 7))
+                    ->all())
+                ->get()
+                ->all();
+
+            $this->processChunks($reader, $path, $ext === 'csv' ? 'CSV' : $sheet, $headers, function (array $data, int $rowNumber) use ($batch, $handler, $tableKey, $customColumns): void {
+                $row = null;
+
+                if ($tableKey === 'personnel') {
+                    $row = $this->upsertPersonnelRow($data, $batch);
+                } else {
+                    $row = $this->{$handler}($data, $rowNumber, $batch);
+                }
+
+                if ($row !== null) {
+                    $this->writeMappedCustomValues($row, $data, $customColumns);
+                }
+            }, $batch, $dataStart, $rangeStart, $rangeEnd);
+
+            $completed[] = [$rangeStart, $rangeEnd];
+            $batch->metadata = array_merge($batch->metadata ?? [], ['completed_ranges' => $completed]);
+            $batch->save();
+        }
+
+        $batch->refresh();
+        $processed = (int) $batch->processed_rows;
+        $failed = (int) $batch->failed_rows;
+
+        return [
+            'processed' => $processed,
+            'failed' => $failed,
+            'total' => $total,
+            'nextOffset' => max(0, $rangeEnd - $dataStart + 1),
+            'done' => $processed + $failed >= $total,
+        ];
+    }
+
+    /**
+     * Chunked import, step 3 of 3: dedupe + close the batch once every data
+     * row has been written by the chunk calls above.
+     */
+    public function finishMappedImport(ImportBatch $batch): ImportBatch
+    {
+        $batch->refresh();
+
+        if (($batch->metadata['table_key'] ?? '') === 'installed-products') {
+            $this->dedupeProductRows($batch);
+        }
+
+        return $this->completeBatch($batch);
+    }
+
+    /** A [start, end] physical-row range is done when a recorded range covers it. */
+    private function rangeCompleted(array $ranges, int $start, int $end): bool
+    {
+        foreach ($ranges as $range) {
+            if (($range[0] ?? PHP_INT_MAX) <= $start && ($range[1] ?? -1) >= $end) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function importMapped(
         string $path,
         string $tableKey,
@@ -430,14 +646,8 @@ class SourceWorkbookImportService
         int $dataStart,
         ?int $userId = null,
     ): ImportBatch {
-        [$sourceSystem, $sourceName, $handler] = match ($tableKey) {
-            'installed-products' => [self::PRODUCT_SOURCE, 'PDB Data', 'upsertProductRow'],
-            'service-requests' => [self::EXECUTIVE_SOURCE, 'Service Requests', 'upsertServiceRequestRow'],
-            'technical-reports' => [self::EXECUTIVE_SOURCE, 'Technical Reports', 'upsertTechnicalReportRow'],
-            'history-reports' => [self::HISTORICAL_SOURCE, 'MCBTSi TSMS', 'upsertHistoricalRow'],
-            'personnel' => [self::PERSONNEL_SOURCE, 'Personnel list', 'upsertPersonnelRow'],
-            default => throw new \InvalidArgumentException('Unsupported table for mapped import.'),
-        };
+        $plan = $this->mappedPlan($tableKey);
+        [$sourceSystem, $sourceName, $handler] = [$plan['source'], $plan['name'], $plan['handler']];
 
         // Big real-world workbooks (8k+ rows) can outlive the default 30s
         // request window; row-level work runs inside retry() + transactions,
@@ -453,14 +663,7 @@ class SourceWorkbookImportService
         $batch = $this->startBatch($sourceSystem, $sourceName, $sheetName !== '' ? $sheetName : $sourceName, $path, $userId);
         $batch->metadata = array_merge($batch->metadata ?? [], [
             'mapped_import' => true,
-            'target_table' => match ($tableKey) {
-                'installed-products' => 'installations',
-                'service-requests' => 'service_requests',
-                'technical-reports' => 'technical_reports',
-                'history-reports' => 'historical_tsms_reports',
-                'personnel' => 'technical_personnel',
-                default => null,
-            },
+            'target_table' => $plan['target'],
             'header_row' => $headerRow,
             'data_start_row' => $dataStart,
             'mapping' => collect($mapping)
@@ -862,19 +1065,23 @@ class SourceWorkbookImportService
         ]);
     }
 
-    private function processChunks(IReader $reader, string $path, string $sheetName, array $headers, callable $callback, ImportBatch $batch, int $dataStart = 2): void
+    private function processChunks(IReader $reader, string $path, string $sheetName, array $headers, callable $callback, ImportBatch $batch, int $dataStart = 2, int $rangeStart = 0, int $rangeEnd = PHP_INT_MAX): array
     {
         // Counters are flushed per chunk instead of per row (an 8k-row import
         // used to issue one UPDATE per row just for bookkeeping).
         $ok = 0;
         $failed = 0;
-        $flush = function () use ($batch, &$ok, &$failed): void {
+        $totalOk = 0;
+        $totalFailed = 0;
+        $flush = function () use ($batch, &$ok, &$failed, &$totalOk, &$totalFailed): void {
             if ($ok > 0) {
                 $batch->increment('processed_rows', $ok);
+                $totalOk += $ok;
                 $ok = 0;
             }
             if ($failed > 0) {
                 $batch->increment('failed_rows', $failed);
+                $totalFailed += $failed;
                 $failed = 0;
             }
         };
@@ -906,6 +1113,12 @@ class SourceWorkbookImportService
 
                 while (($row = fgetcsv($handle)) !== false) {
                     $rowNumber++;
+                    if ($rowNumber < $rangeStart) {
+                        continue;
+                    }
+                    if ($rowNumber > $rangeEnd) {
+                        break;
+                    }
                     if (count(array_filter($row, fn ($value) => $value !== null && $value !== '')) === 0) {
                         continue;
                     }
@@ -920,15 +1133,15 @@ class SourceWorkbookImportService
                 fclose($handle);
                 $flush();
 
-                return;
+                return [$totalOk, $totalFailed];
             }
 
             // $batch->total_rows counts data rows below dataStart, so the last
             // physical row is total_rows + dataStart - 1.
-            $lastPhysicalRow = $batch->total_rows + $dataStart - 1;
+            $lastPhysicalRow = min($batch->total_rows + $dataStart - 1, $rangeEnd);
             $chunkSize = 1000;
 
-            for ($start = $dataStart; $start <= $lastPhysicalRow; $start += $chunkSize) {
+            for ($start = max($dataStart, $rangeStart); $start <= $lastPhysicalRow; $start += $chunkSize) {
                 $end = min($start + $chunkSize - 1, $lastPhysicalRow);
                 $reader->setLoadSheetsOnly([$sheetName]);
                 $reader->setReadFilter(new ChunkReadFilter($start, $end));
@@ -958,6 +1171,8 @@ class SourceWorkbookImportService
         } catch (Throwable $exception) {
             $failStructurally($exception);
         }
+
+        return [$totalOk, $totalFailed];
     }
 
     private function completeBatch(ImportBatch $batch): ImportBatch
