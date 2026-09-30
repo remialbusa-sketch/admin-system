@@ -20,8 +20,17 @@ use InvalidArgumentException;
  */
 class ImportOptionSeeder
 {
-    /** Hard cap so a runaway file cannot bloat a column's option list. */
-    public const MAX_OPTIONS = 200;
+    /**
+     * Hard cap so a runaway file cannot bloat a column's option list.
+     *
+     * Raised 200 → 5,000 after a live import where one high-cardinality
+     * dropdown (1,826 distinct person names) sat at 200 options and failed
+     * 2,809 of 4,055 rows — the cap must stay far beyond real-world
+     * cardinality so it only ever guards against runaway files. The manual
+     * column editor has no cap at all; the step-3 option editor and the
+     * payload guard both read this same constant.
+     */
+    public const MAX_OPTIONS = 5000;
 
     /** Categorical palette for seeded options (labels keep their exact string). */
     public const COLORS = [

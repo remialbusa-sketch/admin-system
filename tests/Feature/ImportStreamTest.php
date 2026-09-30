@@ -10,6 +10,7 @@ use App\Models\ServiceRequest;
 use App\Models\User;
 use App\Services\ColumnTypeRegistry;
 use App\Services\ImportMappingService;
+use App\Support\ImportOptionSeeder;
 use DateTimeImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -736,11 +737,11 @@ class ImportStreamTest extends TestCase
         // Over the shared cap (ImportOptionSeeder::MAX_OPTIONS).
         $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
             'columns' => $statusColumns(
-                collect(range(1, 201))->map(fn (int $i): array => ['label' => 'L'.$i])->all(),
+                collect(range(1, ImportOptionSeeder::MAX_OPTIONS + 1))->map(fn (int $i): array => ['label' => 'L'.$i])->all(),
             ),
         ])
             ->assertStatus(422)
-            ->assertJsonPath('message', 'Column \'Status\': at most 200 options are allowed.');
+            ->assertJsonPath('message', 'Column \'Status\': at most '.ImportOptionSeeder::MAX_OPTIONS.' options are allowed.');
 
         // Colors must be hex.
         $this->postJson('/tables/'.$dynamic->key.'/import-classic/execute', $payload + [
