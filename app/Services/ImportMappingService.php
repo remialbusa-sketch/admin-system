@@ -57,7 +57,7 @@ class ImportMappingService
             'sheet' => 'Service Requests',
             'title' => 'service_request_no',
             'fields' => [
-                ['key' => 'service_request_no', 'label' => 'Service Request No.', 'required' => true, 'kind' => 'text'],
+                ['key' => 'service_request_no', 'label' => 'Service Request No.', 'required' => true, 'kind' => 'text', 'aliases' => ['sr no', 'sr number', 'sr']],
                 ['key' => 'service_request', 'label' => 'Service Request Code', 'required' => false, 'kind' => 'text'],
                 ['key' => 'customer_name', 'label' => 'Customer Name', 'required' => false, 'kind' => 'text'],
                 ['key' => 'ticket_status', 'label' => 'Ticket Status', 'required' => false, 'kind' => 'status'],
@@ -91,14 +91,14 @@ class ImportMappingService
             'title' => 'reference_number',
             'fields' => [
                 ['key' => 'reference_number', 'label' => 'Reference Number', 'required' => true, 'kind' => 'text'],
-                ['key' => 'service_request_number', 'label' => 'Service Request Number', 'required' => false, 'kind' => 'text'],
+                ['key' => 'service_request_number', 'label' => 'Service Request Number', 'required' => false, 'kind' => 'text', 'aliases' => ['sr no', 'sr number', 'sr']],
                 ['key' => 'name', 'label' => 'Report Name', 'required' => false, 'kind' => 'text'],
                 ['key' => 'ticket_status', 'label' => 'Ticket Status', 'required' => false, 'kind' => 'text'],
                 ['key' => 'service_status', 'label' => 'Service Status', 'required' => false, 'kind' => 'status'],
                 ['key' => 'customer_name_sr', 'label' => 'Customer Name (SR)', 'required' => false, 'kind' => 'text'],
                 ['key' => 'service_start_date_time', 'label' => 'Service Start Date/Time', 'required' => false, 'kind' => 'date'],
                 ['key' => 'service_end_date_time', 'label' => 'Service End Date/Time', 'required' => false, 'kind' => 'date'],
-                ['key' => 'tsp_name', 'label' => 'TSP Name', 'required' => false, 'kind' => 'text'],
+                ['key' => 'tsp_name', 'label' => 'TSP Name', 'required' => false, 'kind' => 'text', 'aliases' => ['tsp assigned', 'tsp id']],
                 ['key' => 'tsp', 'label' => 'TSP', 'required' => false, 'kind' => 'text'],
                 ['key' => 'brand', 'label' => 'Brand', 'required' => false, 'kind' => 'text'],
                 ['key' => 'machine_type', 'label' => 'Machine Type', 'required' => false, 'kind' => 'text'],
@@ -134,7 +134,7 @@ class ImportMappingService
                 ['key' => 'log_out_date', 'label' => 'Log-out Date', 'required' => false, 'kind' => 'date'],
                 ['key' => 'log_out_time', 'label' => 'Log-out Time', 'required' => false, 'kind' => 'text'],
                 ['key' => 'tsr', 'label' => 'TSR No.', 'required' => false, 'kind' => 'text'],
-                ['key' => 'tsp_name', 'label' => 'TSP Name', 'required' => false, 'kind' => 'text'],
+                ['key' => 'tsp_name', 'label' => 'TSP Name', 'required' => false, 'kind' => 'text', 'aliases' => ['tsp assigned', 'tsp id']],
                 ['key' => 'tsp_workwith', 'label' => 'TSP Worked With', 'required' => false, 'kind' => 'text'],
                 ['key' => 'branch', 'label' => 'Branch', 'required' => false, 'kind' => 'text'],
                 ['key' => 'document_reference_number', 'label' => 'Document Reference No.', 'required' => false, 'kind' => 'text'],
@@ -403,8 +403,12 @@ class ImportMappingService
         foreach ($fields as $field) {
             $target = $this->normalizeLabel((string) ($field['label'] ?? ''));
             $key = $this->normalizeLabel((string) ($field['key'] ?? ''));
+            $keys = array_values(array_filter(array_merge(
+                [$key],
+                array_map(fn ($alias): string => $this->normalizeLabel((string) $alias), (array) ($field['aliases'] ?? []))
+            )));
 
-            if ($target === '' && $key === '') {
+            if ($target === '' && $keys === []) {
                 continue;
             }
 
@@ -416,7 +420,7 @@ class ImportMappingService
                     continue;
                 }
 
-                $score = $this->similarityScore($column['norm'], $target, $key);
+                $score = $this->similarityScore($column['norm'], $target, $keys);
 
                 if ($score > $bestScore) {
                     $bestScore = $score;
@@ -433,9 +437,9 @@ class ImportMappingService
         return $suggested;
     }
 
-    private function similarityScore(string $column, string $target, string $key): int
+    private function similarityScore(string $column, string $target, array $keys): int
     {
-        if ($column === $target || ($key !== '' && $column === $key)) {
+        if ($column === $target || in_array($column, $keys, true)) {
             return 100;
         }
 

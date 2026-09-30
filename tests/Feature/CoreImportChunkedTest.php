@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\ImportBatch;
 use App\Models\ServiceRequest;
+use App\Models\TechnicalReport;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -197,5 +198,72 @@ class CoreImportChunkedTest extends TestCase
             '/tables/service-requests/import-classic/prepare',
             $this->preparePayload($uploadId, ['mapping' => [], 'newColumns' => []])
         )->assertStatus(422);
+    }
+
+    /**
+     * Abbreviated real-world headers ("TSP ASSIGNED", "SR No") connect to
+     * their fixed fields through declared aliases instead of landing in
+     * lookalike custom columns with the fixed fields left empty.
+     */
+    public function test_quick_import_connects_aliased_headers_to_fixed_fields(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Technical Reports');
+        $sheet->setCellValue('A1', 'Reference Number');
+        $sheet->setCellValue('B1', 'TSP ASSIGNED');
+        $sheet->setCellValue('C1', 'SR No');
+        $sheet->setCellValue('A2', 'REF-1');
+        $sheet->setCellValue('B2', 'Roel Bagasbas');
+        $sheet->setCellValue('C2', 'SR-11');
+        $sheet->setCellValue('A3', 'REF-2');
+        $sheet->setCellValue('B3', 'Jane Doe');
+        $sheet->setCellValue('C3', 'SR-22');
+
+        $path = tempnam(sys_get_temp_dir(), 'chunked-').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        $spreadsheet->disconnectWorksheets();
+
+        $uploadId = str_repeat('c3', 16);
+        $this->call('POST', '/import/upload-chunk', [
+            'uploadId' => $uploadId,
+            'offset' => '0',
+            'fileName' => 'workbook.xlsx',
+        ], [], [
+            'chunk' => new UploadedFile($path, 'workbook.xlsx', 'application/octet-stream', null, true),
+        ])->assertOk();
+
+        @unlink($path);
+
+        $prepare = $this->postJson(
+            '/tables/technical-reports/import-classic/prepare',
+            [
+                'uploadId' => $uploadId,
+                'originalName' => 'workbook.xlsx',
+                'sheet' => 'Technical Reports',
+                'headerRow' => 1,
+                'dataStart' => 2,
+                'autoMap' => true,
+                'mapping' => [],
+                'newColumns' => [],
+                'columnSignature' => ['A' => 'Reference Number', 'B' => 'TSP ASSIGNED', 'C' => 'SR No'],
+            ]
+        )->assertOk()->json();
+
+        $this->postJson(
+            '/tables/technical-reports/import-classic/chunk',
+            ['batchId' => $prepare['batchId'], 'offset' => 0, 'limit' => 250]
+        )->assertOk();
+
+        $this->postJson(
+            '/tables/technical-reports/import-classic/finish',
+            ['batchId' => $prepare['batchId']]
+        )->assertOk();
+
+        $report = TechnicalReport::query()->where('reference_number', 'REF-1')->firstOrFail();
+        $this->assertSame('Roel Bagasbas', $report->tsp_name);
+        $this->assertSame('SR-11', $report->service_request_number);
     }
 }
