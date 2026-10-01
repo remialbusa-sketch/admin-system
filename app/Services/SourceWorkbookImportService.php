@@ -241,8 +241,14 @@ class SourceWorkbookImportService
                 $query->where('service_request_number', $requestNumber)->orWhere('service_request_code', $requestNumber);
             })->first();
 
+        // Identity is the physical file row, not the mapped key value: files
+        // legitimately repeat reference numbers (batch 22 collapsed 286 rows
+        // behind 182 duplicate Names), and every mapped import purges first
+        // (applyManagedStructure -> purgeTable), so the stable row number keeps
+        // every file row and stays idempotent on chunk replay. Same convention
+        // as upsertServiceRequestRow's row fallback.
         return TechnicalReport::updateOrCreate(
-            ['source_system' => self::EXECUTIVE_SOURCE, 'source_record_id' => $reference],
+            ['source_system' => self::EXECUTIVE_SOURCE, 'source_record_id' => 'row-'.$rowNumber],
             [
                 'service_request_id' => $request?->id,
                 'import_batch_id' => $batch->id,

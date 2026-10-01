@@ -300,8 +300,6 @@ class ImportMappingService
                 && $validLetters->has($letter))
             ->all();
 
-        $recalled = $this->steerRequiredFields($recalled, self::TARGETS[$tableKey]['fields'] ?? [], $columns);
-
         return $recalled + $this->blankMapping($tableKey);
     }
 
@@ -374,54 +372,6 @@ class ImportMappingService
                 && $known->has((string) $target)
                 && $validLetters->has($letter))
             ->all();
-
-        return $this->steerRequiredFields($recalled, $fields, $columns);
-    }
-
-    /**
-     * Re-anchor a stale recalled mapping for required fields.
-     *
-     * A remembered binding can be wrong (an old title pick bound
-     * "Reference Number" to the Name column and silently merged rows). When
-     * the remembered column's header does not match the field's label but
-     * another column's header matches it exactly, the exact header match
-     * wins. Memory is kept when it agrees with a header, when nothing
-     * matches exactly, or when the exact column is already remembered for a
-     * different field (never map two fields to one column).
-     *
-     * @param  array<string, string>  $recalled
-     * @param  array<int, array{key: string, label?: string, required?: bool}>  $fields
-     * @param  array<int, array{letter?: string, label?: string|null}>  $columns
-     * @return array<string, string>
-     */
-    private function steerRequiredFields(array $recalled, array $fields, array $columns): array
-    {
-        $labels = $this->headerSignature($columns); // letter => normalized label
-        $byKey = collect($fields)->keyBy('key');
-
-        foreach ($recalled as $target => $letter) {
-            $field = $byKey->get((string) $target);
-
-            if (! is_array($field) || empty($field['required'])) {
-                continue;
-            }
-
-            $fieldNorm = $this->normalizeLabel((string) ($field['label'] ?? ''));
-
-            if ($fieldNorm === '' || ($labels[$letter] ?? '') === $fieldNorm) {
-                continue;
-            }
-
-            $used = collect($recalled)->except((string) $target)->values()->all();
-
-            foreach ($labels as $candidate => $candidateNorm) {
-                if ($candidateNorm === $fieldNorm && ! in_array($candidate, $used, true)) {
-                    $recalled[$target] = $candidate;
-
-                    break;
-                }
-            }
-        }
 
         return $recalled;
     }

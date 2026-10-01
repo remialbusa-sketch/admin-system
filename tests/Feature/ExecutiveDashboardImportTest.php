@@ -55,7 +55,7 @@ class ExecutiveDashboardImportTest extends TestCase
             $report = TechnicalReport::query()->firstOrFail();
 
             $this->assertSame('completed', $batch->status);
-            $this->assertSame('TR-1001', $report->source_record_id);
+            $this->assertSame('row-2', $report->source_record_id); // physical file row, not the key value
             $this->assertNotNull($report->service_request_id);
             $this->assertSame(1.5, (float) $report->repair_time_hours);
             $this->assertSame('technical_reports', $batch->metadata['target_table']);
