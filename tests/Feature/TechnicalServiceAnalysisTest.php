@@ -76,61 +76,76 @@ class TechnicalServiceAnalysisTest extends TestCase
             ->test(TechnicalReportTable::class);
     }
 
+    /**
+     * Customer names of the rows actually rendered in the grid payload.
+     *
+     * The raw HTML also carries the filter drawer's complete option lists
+     * (every filterable value, regardless of the active drill-down), so
+     * html-level "don't see" checks can't express "row not shown" — assert
+     * on the payload rows instead.
+     */
+    private function renderedCustomers(array $query): array
+    {
+        $html = $this->grid($query)->html();
+        preg_match('/data-managed-table-payload>(.*?)<\/script>/s', $html, $m);
+        $payload = json_decode($m[1] ?? '{}', true);
+
+        return array_values(array_column($payload['rows'] ?? [], 'customer_name'));
+    }
+
     public function test_tsp_query_param_filters_reports(): void
     {
-        $this->grid(['tsp' => 'Alice'])
-            ->assertSee('Alpha Hospital')
-            ->assertSee('Gamma Hospital')
-            ->assertDontSee('Beta Hospital');
+        $customers = $this->renderedCustomers(['tsp' => 'Alice']);
+        sort($customers);
+
+        $this->assertSame(['Alpha Hospital', 'Gamma Hospital'], $customers);
     }
 
     public function test_brand_query_param_filters_reports(): void
     {
-        $this->grid(['brand' => 'TERUMO'])
-            ->assertSee('Beta Hospital')
-            ->assertDontSee('Alpha Hospital');
+        $customers = $this->renderedCustomers(['brand' => 'TERUMO']);
+        sort($customers);
+
+        $this->assertSame(['Beta Hospital', 'Delta Hospital'], $customers);
     }
 
     public function test_customer_query_param_filters_reports(): void
     {
-        $this->grid(['customer' => 'Gamma'])
-            ->assertSee('Gamma Hospital')
-            ->assertDontSee('Alpha Hospital');
+        $this->assertSame(['Gamma Hospital'], $this->renderedCustomers(['customer' => 'Gamma']));
     }
 
     public function test_assigned_query_param_filters_by_tsp_presence(): void
     {
-        $this->grid(['assigned' => '1'])
-            ->assertSee('Alpha Hospital')
-            ->assertDontSee('Beta Hospital');
+        $customers = $this->renderedCustomers(['assigned' => '1']);
+        sort($customers);
 
-        $this->grid(['assigned' => '0'])
-            ->assertSee('Beta Hospital')
-            ->assertDontSee('Alpha Hospital');
+        $this->assertSame(['Alpha Hospital', 'Delta Hospital', 'Gamma Hospital'], $customers);
+
+        $this->assertSame(['Beta Hospital'], $this->renderedCustomers(['assigned' => '0']));
     }
 
     public function test_completed_any_query_param_filters_dated_reports(): void
     {
-        $this->grid(['completed' => 'any'])
-            ->assertSee('Alpha Hospital')
-            ->assertSee('Gamma Hospital')
-            ->assertDontSee('Beta Hospital');
+        $customers = $this->renderedCustomers(['completed' => 'any']);
+        sort($customers);
+
+        $this->assertSame(['Alpha Hospital', 'Delta Hospital', 'Gamma Hospital'], $customers);
     }
 
     public function test_completed_date_query_param_filters_one_day(): void
     {
-        $this->grid(['completed' => now()->subDays(10)->toDateString()])
-            ->assertSee('Gamma Hospital')
-            ->assertDontSee('Alpha Hospital');
+        $this->assertSame(
+            ['Gamma Hospital'],
+            $this->renderedCustomers(['completed' => now()->subDays(10)->toDateString()]),
+        );
     }
 
     public function test_completed_range_query_params_filter_a_window(): void
     {
-        $this->grid([
+        $this->assertSame(['Alpha Hospital'], $this->renderedCustomers([
             'completed_from' => now()->subDays(3)->toDateString(),
             'completed_to' => now()->toDateString(),
-        ])->assertSee('Alpha Hospital')
-            ->assertDontSee('Gamma Hospital');
+        ]));
     }
 
     public function test_drill_down_chips_render_and_clear(): void

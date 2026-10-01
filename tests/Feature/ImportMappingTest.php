@@ -188,6 +188,116 @@ class ImportMappingTest extends TestCase
         $this->assertSame('B', $recalled['customer_name']);
     }
 
+    public function test_recalled_required_field_reanchors_to_an_exact_header_match(): void
+    {
+        $service = app(ImportMappingService::class);
+        $columns = [
+            ['letter' => 'A', 'label' => 'Name', 'samples' => []],
+            ['letter' => 'B', 'label' => 'Ticket Status', 'samples' => []],
+            ['letter' => 'AD', 'label' => 'Reference Number', 'samples' => []],
+        ];
+
+        // The stale session recall: an old title pick bound Reference Number to A.
+        $service->rememberMapping('technical-reports', [
+            'reference_number' => 'A',
+            'ticket_status' => 'B',
+        ], $service->headerSignature($columns));
+
+        $recalled = $service->recallFor(
+            ImportMappingService::TARGETS['technical-reports']['fields'],
+            'technical-reports',
+            $columns,
+        );
+
+        // An exact header match outranks memory: AD carries "Reference Number".
+        $this->assertSame('AD', $recalled['reference_number']);
+        // B's header matches its own field label exactly: memory kept.
+        $this->assertSame('B', $recalled['ticket_status']);
+    }
+
+    public function test_recall_keeps_a_required_field_when_no_header_matches_exactly(): void
+    {
+        $service = app(ImportMappingService::class);
+        $columns = [
+            ['letter' => 'A', 'label' => 'Name', 'samples' => []],
+            ['letter' => 'B', 'label' => 'Reference', 'samples' => []], // close, not exact
+        ];
+
+        $service->rememberMapping('technical-reports', [
+            'reference_number' => 'B',
+        ], $service->headerSignature($columns));
+
+        $recalled = $service->recallFor(
+            ImportMappingService::TARGETS['technical-reports']['fields'],
+            'technical-reports',
+            $columns,
+        );
+
+        $this->assertSame('B', $recalled['reference_number']);
+    }
+
+    public function test_recall_does_not_steer_non_required_fields(): void
+    {
+        $service = app(ImportMappingService::class);
+        $columns = [
+            ['letter' => 'A', 'label' => 'Ticket Status', 'samples' => []],
+            ['letter' => 'B', 'label' => 'Report Name', 'samples' => []],
+        ];
+
+        // name is not required: its remembered A wins even though B matches
+        // its label exactly (recall stays authoritative for optional fields).
+        $service->rememberMapping('technical-reports', [
+            'name' => 'A',
+        ], $service->headerSignature($columns));
+
+        $recalled = $service->recallFor(
+            ImportMappingService::TARGETS['technical-reports']['fields'],
+            'technical-reports',
+            $columns,
+        );
+
+        $this->assertSame('A', $recalled['name']);
+    }
+
+    public function test_recall_does_not_steal_a_column_already_remembered_for_another_field(): void
+    {
+        $service = app(ImportMappingService::class);
+        $columns = [
+            ['letter' => 'A', 'label' => 'Name', 'samples' => []],
+            ['letter' => 'AD', 'label' => 'Reference Number', 'samples' => []],
+        ];
+
+        $service->rememberMapping('technical-reports', [
+            'reference_number' => 'A',
+            'service_request_number' => 'AD', // AD is already remembered for another field
+        ], $service->headerSignature($columns));
+
+        $recalled = $service->recallFor(
+            ImportMappingService::TARGETS['technical-reports']['fields'],
+            'technical-reports',
+            $columns,
+        );
+
+        $this->assertSame('A', $recalled['reference_number']);
+    }
+
+    public function test_recall_mapping_reanchors_required_field_to_exact_header_match(): void
+    {
+        $service = app(ImportMappingService::class);
+        $columns = [
+            ['letter' => 'A', 'label' => 'Name', 'samples' => []],
+            ['letter' => 'AD', 'label' => 'Reference Number', 'samples' => []],
+        ];
+
+        $service->rememberMapping('technical-reports', [
+            'reference_number' => 'A',
+        ], $service->headerSignature($columns));
+
+        $recalled = $service->recallMapping('technical-reports', $columns);
+
+        $this->assertSame('AD', $recalled['reference_number']);
+    }
+
     public function test_preview_sheet_reanchors_when_header_row_moves(): void
     {
         $path = $this->csv([

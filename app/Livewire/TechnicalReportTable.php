@@ -43,6 +43,7 @@ class TechnicalReportTable extends ManagedTable
     protected function rules(): array
     {
         return [
+            'customer_name' => ['nullable', 'string', 'max:255'],
             'ticket_status' => ['nullable', 'string', 'max:100'],
             'service_status' => ['nullable', 'string', 'max:100'],
             'tsp_name' => ['nullable', 'string', 'max:100'],
@@ -131,12 +132,12 @@ class TechnicalReportTable extends ManagedTable
         return [
             ['key' => 'reference_number', 'label' => 'Reference #', 'type' => 'text'],
             ['key' => 'service_request_number', 'label' => 'Service Request #', 'type' => 'text'],
-            ['key' => 'customer_name', 'label' => 'Customer Name', 'type' => 'text'],
-            ['key' => 'ticket_status', 'label' => 'Ticket Status', 'type' => 'text'],
+            ['key' => 'customer_name', 'label' => 'Customer Name', 'type' => 'select', 'options' => $this->distinctOptions('customer_name')],
+            ['key' => 'ticket_status', 'label' => 'Ticket Status', 'type' => 'select', 'options' => $this->distinctOptions('ticket_status')],
             ['key' => 'service_status', 'label' => 'Service Status', 'type' => 'select', 'options' => $this->statusOptions()],
-            ['key' => 'tsp_name', 'label' => 'TSP ID', 'type' => 'text'],
+            ['key' => 'tsp_name', 'label' => 'TSP ID', 'type' => 'select', 'options' => $this->distinctOptions('tsp_name')],
             ['key' => 'tsp_display_name', 'label' => 'TSP Name', 'type' => 'text', 'editable' => false],
-            ['key' => 'brand', 'label' => 'Brand', 'type' => 'text'],
+            ['key' => 'brand', 'label' => 'Brand', 'type' => 'select', 'options' => $this->distinctOptions('brand')],
             ['key' => 'machine_type', 'label' => 'Machine Type', 'type' => 'text'],
             ['key' => 'job_done', 'label' => 'Job Done', 'type' => 'text'],
             ['key' => 'parts_replaced', 'label' => 'Parts Replaced', 'type' => 'text'],
@@ -147,6 +148,22 @@ class TechnicalReportTable extends ManagedTable
     protected function statusOptions(): array
     {
         return TechnicalReport::query()->whereNotNull('service_status')->distinct()->orderBy('service_status')->pluck('service_status')->toArray();
+    }
+
+    /**
+     * Distinct non-empty values of a core column, used as its pick-list.
+     * Options are computed from live data — every value an import wrote
+     * shows up as a choice without any extra bookkeeping.
+     */
+    protected function distinctOptions(string $column): array
+    {
+        return TechnicalReport::query()
+            ->whereNotNull($column)
+            ->where($column, '<>', '')
+            ->distinct()
+            ->orderBy($column)
+            ->pluck($column)
+            ->toArray();
     }
 
     protected function title(): string
