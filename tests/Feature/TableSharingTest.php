@@ -19,7 +19,8 @@ use Tests\TestCase;
 /**
  * Phase B: personal dynamic tables are private — owner plus explicit
  * per-user shares (table_shares mirrors dashboard_shares). The five core
- * tables stay open to everyone and always appear in the sidebar.
+ * tables stay open to everyone (pinnable by anyone) and appear in the
+ * sidebar once pinned, like every other table.
  */
 class TableSharingTest extends TestCase
 {
@@ -207,9 +208,17 @@ class TableSharingTest extends TestCase
         $this->assertDatabaseMissing('table_shares', ['id' => $shareId]);
     }
 
-    public function test_the_sidebar_lists_the_five_core_tables_for_everyone(): void
+    public function test_the_sidebar_lists_pinned_core_tables_for_everyone(): void
     {
         $user = User::factory()->create();
+
+        // Core tables are pinnable by any signed-in user: with all five
+        // pinned, the sidebar lists them regardless of role.
+        $coreKeys = ['installed-products', 'service-requests', 'technical-reports', 'history-reports', 'personnel'];
+
+        foreach ($coreKeys as $index => $key) {
+            TablePin::create(['user_id' => $user->id, 'table_key' => $key, 'position' => $index]);
+        }
 
         Livewire::actingAs($user)
             ->test(Sidebar::class)
@@ -224,7 +233,7 @@ class TableSharingTest extends TestCase
         $table = $this->tableFor($owner, 'secret-fleet', 'Secret fleet data');
         $this->assertNotNull($table);
 
-        TablePin::create(['user_id' => $user->id, 'table_key' => 'secret-fleet', 'position' => 0]);
+        TablePin::create(['user_id' => $user->id, 'table_key' => 'secret-fleet', 'position' => 5]);
 
         Livewire::actingAs($user)
             ->test(Sidebar::class)

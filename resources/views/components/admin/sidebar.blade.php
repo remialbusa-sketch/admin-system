@@ -1,8 +1,9 @@
 @php
-    // The sidebar's "Tables" group always lists the five core tables, plus
-    // the tables the current user has pinned on the /tables page. Pins to
-    // tables the user can no longer open (share revoked, ownerless table)
-    // are dropped instead of rendering a dead link.
+    // The sidebar's "Tables" group lists ONLY the tables the current user
+    // has pinned on the /tables page — core tables follow pin/unpin exactly
+    // like user-created ones (unpinned tables live behind "All tables" below).
+    // Pins to tables the user can no longer open (share revoked, ownerless
+    // table) are dropped instead of rendering a dead link.
     $sidebarUser = auth()->user();
     $sidebarCatalog = app(\App\Support\TableCatalog::class);
 
@@ -15,10 +16,10 @@
             \App\Models\DynamicTable::query()->visibleTo($sidebarUser)->pluck('key')->all(),
         );
 
-        $sidebarKeys = array_values(array_unique([
-            ...$coreKeys,
-            ...array_intersect(\App\Models\TablePin::keysFor($sidebarUser->id), $openableKeys),
-        ]));
+        $sidebarKeys = array_values(array_intersect(
+            \App\Models\TablePin::keysFor($sidebarUser->id),
+            $openableKeys,
+        ));
     }
 
     $dataItems = $sidebarCatalog->navForKeys($sidebarKeys);

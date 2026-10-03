@@ -118,28 +118,41 @@ class TablePinTest extends TestCase
         $this->assertSame('Equipment', $items[0]['label']);
     }
 
-    public function test_sidebar_shows_core_tables_plus_pinned_tables(): void
+    public function test_sidebar_lists_only_pinned_tables_core_included(): void
     {
         $user = User::factory()->create();
         DynamicTable::create(['key' => 'equipment', 'name' => 'Equipment', 'created_by' => $user->id]);
         DynamicTable::create(['key' => 'fleet', 'name' => 'Fleet', 'created_by' => null]);
 
-        // Pin one dynamic table.
-        TablePin::create(['user_id' => $user->id, 'table_key' => 'equipment', 'position' => 0]);
-
-        // The five core tables always show; the pinned own table shows;
-        // an unpinned table does not.
+        // Nothing pinned: the Tables group is empty (its empty-state copy is
+        // live again) — no core table shows either, and "All tables" is the
+        // way back to everything.
         Livewire::actingAs($user)
             ->test(Sidebar::class)
-            ->assertSee('Product Database')
-            ->assertSee('Equipment')
-            ->assertDontSee('Fleet')
+            ->assertDontSee('Product Database')
+            ->assertDontSee('Equipment')
+            ->assertSee('No pinned tables yet')
             ->assertSee('All tables');
 
-        // Personnel is core — visible without a pin of its own.
+        // Pin order rules: equipment first, then a core table.
+        Livewire::actingAs($user)->test(TablesList::class)->call('togglePin', 'equipment');
+        Livewire::actingAs($user)->test(TablesList::class)->call('togglePin', 'installed-products');
+
         Livewire::actingAs($user)
             ->test(Sidebar::class)
-            ->assertSee('Technical Personnel');
+            ->assertSee('Equipment')
+            ->assertSee('Product Database')
+            ->assertSeeInOrder(['Equipment', 'Product Database'])
+            ->assertDontSee('Technical Personnel') // unpinned core hides, like any table
+            ->assertDontSee('Fleet');             // unpinned dynamic hides
+
+        // Unpinning a core table removes it — pins follow through for core.
+        Livewire::actingAs($user)->test(TablesList::class)->call('togglePin', 'installed-products');
+
+        Livewire::actingAs($user)
+            ->test(Sidebar::class)
+            ->assertDontSee('Product Database')
+            ->assertSee('Equipment');
 
         // A pin pointing at a table the user cannot open (ownerless tables
         // are superadmin-only) is dropped instead of rendering a dead link.
