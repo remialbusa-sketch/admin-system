@@ -47,6 +47,11 @@ return [
             'password' => env('MAIL_PASSWORD'),
             'timeout' => null,
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // Loopback relay (prod sends via the cPanel exim on 127.0.0.1):
+            // its certificate doesn't cover 127.0.0.1, so skip peer + host
+            // verification — the traffic never leaves the host. Passes
+            // through to Symfony's EsmtpTransportFactory via the DSN options.
+            'verify_peer' => false,
         ],
 
         'ses' => [
