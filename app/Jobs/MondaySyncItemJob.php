@@ -7,6 +7,7 @@ use App\Models\MondaySyncedItem;
 use App\Models\MondaySyncSetting;
 use App\Services\MondayApiClient;
 use App\Services\MondayItemMapper;
+use App\Support\MondaySettings;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -16,8 +17,10 @@ use Throwable;
 
 /**
  * M-W: refetch a single newly created monday.com item (from a create-item
- * webhook) and map it into its domain's dynamic table. Idempotent: the monday
- * item id is the upsert identity, so a duplicate webhook delivery is harmless.
+ * webhook) and map it into its domain's table — a dynamic table or one of the
+ * five core domain tables (resolved through monday_sync_settings.board_id, the
+ * same source of truth the connect flow writes). Idempotent: the monday item
+ * id is the upsert identity, so a duplicate webhook delivery is harmless.
  */
 class MondaySyncItemJob implements ShouldQueue
 {
@@ -35,18 +38,25 @@ class MondaySyncItemJob implements ShouldQueue
 
     public function handle(MondayApiClient $client, MondayItemMapper $mapper): void
     {
-        // Resolve the connected dynamic table for this board.
-        $table = DynamicTable::query()
-            ->where('monday_board_id', (string) $this->boardId)
+        // Resolve the connected domain for this board: canonical = the sync
+        // setting row; the dynamic registry lookup is the legacy fallback.
+        $setting = MondaySyncSetting::query()
+            ->where('board_id', (string) $this->boardId)
             ->first();
 
-        if (! $table) {
-            return; // not connected anywhere — nothing to import
+        if (! $setting) {
+            $table = DynamicTable::query()
+                ->where('monday_board_id', (string) $this->boardId)
+                ->first();
+
+            if (! $table) {
+                return; // not connected anywhere — nothing to import
+            }
+
+            $setting = MondaySyncSetting::forDomain($table->key);
         }
 
-        $setting = MondaySyncSetting::forDomain($table->key);
-
-        if (! config('monday.enabled', false) || ! $setting->enabled) {
+        if (! MondaySettings::enabled() || ! $setting->enabled) {
             return; // toggle/global off — skip
         }
 
@@ -57,10 +67,10 @@ class MondaySyncItemJob implements ShouldQueue
         }
 
         $item = $items[0];
-        $ok = $mapper->mapItem($table, $item);
+        $ok = $mapper->mapItem($setting->domain, $item);
 
         MondaySyncedItem::query()->updateOrCreate(
-            ['domain' => $table->key, 'item_id' => (string) $this->itemId],
+            ['domain' => $setting->domain, 'item_id' => (string) $this->itemId],
             ['state' => $ok ? 'imported' : 'failed', 'last_seen_at' => now()],
         );
     }

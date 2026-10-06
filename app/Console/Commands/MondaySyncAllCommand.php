@@ -5,6 +5,8 @@ namespace App\Console\Commands;
 use App\Models\DynamicTable;
 use App\Models\MondaySyncSetting;
 use App\Services\MondaySyncService;
+use App\Support\MondayCoreTargets;
+use App\Support\MondaySettings;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -12,12 +14,12 @@ class MondaySyncAllCommand extends Command
 {
     protected $signature = 'monday:sync-all {--dry-run : report without recording}';
 
-    protected $description = 'Run the new-item pull for every user-created table that has a connected board and live-pull toggle on';
+    protected $description = 'Run the new-item pull for every connected table (core and dynamic) that has live-pull toggle on';
 
     public function handle(MondaySyncService $service): int
     {
-        if (! config('monday.enabled', false)) {
-            $this->warn('monday sync is disabled globally (MONDAY_SYNC_ENABLED=false). Nothing to do.');
+        if (! MondaySettings::enabled()) {
+            $this->warn('monday sync is disabled globally (Settings → monday.com). Nothing to do.');
 
             return self::SUCCESS;
         }
@@ -27,12 +29,14 @@ class MondaySyncAllCommand extends Command
             ->whereNotNull('board_id')
             ->pluck('domain');
 
-        // Only domains that still have a real dynamic table (tables can be
-        // created/deleted; a stale setting row shouldn't error the run).
-        $valid = array_intersect(
-            $domains->all(),
-            DynamicTable::query()->pluck('key')->all(),
-        );
+        // Only domains that still have a real table behind them (dynamic
+        // tables can be deleted; a stale setting row shouldn't error the run).
+        // Core domains are always resolvable — see MondayCoreTargets.
+        $dynamicKeys = DynamicTable::query()->pluck('key')->all();
+        $valid = $domains
+            ->filter(fn (string $domain): bool => in_array($domain, $dynamicKeys, true) || MondayCoreTargets::has($domain))
+            ->values()
+            ->all();
 
         if ($valid === []) {
             $this->info('No connected tables with live-pull on.');

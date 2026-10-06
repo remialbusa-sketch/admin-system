@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Exports\ManagedTableExport;
+use App\Livewire\Concerns\ConnectsMondayBoard;
 use App\Livewire\Concerns\HasTableFilters;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
@@ -25,6 +26,7 @@ use Maatwebsite\Excel\Facades\Excel;
 
 abstract class ManagedTable extends Component
 {
+    use ConnectsMondayBoard;
     use HasTableFilters;
     use WithPagination;
 
@@ -1702,6 +1704,8 @@ abstract class ManagedTable extends Component
             'columnTypeOptions' => app(ColumnTypeRegistry::class)->all(),
             'customColumns' => $this->customColumnModels(),
             'gridPayload' => $this->gridPayload($rows, $columns),
+            // monday.com connect panel state (shared partial decides visibility).
+            'monday' => $this->mondayViewData(),
         ])->layout('layouts.dashboard')->title($this->title());
     }
 

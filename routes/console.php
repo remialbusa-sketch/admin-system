@@ -1,6 +1,7 @@
 <?php
 
 use App\Services\SourceWorkbookImportService;
+use App\Support\MondaySettings;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -14,12 +15,13 @@ Schedule::command('app:send-exec-digest')->weeklyOn(1, '07:00');
 //   - 'delta'  (default): poll the board for new item ids every minute.
 //   - 'webhook': monday pushes create-item events to /webhooks/monday, so the
 //                polling delta scan is skipped (it would only duplicate quota).
-// Both honor MONDAY_SYNC_ENABLED (global kill-switch) + per-table toggles in DB.
+// Both honor the global switch (Settings → monday.com, falls back to
+// MONDAY_SYNC_ENABLED) + per-table toggles in DB.
 // withoutOverlapping guards against slow runs stacking.
 Schedule::command('monday:sync-all')
     ->everyMinute()
     ->withoutOverlapping(5)
-    ->when(fn () => config('monday.enabled', false) && config('monday.transport', 'delta') === 'delta');
+    ->when(fn () => MondaySettings::enabled() && config('monday.transport', 'delta') === 'delta');
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());

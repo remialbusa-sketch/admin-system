@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\MondaySettings;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -29,7 +30,9 @@ class MondayApiClient
         protected int $timeout = 30,
         protected int $retries = 3,
     ) {
-        $this->token = $token ?? config('monday.token');
+        // DB (superadmin Settings page) wins over MONDAY_API_TOKEN — see
+        // MondaySettings for the single fallback boundary.
+        $this->token = $token ?? MondaySettings::token();
         $this->apiUrl = config('monday.api_url', $this->apiUrl);
         $this->timeout = (int) config('monday.timeout', $this->timeout);
         $this->retries = (int) config('monday.retries', $this->retries);
@@ -38,6 +41,28 @@ class MondayApiClient
     public function configured(): bool
     {
         return $this->token !== null && $this->token !== '';
+    }
+
+    /**
+     * List the boards the token can see (id + name) — powers the
+     * "Connect monday.com board" picker on every table.
+     *
+     * @return array<int, array{id: string, name: string}>
+     */
+    public function boards(): array
+    {
+        $query = <<<'GQL'
+            query Boards {
+              boards(limit: 100) { id name }
+            }
+        GQL;
+
+        $boards = $this->firstResponsePath($query, [], ['data', 'boards']) ?? [];
+
+        return array_values(array_map(fn (array $board): array => [
+            'id' => (string) ($board['id'] ?? ''),
+            'name' => (string) ($board['name'] ?? ''),
+        ], $boards));
     }
 
     /**
@@ -174,7 +199,7 @@ class MondayApiClient
     public function query(string $query, array $variables = []): array
     {
         if (! $this->configured()) {
-            throw new MondayApiException('monday.com API token is not configured (MONDAY_API_TOKEN).');
+            throw new MondayApiException('monday.com API token is not configured (Settings → monday.com, or MONDAY_API_TOKEN).');
         }
 
         $request = fn (): Response => Http::timeout($this->timeout)
@@ -204,7 +229,7 @@ class MondayApiClient
             $status = $response->status();
 
             if ($status === 401) {
-                throw new MondayApiException('monday.com rejected the API token (HTTP 401). Check MONDAY_API_TOKEN.');
+                throw new MondayApiException('monday.com rejected the API token (HTTP 401). Check the token in Settings → monday.com (or MONDAY_API_TOKEN).');
             }
 
             if ($status === 429) {

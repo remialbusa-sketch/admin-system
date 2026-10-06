@@ -2,25 +2,37 @@
 
 namespace App\Services;
 
+use App\Models\Account;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
 use App\Models\DynamicRow;
 use App\Models\DynamicTable;
+use App\Models\Installation;
+use App\Models\MondaySyncSetting;
+use App\Support\ImportOptionSeeder;
+use App\Support\MondayCoreTargets;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Throwable;
 
 /**
- * M-DC: maps monday.com items into a user-created (dynamic) table.
+ * M-DC: maps monday.com items into ANY table — a user-created (dynamic)
+ * table or one of the five core domain tables.
  *
- * Two responsibilities:
+ * Responsibilities:
  *   1. autoCreateColumns() — given the board's real columns (from
- *      monday:inspect-board), create missing table_custom_columns on the
- *      dynamic table and store the monday column id -> custom column id map
- *      (*the fast auto-map option the owner chose*).
- *   2. mapItem() — upsert a DynamicRow (source_system = monday, source
- *      record id = monday item id) and write each mapped column value through
- *      the registry, exactly like a manual cell write.
+ *      monday:inspect-board or the connect flow), create missing
+ *      table_custom_columns for the domain and persist the monday column id
+ *      -> custom column id map in monday_sync_settings.field_map (canonical
+ *      home; dynamic tables also mirror it onto their registry column for
+ *      legacy readers).
+ *   2. mapItem() — upsert the domain row (DynamicRow for dynamic tables, the
+ *      fixed domain model for core tables; source_system = monday:<key>,
+ *      source_record_id = monday item id) and write each mapped column value
+ *      through the registry, exactly like a manual cell write.
+ *
+ * Status/dropdown values seed their options through ImportOptionSeeder first
+ * (the shared import boundary) so board labels never fail validation.
  */
 class MondayItemMapper
 {
@@ -71,20 +83,22 @@ class MondayItemMapper
     }
 
     /**
-     * Auto-create missing columns on the table from the board's real columns
+     * Auto-create missing columns on the domain from the board's real columns
      * and persist the field map (monday column id -> custom column id).
      *
      * @param  array<int, array{id: string, title: string, type: string}>  $boardColumns
      */
-    public function autoCreateColumns(DynamicTable $table, array $boardColumns): int
+    public function autoCreateColumns(string $tableKey, array $boardColumns, ?int $createdBy = null): int
     {
+        $createdBy ??= auth()->user()?->id;
+
         $existing = CustomTableColumn::query()
-            ->where('table_key', $table->key)
+            ->where('table_key', $tableKey)
             ->get()
             ->keyBy('name');
 
         $nextPosition = (int) CustomTableColumn::query()
-            ->where('table_key', $table->key)
+            ->where('table_key', $tableKey)
             ->max('position') + 1;
 
         $fieldMap = [];
@@ -109,12 +123,12 @@ class MondayItemMapper
 
             $registryType = $this->registryTypeFor($type);
             $newColumn = CustomTableColumn::create([
-                'table_key' => $table->key,
+                'table_key' => $tableKey,
                 'name' => $title,
                 'type' => $registryType,
                 'settings' => $this->defaultSettings($registryType, $this->parseOptions((string) ($column['settings_str'] ?? ''), $registryType)),
                 'position' => $nextPosition++,
-                'created_by' => $table->created_by,
+                'created_by' => $createdBy,
             ]);
 
             $existing->put($title, $newColumn);
@@ -122,49 +136,99 @@ class MondayItemMapper
             $created++;
         }
 
-        // Merge with any existing map entries (the owner may have mapped extra
-        // columns by hand); board columns win on collision.
-        $table->update([
-            'monday_field_map' => array_merge($table->monday_field_map ?? [], $fieldMap),
+        // Canonical map home: monday_sync_settings.field_map (works for core
+        // and dynamic domains alike). Merge with any existing entries (the
+        // owner may have mapped extra columns by hand); board columns win.
+        $setting = MondaySyncSetting::forDomain($tableKey);
+        $setting->update([
+            'field_map' => array_merge($setting->field_map ?? [], $fieldMap),
         ]);
+
+        // Legacy mirror: dynamic tables keep their registry map in sync so
+        // older readers (TablesList display, pre-field_map sync rows) work.
+        if ($table = DynamicTable::query()->where('key', $tableKey)->first()) {
+            $table->update([
+                'monday_field_map' => array_merge($table->monday_field_map ?? [], $fieldMap),
+            ]);
+        }
 
         return $created;
     }
 
     /**
-     * Upsert a DynamicRow for one monday item and write all mapped column
+     * Upsert the domain row for one monday item and write all mapped column
      * values. Returns true on success (or no mapped columns), false if any
      * mapped value failed validation.
      *
      * @param  array<string, mixed>  $item  one element from MondayApiClient::items()
      */
-    public function mapItem(DynamicTable $table, array $item): bool
+    public function mapItem(string $tableKey, array $item): bool
     {
         $itemId = (string) ($item['id'] ?? '');
-        $fieldMap = $table->monday_field_map ?? [];
 
-        if ($itemId === '' || $fieldMap === []) {
+        if ($itemId === '') {
+            return false;
+        }
+
+        $setting = MondaySyncSetting::forDomain($tableKey);
+        $fieldMap = $this->fieldMapFor($tableKey, $setting);
+
+        if ($fieldMap === []) {
             return false;
         }
 
         $columns = CustomTableColumn::query()
-            ->where('table_key', $table->key)
+            ->where('table_key', $tableKey)
             ->whereIn('id', array_values($fieldMap))
             ->get()
             ->keyBy('id');
 
-        $row = DynamicRow::query()->updateOrCreate(
-            [
-                'table_key' => $table->key,
-                'source_system' => 'monday:'.$table->key,
-                'source_record_id' => $itemId,
-            ],
-            [
-                'name' => Str::limit((string) ($item['name'] ?? $itemId), 255),
-                'source_updated_at' => ! empty($item['updated_at']) ? $item['updated_at'] : null,
-            ],
-        );
+        $dynamic = DynamicTable::query()->where('key', $tableKey)->first();
+        $core = $dynamic ? null : MondayCoreTargets::resolve($tableKey);
 
+        if (! $dynamic && ! $core) {
+            return false;
+        }
+
+        if ($dynamic) {
+            $row = DynamicRow::query()->updateOrCreate(
+                [
+                    'table_key' => $tableKey,
+                    'source_system' => 'monday:'.$tableKey,
+                    'source_record_id' => $itemId,
+                ],
+                [
+                    'name' => Str::limit((string) ($item['name'] ?? $itemId), 255),
+                    'source_updated_at' => ! empty($item['updated_at']) ? $item['updated_at'] : null,
+                ],
+            );
+        } else {
+            // Core table: a domain row with the item name in the title field
+            // (setting override or the target's default).
+            $titleField = MondayCoreTargets::titleField($tableKey, $setting->title_field);
+
+            $values = [
+                $titleField => Str::limit((string) ($item['name'] ?? $itemId), 255),
+                'source_updated_at' => ! empty($item['updated_at']) ? $item['updated_at'] : null,
+                'raw_data' => ['monday_item_id' => $itemId],
+            ];
+
+            // installations.account_id is NOT NULL — anchor monday-sourced
+            // installations to a stable placeholder account per domain.
+            if ($core['model'] === Installation::class) {
+                $values['account_id'] = $this->installationAccountId($tableKey);
+            }
+
+            $row = $core['model']::query()->updateOrCreate(
+                [
+                    'source_system' => 'monday:'.$tableKey,
+                    'source_record_id' => $itemId,
+                ],
+                $values,
+            );
+        }
+
+        $rowId = $row->getKey();
         $ok = true;
 
         foreach ($item['column_values'] ?? [] as $value) {
@@ -182,17 +246,61 @@ class MondayItemMapper
 
             try {
                 $raw = $this->normalizeValue((string) ($value['type'] ?? 'text'), $value);
-                $validated = ($raw === null || $raw === '')
-                    ? []
-                    : $this->registry->resolve($column->type)->validate($raw, $column->settings ?? []);
 
-                $this->writeValue($row, $column, $validated);
+                if ($raw === null || $raw === '') {
+                    $this->writeValue($rowId, $column, []);
+
+                    continue;
+                }
+
+                // Shared import boundary: board labels seed the column's
+                // options before validate() (the flagged import bug class —
+                // never validate status/dropdown cells without seeding).
+                ImportOptionSeeder::seed($column, $raw);
+
+                $validated = $this->registry->resolve($column->type)->validate($raw, $column->settings ?? []);
+
+                $this->writeValue($rowId, $column, $validated);
             } catch (Throwable) {
                 $ok = false;
             }
         }
 
         return $ok;
+    }
+
+    /**
+     * The field map for a domain: the canonical setting map first, then the
+     * legacy dynamic-table registry column (pre-field_map connections).
+     *
+     * @return array<string, int>
+     */
+    private function fieldMapFor(string $tableKey, MondaySyncSetting $setting): array
+    {
+        if (! empty($setting->field_map)) {
+            return $setting->field_map;
+        }
+
+        $registryMap = DynamicTable::query()->where('key', $tableKey)->value('monday_field_map');
+
+        return is_array($registryMap) ? $registryMap : [];
+    }
+
+    /**
+     * A stable placeholder Account so monday-sourced installations (whose
+     * account_id is NOT NULL) have a valid parent. Idempotent per domain.
+     */
+    private function installationAccountId(string $tableKey): int
+    {
+        return Account::query()->firstOrCreate(
+            [
+                'source_system' => 'monday',
+                'source_record_id' => 'account-'.$tableKey,
+            ],
+            [
+                'customer_name' => 'monday.com import',
+            ],
+        )->getKey();
     }
 
     /**
@@ -213,12 +321,12 @@ class MondayItemMapper
         return $text;
     }
 
-    private function writeValue(DynamicRow $row, CustomTableColumn $column, array $validated): void
+    private function writeValue(int $rowId, CustomTableColumn $column, array $validated): void
     {
         $shadow = $this->registry->resolve($column->type)->toShadowFields($validated);
 
         CustomTableColumnValue::query()->updateOrCreate(
-            ['custom_column_id' => $column->id, 'row_id' => $row->getKey()],
+            ['custom_column_id' => $column->id, 'row_id' => $rowId],
             [
                 'value' => $validated,
                 'value_text' => $shadow['value_text'] ?? null,
@@ -283,13 +391,13 @@ class MondayItemMapper
     /**
      * @param  Collection<int, array<string, mixed>>  $items
      */
-    public function mapItems(DynamicTable $table, Collection $items): array
+    public function mapItems(string $tableKey, Collection $items): array
     {
         $imported = 0;
         $failed = 0;
 
         foreach ($items as $item) {
-            $this->mapItem($table, $item) ? $imported++ : $failed++;
+            $this->mapItem($tableKey, $item) ? $imported++ : $failed++;
         }
 
         return ['imported' => $imported, 'failed' => $failed];

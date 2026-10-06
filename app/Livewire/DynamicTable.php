@@ -6,22 +6,19 @@ use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
 use App\Models\DynamicRow;
 use App\Models\DynamicTable as DynamicTableModel;
-use App\Models\MondaySyncSetting;
 use App\Services\ColumnTypeRegistry;
-use App\Services\MondayApiClient;
-use App\Services\MondayItemMapper;
-use App\Services\MondaySyncService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
-use Throwable;
 
 /**
  * A user-created table. Extends ManagedTable with the generic DynamicRow store
  * as the source; every column a user defines while creating the table (or adds
  * later) is a table_custom_column keyed by the dynamic table's key.
  *
- * Also hosts the per-table monday.com live-pull toggle (M-DT) and the
- * board-connect / backfill-import entry points.
+ * The monday.com connect menu / live-pull toggle comes from the shared
+ * ConnectsMondayBoard trait (via ManagedTable); this class only mirrors the
+ * board id onto its registry column for display (TablesList) alongside the
+ * canonical monday_sync_settings row.
  */
 class DynamicTable extends ManagedTable
 {
@@ -32,14 +29,6 @@ class DynamicTable extends ManagedTable
     public string $dynamicName = 'Table';
 
     public string $dynamicDescription = '';
-
-    public ?string $mondayBoardId = null;
-
-    public bool $mondayEnabled = false;
-
-    public bool $showConnectBoardModal = false;
-
-    public string $connectBoardId = '';
 
     /**
      * Fresh registry row for this request's permission checks — never
@@ -65,9 +54,11 @@ class DynamicTable extends ManagedTable
         $this->dynamicKey = $registry->key;
         $this->dynamicName = $registry->name;
         $this->dynamicDescription = (string) $registry->description;
-        $this->mondayBoardId = $registry->monday_board_id;
 
-        $this->mondayEnabled = (bool) MondaySyncSetting::forDomain($this->dynamicKey)->enabled;
+        // Connection state from the canonical setting row; fall back to the
+        // registry copy for rows written before the setting existed.
+        $this->hydrateMondayState();
+        $this->mondayBoardId ??= $registry->monday_board_id;
     }
 
     /**
@@ -196,105 +187,19 @@ class DynamicTable extends ManagedTable
 
     /*
     |--------------------------------------------------------------------------
-    | monday.com live-pull toggle + board connect (M-DT entry points)
+    | monday.com connection (shared trait) — dynamic-specific hooks
     |--------------------------------------------------------------------------
     */
 
-    public function toggleMondayPull(): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        $setting = MondaySyncSetting::forDomain($this->dynamicKey);
-        $setting->update(['enabled' => ! $setting->enabled]);
-        $this->mondayEnabled = $setting->enabled;
-
-        session()->flash('mondayMessage', $this->mondayEnabled
-            ? 'Live pull for new monday.com items is now ON (next sync picks up new items).'
-            : 'Live pull for new monday.com items is now OFF.');
-    }
-
     /**
-     * Manually run the new-item pull for this table now (Superadmin escape
-     * hatch when the scheduler isn't running or an operator wants an immediate
-     * sync). Validates the global flag + token, then reports what happened.
+     * Keep the registry copy in sync with the canonical setting row so
+     * TablesList and legacy readers still see the connected board.
      */
-    public function syncNow(): void
+    protected function persistMondayBoard(?string $boardId): void
     {
-        abort_unless($this->canImport(), 403);
+        parent::persistMondayBoard($boardId);
 
-        if (! config('monday.enabled', false)) {
-            session()->flash('mondayMessage', 'monday sync is disabled globally (MONDAY_SYNC_ENABLED=false). Enable it to pull new items.');
-
-            return;
-        }
-
-        try {
-            $result = app(MondaySyncService::class)->syncDomain($this->dynamicKey);
-        } catch (Throwable $exception) {
-            session()->flash('mondayMessage', 'Sync failed: '.$exception->getMessage());
-
-            return;
-        }
-
-        $message = match ($result['status']) {
-            'disabled' => $result['message'] ?? 'Sync is not ready.',
-            'error' => $result['message'] ?? 'Sync errored.',
-            default => sprintf(
-                'Sync done — %d new item(s), %d imported, %d failed.',
-                (int) ($result['new'] ?? 0),
-                (int) ($result['imported'] ?? 0),
-                (int) ($result['failed'] ?? 0),
-            ),
-        };
-
-        session()->flash('mondayMessage', $message);
-    }
-
-    public function openConnectBoard(): void
-    {
-        abort_unless($this->canImport(), 403);
-
-        $this->connectBoardId = (string) ($this->mondayBoardId ?? '');
-        $this->showConnectBoardModal = true;
-    }
-
-    /**
-     * Connect a monday.com board to this table: store the board id + sync
-     * setting, then AUTO-CREATE the board's real columns (the fast auto-map)
-     * and persist the field map so live-pulled items land in the right columns.
-     */
-    public function connectBoard(): void
-    {
-        abort_unless($this->canEdit(), 403);
-
-        $boardId = trim($this->connectBoardId);
-
-        if ($boardId === '') {
-            $this->addError('connectBoardId', 'Enter the monday.com board id.');
-
-            return;
-        }
-
-        $registry = DynamicTableModel::query()->where('key', $this->dynamicKey)->firstOrFail();
-        $registry->update(['monday_board_id' => $boardId]);
-        $this->mondayBoardId = $boardId;
-
-        MondaySyncSetting::forDomain($this->dynamicKey)->update(['board_id' => $boardId]);
-
-        $created = 0;
-
-        try {
-            $boardColumns = app(MondayApiClient::class)->boardColumns((int) $boardId);
-            $created = app(MondayItemMapper::class)->autoCreateColumns($registry, $boardColumns);
-        } catch (Throwable $exception) {
-            $this->showConnectBoardModal = false;
-            session()->flash('mondayMessage', 'Board '.$boardId.' saved, but fetching its columns failed: '.$exception->getMessage());
-
-            return;
-        }
-
-        $this->showConnectBoardModal = false;
-        session()->flash('mondayMessage', 'Board '.$boardId.' connected — '.$created.' column(s) auto-created to match the board.');
+        $this->registry()?->update(['monday_board_id' => $boardId]);
     }
 
     public function render(): View
@@ -305,9 +210,6 @@ class DynamicTable extends ManagedTable
 
         $rows = $this->rows();
         $columns = $this->orderedColumns();
-
-        // Last-sync state for the monday panel (display-only, no API call).
-        $setting = MondaySyncSetting::forDomain($this->dynamicKey);
 
         return view('livewire.dynamic-table', [
             'rows' => $rows,
@@ -325,12 +227,8 @@ class DynamicTable extends ManagedTable
             'columnTypeOptions' => app(ColumnTypeRegistry::class)->all(),
             'customColumns' => $this->customColumnModels(),
             'gridPayload' => $this->gridPayload($rows, $columns),
-            // monday panel
-            'mondayBoardId' => $this->mondayBoardId,
-            'mondayEnabled' => $this->mondayEnabled,
-            'mondayGlobalEnabled' => config('monday.enabled', false),
-            'mondayLastSyncedAt' => $setting->last_synced_at,
-            'mondayLastItemId' => $setting->last_item_id_seen,
+            // monday connect panel state (shared partial).
+            'monday' => $this->mondayViewData(),
         ])->layout('layouts.dashboard')->title($this->title());
     }
 }

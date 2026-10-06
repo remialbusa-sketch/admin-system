@@ -104,4 +104,73 @@
             @endif
         </div>
     </section>
+
+    @if (auth()->user()?->role === \App\Enums\UserRole::Superadmin)
+        <section class="admin-surface divide-y divide-base-300">
+            <div class="p-5 sm:p-6">
+                <h2 class="text-base font-bold text-base-content">monday.com</h2>
+                <p class="mt-1 text-xs text-base-content/55">
+                    Credentials for the board sync used by every table's "Connect monday.com board" menu.
+                    Get the token from monday.com → Avatar → Developers → My access tokens.
+                    Stored in the database — no server (.env) edits needed.
+                </p>
+            </div>
+            <div class="p-5 sm:px-6">
+                <div class="flex flex-wrap items-end gap-3">
+                    <div class="min-w-0 flex-1">
+                        <label for="monday-token" class="mb-1 block text-xs font-bold uppercase tracking-[0.1em] text-base-content/50">API token</label>
+                        <div class="flex gap-2">
+                            <input
+                                id="monday-token"
+                                type="{{ $mondayShowToken ? 'text' : 'password' }}"
+                                wire:model="mondayToken"
+                                autocomplete="off"
+                                placeholder="{{ $mondayTokenSaved ? '(saved — leave blank to keep)' : 'Paste your monday.com API token' }}"
+                                class="admin-control w-full"
+                            >
+                            <button
+                                type="button"
+                                wire:click="$toggle('mondayShowToken')"
+                                class="admin-secondary-button shrink-0"
+                                aria-label="{{ $mondayShowToken ? 'Hide token' : 'Show token' }}"
+                            >
+                                {{ $mondayShowToken ? 'Hide' : 'Show' }}
+                            </button>
+                        </div>
+                        <p class="mt-1 text-xs text-base-content/50">
+                            @if ($mondayTokenSaved)
+                                A token is saved on this server.
+                            @else
+                                No token saved yet.
+                            @endif
+                        </p>
+                        @error('mondayToken') <p class="mt-1 text-xs text-error">{{ $message }}</p> @enderror
+                    </div>
+                </div>
+
+                <label class="mt-4 flex items-start gap-3">
+                    <input type="checkbox" wire:model="mondayEnabled" class="checkbox checkbox-primary mt-0.5">
+                    <span class="text-sm text-base-content">
+                        <span class="font-semibold">Enable monday.com sync (global)</span>
+                        <span class="block text-xs leading-5 text-base-content/55">When on, boards connected on tables pull new items every minute. Turning this off pauses everything at once without losing any connection.</span>
+                    </span>
+                </label>
+
+                <div class="mt-4 flex flex-wrap gap-3">
+                    <button type="button" wire:click="saveMondaySettings" class="admin-primary-button" wire:loading.attr="disabled" wire:target="saveMondaySettings">
+                        <span wire:loading.remove wire:target="saveMondaySettings">Save monday.com settings</span>
+                        <span wire:loading wire:target="saveMondaySettings">Saving…</span>
+                    </button>
+                    <button type="button" wire:click="testMondaySettings" class="admin-secondary-button" wire:loading.attr="disabled" wire:target="testMondaySettings">
+                        <span wire:loading.remove wire:target="testMondaySettings">Test connection</span>
+                        <span wire:loading wire:target="testMondaySettings">Testing…</span>
+                    </button>
+                </div>
+
+                @if ($mondayMessage !== '')
+                    <p class="mt-3 text-xs {{ $mondayMessageTone === 'success' ? 'text-success' : ($mondayMessageTone === 'error' ? 'text-error' : 'text-base-content/55') }}">{{ $mondayMessage }}</p>
+                @endif
+            </div>
+        </section>
+    @endif
 </div>

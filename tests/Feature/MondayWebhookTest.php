@@ -118,10 +118,10 @@ class MondayWebhookTest extends TestCase
         ]);
 
         // Auto-create columns (as connect would have), then dispatch the webhook job.
-        app(MondayItemMapper::class)->autoCreateColumns($table, collect([
+        app(MondayItemMapper::class)->autoCreateColumns($table->key, [
             ['id' => 'status', 'title' => 'Status', 'type' => 'status', 'settings_str' => '{"labels":{"0":"New","1":"In Progress","2":"Done"}}'],
             ['id' => 'text9', 'title' => 'Brand', 'type' => 'text'],
-        ])->all());
+        ]);
 
         MondaySyncItemJob::dispatchSync('50', '123', 'uuid-333');
 

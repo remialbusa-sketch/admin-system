@@ -14,6 +14,8 @@ class MondaySyncSetting extends Model
     protected $fillable = [
         'domain',
         'board_id',
+        'field_map',
+        'title_field',
         'enabled',
         'last_synced_at',
         'last_item_id_seen',
@@ -22,6 +24,7 @@ class MondaySyncSetting extends Model
     protected function casts(): array
     {
         return [
+            'field_map' => 'array',
             'enabled' => 'boolean',
             'last_synced_at' => 'datetime',
         ];

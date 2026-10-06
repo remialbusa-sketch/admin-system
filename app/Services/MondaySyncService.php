@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\DynamicTable;
 use App\Models\MondaySyncedItem;
 use App\Models\MondaySyncSetting;
+use App\Support\MondayCoreTargets;
+use App\Support\MondaySettings;
 use Illuminate\Support\Collection;
 
 /**
@@ -12,10 +14,11 @@ use Illuminate\Support\Collection;
  * "New" = an item id we have not recorded in monday_synced_items yet. Each run
  * reads the board's full id list (cheap, paginated), diffs against what we've
  * seen, refetches only the unseen ids, records them, then maps them into the
- * domain's dynamic table (if one exists) via MondayItemMapper. Idempotent and
- * toggle-aware: if the integration is globally disabled, or the domain's
- * setting is off, or no board is connected, nothing is fetched and no quota is
- * spent.
+ * domain — a dynamic table (DynamicRow) or a core domain table (fixed model,
+ * see MondayCoreTargets) — via MondayItemMapper. Idempotent and toggle-aware:
+ * if the integration is globally disabled (Settings → monday.com), the
+ * domain's setting is off, or no board is connected, nothing is fetched and
+ * no quota is spent.
  */
 class MondaySyncService
 {
@@ -28,8 +31,8 @@ class MondaySyncService
      */
     public function syncDomain(string $domain, bool $dryRun = false): array
     {
-        if (! config('monday.enabled', false)) {
-            return ['status' => 'disabled', 'board_id' => null, 'new_items' => collect(), 'seen' => 0, 'message' => 'monday sync disabled globally (MONDAY_SYNC_ENABLED).'];
+        if (! MondaySettings::enabled()) {
+            return ['status' => 'disabled', 'board_id' => null, 'new_items' => collect(), 'seen' => 0, 'message' => 'monday sync disabled globally (Settings → monday.com).'];
         }
 
         $setting = MondaySyncSetting::forDomain($domain);
@@ -47,17 +50,18 @@ class MondaySyncService
         }
 
         $boardId = (int) $setting->board_id;
-        $table = DynamicTable::query()->where('key', $domain)->first();
+        $dynamic = DynamicTable::query()->where('key', $domain)->first();
 
-        // No dynamic table to write into (or not connected to it) -> nothing to import.
-        if (! $table || ! $table->monday_board_id) {
-            return ['status' => 'disabled', 'board_id' => $setting->board_id, 'new_items' => collect(), 'seen' => 0, 'message' => "Domain [{$domain}] has no dynamic table / connected board. Run connect first."];
+        // Domain must exist: a dynamic table or one of the five core tables.
+        if (! $dynamic && ! MondayCoreTargets::has($domain)) {
+            return ['status' => 'disabled', 'board_id' => $setting->board_id, 'new_items' => collect(), 'seen' => 0, 'message' => "Domain [{$domain}] has no matching table. Run connect first."];
         }
 
-        // A connected table must have a field map (its columns auto-mapped from
-        // the board). Without one, the board isn't ready to import into — treat
-        // it as not-yet-connected rather than retry-looping per-item failures.
-        if (empty($table->monday_field_map)) {
+        // A connected table must have a field map (columns auto-mapped from
+        // the board). The canonical home is monday_sync_settings.field_map;
+        // pre-field_map connections only have the dynamic registry column.
+        $fieldMap = $setting->field_map ?: ($dynamic->monday_field_map ?? []);
+        if (empty($fieldMap)) {
             return ['status' => 'disabled', 'board_id' => $setting->board_id, 'new_items' => collect(), 'seen' => 0, 'message' => "Domain [{$domain}] is connected but has no columns mapped yet. Reconnect (auto-map) first."];
         }
 
@@ -92,8 +96,8 @@ class MondaySyncService
             $items = $items->merge($this->client->items($chunk->all()));
         }
 
-        // 4. Map items into the dynamic table. Only successfully mapped items
-        //    are recorded as 'imported'; failures stay candidates for retry.
+        // 4. Map items into the table. Only successfully mapped items are
+        //    recorded as 'imported'; failures stay candidates for retry.
         $mapper = app(MondayItemMapper::class);
         $imported = 0;
         $failed = 0;
@@ -102,7 +106,7 @@ class MondaySyncService
         if (! $dryRun) {
             foreach ($items as $item) {
                 $itemId = (string) ($item['id'] ?? '');
-                $ok = $mapper->mapItem($table, $item);
+                $ok = $mapper->mapItem($domain, $item);
 
                 $ok ? $imported++ : $failed++;
 

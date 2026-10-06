@@ -35,7 +35,7 @@ class MondayItemMapperTest extends TestCase
         $table = $this->makeTable();
         $mapper = app(MondayItemMapper::class);
 
-        $created = $mapper->autoCreateColumns($table, [
+        $created = $mapper->autoCreateColumns($table->key, [
             ['id' => 'status', 'title' => 'Status', 'type' => 'status', 'settings_str' => '{"labels":{"0":"New","1":"In Progress","2":"Done"}}'],
             ['id' => 'text9', 'title' => 'Cancel Count', 'type' => 'numbers'],
             ['id' => 'date4', 'title' => 'Due Date', 'type' => 'date'],
@@ -55,7 +55,7 @@ class MondayItemMapperTest extends TestCase
     {
         $table = $this->makeTable();
         $mapper = app(MondayItemMapper::class);
-        $mapper->autoCreateColumns($table, [
+        $mapper->autoCreateColumns($table->key, [
             ['id' => 'status', 'title' => 'Status', 'type' => 'status', 'settings_str' => '{"labels":{"0":"New","1":"In Progress","2":"Done"}}'],
             ['id' => 'numbers7', 'title' => 'Units', 'type' => 'numbers'],
             ['id' => 'date4', 'title' => 'Due Date', 'type' => 'date'],
@@ -66,7 +66,7 @@ class MondayItemMapperTest extends TestCase
         $unitsCol = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Units')->first();
         $dateCol = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Due Date')->first();
 
-        $ok = $mapper->mapItem($table, [
+        $ok = $mapper->mapItem($table->key, [
             'id' => '1001',
             'name' => 'MRI Unit',
             'updated_at' => '2026-09-02T00:00:00Z',
@@ -149,10 +149,13 @@ class MondayItemMapperTest extends TestCase
         ]);
 
         // 1. Connect the board through the page — should auto-create columns.
+        //    Backfill off: this test exercises the manual sync step below
+        //    (connect with backfill default-ON is covered by MondayCoreSyncTest).
         Livewire::actingAs($user)
             ->test(DynamicTable::class, ['table' => $table->key])
             ->call('openConnectBoard')
             ->set('connectBoardId', '123')
+            ->set('mondayBackfill', false)
             ->call('connectBoard');
 
         $this->assertSame('123', $table->fresh()->monday_board_id);
