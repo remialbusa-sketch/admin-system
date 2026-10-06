@@ -23,7 +23,9 @@ class MailCheckCommand extends Command
 
     public function handle(MailHealth $health): int
     {
-        $report = $health->inspect();
+        // CLI must always probe live — a cached verdict would defeat the
+        // point of running this as a monitoring check.
+        $report = $health->inspect(fresh: true);
 
         $this->line(sprintf(
             'driver=%s configured=%s sending=%s from=%s',

@@ -16,6 +16,9 @@ use RuntimeException;
  * Transport contract (see docs/monday-integration-and-cpanel-deployment.md §A2/A7):
  *   - Authorization header is the raw token (monday v2 does NOT use a Bearer prefix).
  *   - API-Version pinned so behaviour doesn't drift with releases.
+ *   - Request body: `variables` is always a JSON object — monday answers a
+ *     top-level [] with 400 INVALID_GRAPHQL_REQUEST (verified live 2026-10-07;
+ *     Http::fake does not catch payload-encoding bugs).
  *   - Retry/backoff on 429 (respects Retry-After) and 5xx.
  *   - 401 is FATAL (dead/expired token) — throws so callers stop the schedule.
  */
@@ -208,7 +211,13 @@ class MondayApiClient
                 'API-Version' => $this->apiVersion,
                 'Content-Type' => 'application/json',
             ])
-            ->post($this->apiUrl, ['query' => $query, 'variables' => $variables]);
+            // monday requires `variables` to be a JSON object: an empty PHP
+            // array would encode as [] and get HTTP 400
+            // INVALID_GRAPHQL_REQUEST (verified live 2026-10-07). Non-empty
+            // assoc arrays already encode as objects, so only the empty case
+            // needs the cast — it also keeps $request->data() arrays intact
+            // for Http::fake closures.
+            ->post($this->apiUrl, ['query' => $query, 'variables' => $variables === [] ? (object) $variables : $variables]);
 
         $attempt = 0;
         $response = null;

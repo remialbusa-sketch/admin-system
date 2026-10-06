@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use Illuminate\Support\Facades\App;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use Symfony\Component\Mailer\Transport;
 use Throwable;
@@ -15,20 +16,57 @@ use Throwable;
  *
  * MailHealth answers: "given the current env, will an outgoing email
  * actually reach a real inbox?" — by checking the mailer driver, the
- * required env vars, and a no-op SMTP handshake for the smtp driver.
+ * required env vars, and an SMTP handshake for the smtp driver.
  *
- * Cost: the smtp handshake opens a TCP connection to the host (with a
- * short timeout) but does NOT authenticate or send anything. On `log` /
- * `array` drivers the check is local-only. Safe to call from a UI render.
+ * Render-safe by construction (incident 2026-10-07: prod's outbound SMTP is
+ * firewalled, so the handshake used to block every Settings render and
+ * Livewire action for the full 60s default_socket_timeout):
+ *   1. smtp verdicts are cached (CACHE_TTL) so renders reuse them;
+ *   2. the live probe is capped at PROBE_TIMEOUT seconds, with the process
+ *      default restored in a finally.
+ * The handshake connects and authenticates but never sends a message. On
+ * `log` / `array` drivers the check is local-only. `mail:check` passes
+ * fresh: true to force a live probe.
  */
 class MailHealth
 {
+    /** Cache entry for smtp verdicts (the only branch that costs time). */
+    public const CACHE_KEY = 'mail-health.inspect';
+
+    /** How long an smtp verdict is reused across renders, in seconds. */
+    public const CACHE_TTL = 60;
+
+    /** Live-probe cap in seconds — a render never waits longer than this. */
+    public const PROBE_TIMEOUT = 5;
+
     /**
      * @return array{driver: string, configured: bool, sending: bool, reason: ?string, from: ?string}
      */
-    public function inspect(): array
+    public function inspect(bool $fresh = false): array
     {
         $driver = (string) config('mail.default');
+
+        if ($driver === 'smtp' && ! $fresh) {
+            $cached = Cache::get(self::CACHE_KEY);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
+        $report = $this->assess($driver);
+
+        if ($driver === 'smtp') {
+            Cache::put(self::CACHE_KEY, $report, self::CACHE_TTL);
+        }
+
+        return $report;
+    }
+
+    /**
+     * @return array{driver: string, configured: bool, sending: bool, reason: ?string, from: ?string}
+     */
+    private function assess(string $driver): array
+    {
         $from = config('mail.from.address');
         $env = App::environment();
 
@@ -96,7 +134,13 @@ class MailHealth
 
             // Best-effort: open a transport and let it try the handshake. If
             // the host is unreachable, the credentials are still wrong, or
-            // TLS is misconfigured, we get an actionable error string.
+            // TLS is misconfigured, we get an actionable error string. The
+            // socket cap keeps a firewalled host from stalling the caller —
+            // on 2026-10-07 every Settings render waited the full 60s
+            // default_socket_timeout. (DNS resolution is not governed by
+            // this ini; it is not part of the handshake.)
+            $previousTimeout = ini_set('default_socket_timeout', (string) self::PROBE_TIMEOUT);
+
             try {
                 $transport = Transport::fromDsn($this->buildDsn(), null);
                 $transport->start();
@@ -117,6 +161,10 @@ class MailHealth
                     'reason' => $this->normalizeSmtpError($exception->getMessage()),
                     'from' => is_string($from) ? $from : null,
                 ];
+            } finally {
+                if (is_string($previousTimeout)) {
+                    ini_set('default_socket_timeout', $previousTimeout);
+                }
             }
         }
 

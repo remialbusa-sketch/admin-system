@@ -182,4 +182,28 @@ class MondaySettingsTest extends TestCase
         $this->assertSame('Product Database', $boards[0]['name']);
         $this->assertSame('5028296070', $boards[0]['id']);
     }
+
+    public function test_boards_query_sends_variables_as_a_json_object(): void
+    {
+        // Live-API incident 2026-10-07: monday.com answers an empty PHP
+        // array (encoded as "variables":[]) with HTTP 400
+        // INVALID_GRAPHQL_REQUEST — it requires a JSON object ("variables":{}).
+        // Http::fake never validates the payload, so the bug reached prod
+        // (Test connection + board picker both failed). Pin the wire format.
+        config(['monday.token' => 't']);
+
+        $captured = null;
+        Http::fake([
+            'https://api.monday.com/v2' => function ($request) use (&$captured) {
+                $captured = $request;
+
+                return Http::response(['data' => ['boards' => []]]);
+            },
+        ]);
+
+        app(MondayApiClient::class)->boards();
+
+        $this->assertStringContainsString('"variables":{}', $captured->body());
+        $this->assertStringNotContainsString('"variables":[]', $captured->body());
+    }
 }
