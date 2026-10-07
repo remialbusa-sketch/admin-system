@@ -127,6 +127,10 @@ class MondayApiClient
      * fragments incl. mirror resolution) by id — used on the delta-scan path
      * and by the webhook job for a single newly created item.
      *
+     * monday's items(ids:) hard-caps at 25 ids and SILENTLY truncates larger
+     * requests (verified live 2026-10-07: 26/30/40 answer with 25) — callers
+     * must batch at ≤ 25 ids (MondaySyncService::BATCH_SIZE).
+     *
      * @param  array<int, int|string>  $itemIds
      * @return array<int, array<string, mixed>>
      */

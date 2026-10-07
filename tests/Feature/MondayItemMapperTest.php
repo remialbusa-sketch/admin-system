@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\UserRole;
 use App\Livewire\DynamicTable;
 use App\Models\CustomTableColumn;
+use App\Models\CustomTableColumnValue;
 use App\Models\DynamicRow;
 use App\Models\DynamicTable as DynamicTableModel;
 use App\Models\MondaySyncSetting;
@@ -308,5 +309,49 @@ class MondayItemMapperTest extends TestCase
             [['index' => 0, 'label' => 'IN-PROGRESS'], ['index' => 2, 'label' => 'COMPLETED']],
             $column->settings['options'],
         );
+    }
+
+    public function test_monday_checkbox_and_person_text_write_cells(): void
+    {
+        $table = $this->makeTable();
+        $mapper = app(MondayItemMapper::class);
+        $mapper->autoCreateColumns($table->key, [
+            ['id' => 'bool1', 'title' => 'Availability', 'type' => 'checkbox'],
+            ['id' => 'people0', 'title' => 'TSP', 'type' => 'people'],
+        ]);
+
+        $checkbox = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Availability')->firstOrFail();
+        $tsp = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'TSP')->firstOrFail();
+
+        // Live monday shapes (prod 2026-10-07): checkbox text is "v" when
+        // checked, and people cells carry display text (name or email), never
+        // local user ids — both used to throw in validate(), leaving the cell
+        // empty and the item permanently "failed".
+        $ok = $mapper->mapItem($table->key, [
+            'id' => '1002',
+            'name' => 'Chiller',
+            'updated_at' => null,
+            'column_values' => [
+                ['id' => 'bool1', 'text' => 'v', 'type' => 'checkbox'],
+                ['id' => 'people0', 'text' => 'Sherwin U. Montellin', 'type' => 'people'],
+            ],
+        ]);
+
+        $this->assertTrue($ok);
+
+        $row = DynamicRow::query()->where('table_key', $table->key)->where('source_record_id', '1002')->firstOrFail();
+
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $checkbox->id,
+            'row_id' => $row->id,
+            'value_number' => 1,
+        ]);
+
+        $value = CustomTableColumnValue::query()
+            ->where('custom_column_id', $tsp->id)
+            ->where('row_id', $row->id)
+            ->firstOrFail();
+        $this->assertSame(['Sherwin U. Montellin'], $value->value['user_names']);
+        $this->assertSame('Sherwin U. Montellin', $value->value_text);
     }
 }

@@ -8,6 +8,7 @@ use App\Models\MondaySyncSetting;
 use App\Support\MondayCoreTargets;
 use App\Support\MondaySettings;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -25,10 +26,12 @@ use Throwable;
 class MondaySyncService
 {
     /**
-     * Ids per items() call. monday accepts up to 500; 50 keeps each response
-     * small even for wide boards while staying at a handful of requests.
+     * Ids per items() call. monday's items(ids:) hard-caps at 25 and
+     * silently truncates larger requests (verified live 2026-10-07: requests
+     * of 26/30/40 all answer with 25) — never raise this without
+     * re-verifying against the live API.
      */
-    public const BATCH_SIZE = 50;
+    public const BATCH_SIZE = 25;
 
     public function __construct(protected MondayApiClient $client) {}
 
@@ -112,8 +115,9 @@ class MondaySyncService
         // 3+4. Fetch + import ONE BATCH AT A TIME: each batch is fetched,
         //    mapped and recorded on its own, so a failed batch never discards
         //    the others' work. Ids travel as a JSON array of at most
-        //    BATCH_SIZE entries (monday caps an items() call at 500; the
-        //    wire shape is guarded by MondayApiClient::wireVariables).
+        //    BATCH_SIZE entries (monday's items(ids:) cap of 25, live-verified
+        //    2026-10-07; the wire shape is guarded by
+        //    MondayApiClient::wireVariables).
         $mapper = app(MondayItemMapper::class);
         $items = collect();
         $imported = 0;
@@ -134,7 +138,24 @@ class MondaySyncService
                 $firstError ??= $exception;
                 $failed += count($ids);
 
+                Log::warning('monday: items batch fetch failed', [
+                    'domain' => $domain,
+                    'requested' => count($ids),
+                    'error' => $exception->getMessage(),
+                ]);
+
                 continue;
+            }
+
+            if (count($batchItems) < count($ids)) {
+                // monday truncated the response — the missing ids stay
+                // candidates for the next run; make the shortfall visible
+                // instead of silently under-counting forever.
+                Log::warning('monday: items batch came back short', [
+                    'domain' => $domain,
+                    'requested' => count($ids),
+                    'returned' => count($batchItems),
+                ]);
             }
 
             $batchesOk++;

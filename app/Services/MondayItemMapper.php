@@ -12,6 +12,7 @@ use App\Models\MondaySyncSetting;
 use App\Support\ImportOptionSeeder;
 use App\Support\MondayCoreTargets;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -318,8 +319,20 @@ class MondayItemMapper
                 $validated = $this->registry->resolve($column->type)->validate($raw, $column->settings ?? []);
 
                 $this->writeValue($rowId, $column, $validated);
-            } catch (Throwable) {
+            } catch (Throwable $exception) {
                 $ok = false;
+
+                // Never swallow silently: an unlogged cell failure is
+                // invisible in prod (the 2026-10-07 "missing fields" incident
+                // took three live probes to diagnose).
+                Log::warning('monday: cell value write failed', [
+                    'table' => $tableKey,
+                    'item_id' => $itemId,
+                    'column' => $column->name,
+                    'type' => $column->type,
+                    'monday_type' => $value['type'] ?? null,
+                    'error' => $exception->getMessage(),
+                ]);
             }
         }
 
@@ -365,6 +378,11 @@ class MondayItemMapper
      * scalar the registry can validate. The typed fragments returned by
      * items() already carry 'text' and the type-specific label/number/date; we
      * pass the display string and let each column type's validate() coerce it.
+     *
+     * Two monday shapes need translating here (the monday→registry boundary):
+     *   - checkbox: displays "v" when checked, never a boolean literal;
+     *   - people: display text (name/email) — accepted by the person type as
+     *     a display name, since monday person ids are not local user ids.
      */
     private function normalizeValue(string $mondayType, array $value): mixed
     {
@@ -372,6 +390,10 @@ class MondayItemMapper
 
         if ($text === null || $text === '' || $text === '{}') {
             return null;
+        }
+
+        if ($mondayType === 'checkbox') {
+            return in_array(strtolower(trim((string) $text)), ['false', 'no', '0', 'off'], true) ? null : true;
         }
 
         // Mirror values surface their resolved text in 'text' already.

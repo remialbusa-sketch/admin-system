@@ -96,6 +96,24 @@ class ColumnTypeRegistryTest extends TestCase
             ['user_ids' => [12, 18]],
             $registry->resolve('person')->validate(['user_ids' => [12, 18]]),
         );
+        // Display names (monday people cells, Excel name cells) are stored as
+        // user_names — numeric ids only ever refer to this app's own users.
+        $this->assertSame(
+            ['user_names' => ['Sherwin U. Montellin']],
+            $registry->resolve('person')->validate('Sherwin U. Montellin'),
+        );
+        $this->assertSame(
+            ['user_names' => ['Ana Cruz', 'Ben Santos']],
+            $registry->resolve('person')->validate(['Ana Cruz', 'Ben Santos']),
+        );
+        // The explicit user_ids contract stays numeric-only.
+        $threw = false;
+        try {
+            $registry->resolve('person')->validate(['user_ids' => ['not-an-id']]);
+        } catch (InvalidArgumentException) {
+            $threw = true;
+        }
+        $this->assertTrue($threw, 'Non-numeric entries under user_ids must be rejected.');
         $this->assertSame(
             ['file_ids' => [55, 56]],
             $registry->resolve('files')->validate(['file_ids' => [55, 56]]),

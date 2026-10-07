@@ -20,9 +20,11 @@ use Tests\TestCase;
  * Sync batching contract (prod incident 2026-10-07): Collection::chunk()
  * keeps source keys, so batch 2 of the backfill encoded its ids as a JSON
  * OBJECT and monday rejected the whole run before anything was mapped.
- * Requirements: JSON-array batches well under monday's 500-id cap, one batch
- * failing must not discard the others, candidates fetched oldest-first, and
- * the grid shows the newest rows first (server order, default id-desc).
+ * Requirements: JSON-array batches of at most 25 ids (monday's items(ids:)
+ * hard cap — verified live 2026-10-07: requests of 26/30/40 answer with 25,
+ * silently truncating larger ones), one batch failing must not discard the
+ * others, candidates fetched oldest-first, and the grid shows the newest rows
+ * first (server order, default id-desc).
  */
 class MondaySyncBatchTest extends TestCase
 {
@@ -109,18 +111,23 @@ class MondaySyncBatchTest extends TestCase
         $this->assertSame(120, $result['new']);
         $this->assertSame(120, $result['imported']);
 
-        // Well under monday's 500-id cap: 120 candidates = 3 batches (50/50/20).
-        $this->assertCount(3, $idBatches);
+        // monday's items(ids:) hard-caps at 25 ids per query (verified live
+        // 2026-10-07: requests of 26/30/40 all answer with 25) — 120
+        // candidates = 5 batches (25/25/25/25/20), none larger than 25.
+        $this->assertCount(5, $idBatches);
 
         foreach ($idBatches as $ids) {
             $this->assertTrue(array_is_list($ids), 'Batch ids must encode as a JSON array.');
+            $this->assertLessThanOrEqual(25, count($ids), 'A batch must never exceed monday\'s 25-id items() cap.');
         }
 
         // Oldest candidates first, regardless of the board's listing order.
         $oldestFirst = collect($items)->sortBy(fn (array $item): string => $item['created_at'])->pluck('id')->all();
-        $this->assertSame(array_slice($oldestFirst, 0, 50), $idBatches[0]);
-        $this->assertSame(array_slice($oldestFirst, 50, 50), $idBatches[1]);
-        $this->assertSame(array_slice($oldestFirst, 100, 20), $idBatches[2]);
+        $this->assertSame(array_slice($oldestFirst, 0, 25), $idBatches[0]);
+        $this->assertSame(array_slice($oldestFirst, 25, 25), $idBatches[1]);
+        $this->assertSame(array_slice($oldestFirst, 50, 25), $idBatches[2]);
+        $this->assertSame(array_slice($oldestFirst, 75, 25), $idBatches[3]);
+        $this->assertSame(array_slice($oldestFirst, 100, 20), $idBatches[4]);
 
         $this->assertSame(120, DynamicRow::query()->where('table_key', 'equipment')->count());
     }
@@ -142,7 +149,7 @@ class MondaySyncBatchTest extends TestCase
                 if (str_contains($query, 'query Items')) {
                     $itemCalls++;
 
-                    if ($itemCalls > 1) {
+                    if ($itemCalls === 2) {
                         return Http::response(['errors' => [['message' => 'Complexity budget exceeded']]]);
                     }
 
@@ -164,16 +171,18 @@ class MondaySyncBatchTest extends TestCase
 
         $result = app(MondaySyncService::class)->syncDomain('equipment');
 
+        // Batches are 25/25/10; the second one fails to fetch, so the first
+        // (25) and third (10) still land while its 25 ids count as failed.
         $this->assertSame('ok', $result['status']);
         $this->assertSame(60, $result['new']);
-        $this->assertSame(50, $result['imported']);
-        $this->assertSame(10, $result['failed']);
+        $this->assertSame(35, $result['imported']);
+        $this->assertSame(25, $result['failed']);
 
-        $this->assertSame(50, DynamicRow::query()->where('table_key', 'equipment')->count());
-        $this->assertSame(50, MondaySyncedItem::query()->where('domain', 'equipment')->where('state', 'imported')->count());
+        $this->assertSame(35, DynamicRow::query()->where('table_key', 'equipment')->count());
+        $this->assertSame(35, MondaySyncedItem::query()->where('domain', 'equipment')->where('state', 'imported')->count());
 
         // The failed batch was never recorded — it stays a candidate.
-        $this->assertSame(10, $result['new'] - MondaySyncedItem::query()->where('domain', 'equipment')->count());
+        $this->assertSame(25, $result['new'] - MondaySyncedItem::query()->where('domain', 'equipment')->count());
     }
 
     public function test_when_every_batch_fails_the_sync_still_fails_loudly(): void
