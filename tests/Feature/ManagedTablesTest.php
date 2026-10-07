@@ -2,14 +2,15 @@
 
 namespace Tests\Feature;
 
+use App\Livewire\HistoricalTsmsTable;
 use App\Livewire\InstalledProductsTable;
 use App\Livewire\ServiceRequestTable;
 use App\Livewire\TechnicalReportTable;
-use App\Livewire\HistoricalTsmsTable;
+use App\Models\Account;
+use App\Models\HistoricalTsmsReport;
 use App\Models\Installation;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalReport;
-use App\Models\HistoricalTsmsReport;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -21,7 +22,7 @@ class ManagedTablesTest extends TestCase
 
     public function test_installed_products_table_shows_only_approved_pdb_fields(): void
     {
-        $account = \App\Models\Account::create([
+        $account = Account::create([
             'source_system' => 'product_database',
             'source_record_id' => 'account-'.uniqid(),
             'customer_name' => 'Example Hospital',
@@ -36,6 +37,8 @@ class ManagedTablesTest extends TestCase
             'brand' => 'SYSMEX',
             'serial_number' => 'SN-001',
             'equipment_type' => 'Stand Alone',
+            'pms_frequency' => 'Quarterly',
+            'tsp_in_charge' => 'Joey Nichols Tumaroy',
             'raw_data' => ['annual_bu_charge' => '70000'],
         ]);
 
@@ -52,7 +55,7 @@ class ManagedTablesTest extends TestCase
 
     public function test_only_superadmin_can_edit_installed_products(): void
     {
-        $account = \App\Models\Account::create([
+        $account = Account::create([
             'source_system' => 'product_database',
             'source_record_id' => 'account-'.uniqid(),
             'customer_name' => 'Example Hospital',
@@ -85,6 +88,7 @@ class ManagedTablesTest extends TestCase
         ServiceRequest::create([
             'source_system' => 'executive_dashboard',
             'source_record_id' => 'SR-'.uniqid(),
+            'service_request_number' => 'SR-9001',
             'service_request_code' => 'SR-9001',
             'customer_name' => 'Test Customer',
         ]);

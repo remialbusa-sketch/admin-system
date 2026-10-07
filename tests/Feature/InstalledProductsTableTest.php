@@ -69,6 +69,8 @@ class InstalledProductsTableTest extends TestCase
             'brand' => 'SYSMEX',
             'serial_number' => 'SN-001',
             'equipment_type' => 'Stand Alone',
+            'pms_frequency' => 'Quarterly',
+            'tsp_in_charge' => 'Joey Nichols Tumaroy',
             'raw_data' => ['annual_bu_charge' => '70000'],
         ]);
     }

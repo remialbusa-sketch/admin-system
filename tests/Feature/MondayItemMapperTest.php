@@ -354,4 +354,50 @@ class MondayItemMapperTest extends TestCase
         $this->assertSame(['Sherwin U. Montellin'], $value->value['user_names']);
         $this->assertSame('Sherwin U. Montellin', $value->value_text);
     }
+
+    public function test_monday_mirror_cells_read_display_value_when_text_is_null(): void
+    {
+        $table = $this->makeTable();
+        $mapper = app(MondayItemMapper::class);
+        $mapper->autoCreateColumns($table->key, [
+            ['id' => 'lookup1', 'title' => 'Brand', 'type' => 'lookup'],
+            ['id' => 'lookup2', 'title' => 'Model', 'type' => 'lookup'],
+        ]);
+
+        $brand = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Brand')->firstOrFail();
+        $model = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Model')->firstOrFail();
+
+        // Live monday shapes (prod 2026-10-07): lookup columns come back as
+        // type "mirror" with text=null — the resolved value only exists in
+        // display_value (the MirrorValue fragment items() already fetches).
+        // Reading only 'text' cleared these cells on every sync: Brand was
+        // 0/4610 while 484/500 sampled items carry a display_value.
+        $ok = $mapper->mapItem($table->key, [
+            'id' => '2001',
+            'name' => 'SN-00037',
+            'updated_at' => null,
+            'column_values' => [
+                ['id' => 'lookup1', 'text' => null, 'type' => 'mirror', 'display_value' => 'SYSMEX'],
+                ['id' => 'lookup2', 'text' => null, 'type' => 'mirror'], // nothing to fall back to
+            ],
+        ]);
+
+        $this->assertTrue($ok);
+
+        $row = DynamicRow::query()->where('table_key', $table->key)->where('source_record_id', '2001')->firstOrFail();
+
+        $brandValue = CustomTableColumnValue::query()
+            ->where('custom_column_id', $brand->id)
+            ->where('row_id', $row->id)
+            ->firstOrFail();
+        $this->assertSame('SYSMEX', $brandValue->value_text);
+
+        // A mirror with no display value anywhere stays an empty write —
+        // the fallback must never invent data.
+        $modelValue = CustomTableColumnValue::query()
+            ->where('custom_column_id', $model->id)
+            ->where('row_id', $row->id)
+            ->firstOrFail();
+        $this->assertEmpty($modelValue->value);
+    }
 }

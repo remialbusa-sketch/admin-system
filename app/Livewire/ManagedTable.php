@@ -23,6 +23,7 @@ use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
 use Maatwebsite\Excel\Facades\Excel;
+use Throwable;
 
 abstract class ManagedTable extends Component
 {
@@ -1152,10 +1153,32 @@ abstract class ManagedTable extends Component
         return $options;
     }
 
+    /**
+     * Core columns the data never fills render as permanent empty headers
+     * next to their filled custom twins (the monday sync writes only the
+     * title field into core columns — 11 of 12 were blank on
+     * service-requests, 2026-10-07). Hide core columns with no values
+     * anywhere once the table has rows; custom columns and empty tables
+     * never hide. Memoized: the grid asks for allColumns() several times
+     * per request.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $allColumnsCache = null;
+
     public function allColumns(): array
     {
-        $columns = array_merge(
+        if ($this->allColumnsCache !== null) {
+            return $this->allColumnsCache;
+        }
+
+        $core = array_filter(
             array_map(fn (array $column): array => $column + ['custom' => false, 'editable' => true], $this->columns()),
+            fn (array $column): bool => $this->coreColumnHasValues((string) $column['key']),
+        );
+
+        $columns = array_merge(
+            array_values($core),
             $this->customColumnDefinitions(),
         );
 
@@ -1179,7 +1202,38 @@ abstract class ManagedTable extends Component
             $column['optionIds'] = $extra->pluck('id', 'label')->all();
         }
 
-        return $columns;
+        return $this->allColumnsCache = $columns;
+    }
+
+    /**
+     * Does this core column hold a value in ANY row (unfiltered — the probe
+     * must not follow the active search/filter state)? Relation keys
+     * ("account.customer_name") probe through whereHas; a probe that cannot
+     * run fails open so a column is never hidden by an error.
+     */
+    private function coreColumnHasValues(string $key): bool
+    {
+        if (! $this->model()::query()->exists()) {
+            // Empty table: nothing is "always empty" yet — show everything.
+            return true;
+        }
+
+        try {
+            $query = $this->model()::query();
+
+            if (str_contains($key, '.')) {
+                $segments = explode('.', $key);
+                $column = array_pop($segments);
+
+                return $query
+                    ->whereHas(implode('.', $segments), fn ($q) => $q->whereNotNull($column)->where($column, '<>', ''))
+                    ->exists();
+            }
+
+            return $query->whereNotNull($key)->where($key, '<>', '')->exists();
+        } catch (Throwable) {
+            return true;
+        }
     }
 
     /**

@@ -50,7 +50,11 @@ class ServiceRequestTable extends ManagedTable
     public function columns(): array
     {
         return [
-            ['key' => 'service_request_code', 'label' => 'Service Request #', 'type' => 'text'],
+            // "Service Request #" reads service_request_number: both import
+            // paths write it (monday title field + workbook title), while
+            // service_request_code is an optional workbook-only field that is
+            // always blank on monday-sourced rows.
+            ['key' => 'service_request_number', 'label' => 'Service Request #', 'type' => 'text'],
             ['key' => 'customer_name', 'label' => 'Customer Name', 'type' => 'text'],
             ['key' => 'ticket_status', 'label' => 'Ticket Status', 'type' => 'select', 'options' => $this->statusOptions()],
             ['key' => 'group_status', 'label' => 'Group Status', 'type' => 'text'],
