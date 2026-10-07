@@ -124,8 +124,9 @@ class MondayApiClient
 
     /**
      * Refetch full items (id, name, timestamps, column values with typed
-     * fragments incl. mirror resolution) by id — used on the delta-scan path
-     * and by the webhook job for a single newly created item.
+     * fragments incl. mirror and board-relation resolution) by id — used on
+     * the delta-scan path and by the webhook job for a single newly created
+     * item.
      *
      * monday's items(ids:) hard-caps at 25 ids and SILENTLY truncates larger
      * requests (verified live 2026-10-07: 26/30/40 answer with 25) — callers
@@ -151,6 +152,7 @@ class MondayApiClient
                   ... on NumbersValue  { number }
                   ... on DropdownValue { text }
                   ... on MirrorValue   { display_value }
+                  ... on BoardRelationValue { display_value }
                 }
               }
             }

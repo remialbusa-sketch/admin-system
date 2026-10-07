@@ -235,4 +235,31 @@ class MondaySettingsTest extends TestCase
         );
         $this->assertSame(['2834964040', '2835497112'], $body['variables']['ids']);
     }
+
+    public function test_items_query_fetches_board_relation_display_value(): void
+    {
+        // Customer Name incident 2026-10-07: board_relation columns return
+        // EMPTY at the ColumnValue interface level (text/value = "") — the
+        // linked names only exist on the BoardRelationValue type fragment
+        // (display_value = "AppleOne Brokenshire Medical Center", 197/200
+        // items live). Without the fragment the mapper sees no value and
+        // clears the cell, which is why "Customer Name" stayed empty while
+        // being fully populated on the board. Http::fake never validates the
+        // query shape, so pin it on the raw body.
+        config(['monday.token' => 't']);
+
+        $captured = null;
+        Http::fake([
+            'https://api.monday.com/v2' => function ($request) use (&$captured) {
+                $captured = $request;
+
+                return Http::response(['data' => ['items' => []]]);
+            },
+        ]);
+
+        app(MondayApiClient::class)->items(['2834964040']);
+
+        $this->assertStringContainsString('BoardRelationValue', $captured->body());
+        $this->assertStringContainsString('display_value', $captured->body());
+    }
 }

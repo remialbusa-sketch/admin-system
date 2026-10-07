@@ -388,9 +388,11 @@ class MondayItemMapper
     {
         $text = $value['text'] ?? null;
 
-        // Mirror/lookup columns never carry 'text' — the resolved value
-        // arrives in display_value via the MirrorValue fragment items()
-        // fetches (live prod 2026-10-07: text=null, display_value="SYSMEX").
+        // Mirror/lookup and board_relation columns never carry 'text' — the
+        // resolved value arrives in display_value via the type fragments
+        // items() fetches (live prod 2026-10-07: mirror text=null,
+        // display_value="SYSMEX"; board_relation text="" at the interface
+        // level, display_value="AppleOne Brokenshire Medical Center").
         // Reading only 'text' cleared these cells on every sync.
         if (($text === null || $text === '' || $text === '{}') && isset($value['display_value'])) {
             $text = $value['display_value'];
