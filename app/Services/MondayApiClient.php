@@ -19,6 +19,11 @@ use RuntimeException;
  *   - Request body: `variables` is always a JSON object — monday answers a
  *     top-level [] with 400 INVALID_GRAPHQL_REQUEST (verified live 2026-10-07;
  *     Http::fake does not catch payload-encoding bugs).
+ *   - List-typed variables must encode as JSON ARRAYS: keyed PHP arrays
+ *     (Collection::chunk/slice keep source keys) are reindexed by
+ *     wireVariables() before encoding — monday rejects an object there
+ *     ("ID cannot represent a non-string..." — prod sync incident
+ *     2026-10-07).
  *   - Retry/backoff on 429 (respects Retry-After) and 5xx.
  *   - 401 is FATAL (dead/expired token) — throws so callers stop the schedule.
  */
@@ -205,6 +210,8 @@ class MondayApiClient
             throw new MondayApiException('monday.com API token is not configured (Settings → monday.com, or MONDAY_API_TOKEN).');
         }
 
+        $variables = $this->wireVariables($variables);
+
         $request = fn (): Response => Http::timeout($this->timeout)
             ->withHeaders([
                 'Authorization' => $this->token,
@@ -276,6 +283,39 @@ class MondayApiClient
         }
 
         return $body;
+    }
+
+    /**
+     * Normalize variables for the wire. monday expects JSON arrays for
+     * list-typed variables, but a PHP array that was sliced, filtered or
+     * chunked keeps its source keys (Collection::chunk(100) → keys
+     * "100".."199") and json_encode turns it into a JSON OBJECT, which
+     * monday rejects ("ID cannot represent a non-string and non-integer
+     * value" — prod sync incident 2026-10-07). GraphQL objects always carry
+     * string keys, so an int-keyed non-list array is always such an
+     * artifact: reindex it, recursing through nested values.
+     *
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
+     */
+    private function wireVariables(array $variables): array
+    {
+        return array_map(fn (mixed $value): mixed => $this->wireValue($value), $variables);
+    }
+
+    private function wireValue(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $keys = array_keys($value);
+
+        if (! array_is_list($value) && $keys !== [] && array_filter($keys, 'is_int') === $keys) {
+            $value = array_values($value);
+        }
+
+        return array_map(fn (mixed $item): mixed => $this->wireValue($item), $value);
     }
 
     /**

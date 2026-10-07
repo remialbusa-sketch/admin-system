@@ -206,4 +206,33 @@ class MondaySettingsTest extends TestCase
         $this->assertStringContainsString('"variables":{}', $captured->body());
         $this->assertStringNotContainsString('"variables":[]', $captured->body());
     }
+
+    public function test_items_query_sends_ids_as_a_json_array_even_when_keyed(): void
+    {
+        // Sync incident 2026-10-07: Collection::chunk() keeps the source
+        // keys, so backfill batch 2 (keys "100".."199") encoded its ids as
+        // a JSON OBJECT and monday answered "ID cannot represent a
+        // non-string and non-integer value" — aborting the whole run. List-
+        // typed variables must always reach monday as JSON arrays.
+        config(['monday.token' => 't']);
+
+        $captured = null;
+        Http::fake([
+            'https://api.monday.com/v2' => function ($request) use (&$captured) {
+                $captured = $request;
+
+                return Http::response(['data' => ['items' => []]]);
+            },
+        ]);
+
+        app(MondayApiClient::class)->items([100 => '2834964040', 101 => '2835497112']);
+
+        $body = json_decode($captured->body(), true);
+
+        $this->assertTrue(
+            array_is_list($body['variables']['ids'] ?? null),
+            'variables.ids must encode as a JSON array, even from a keyed PHP array.',
+        );
+        $this->assertSame(['2834964040', '2835497112'], $body['variables']['ids']);
+    }
 }

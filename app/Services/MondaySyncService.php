@@ -8,20 +8,28 @@ use App\Models\MondaySyncSetting;
 use App\Support\MondayCoreTargets;
 use App\Support\MondaySettings;
 use Illuminate\Support\Collection;
+use Throwable;
 
 /**
  * New-item discovery for the monday.com integration (A7) + live write (M-DC).
  * "New" = an item id we have not recorded in monday_synced_items yet. Each run
- * reads the board's full id list (cheap, paginated), diffs against what we've
- * seen, refetches only the unseen ids, records them, then maps them into the
- * domain — a dynamic table (DynamicRow) or a core domain table (fixed model,
- * see MondayCoreTargets) — via MondayItemMapper. Idempotent and toggle-aware:
- * if the integration is globally disabled (Settings → monday.com), the
- * domain's setting is off, or no board is connected, nothing is fetched and
- * no quota is spent.
+ * reads the board's full item list (cheap, paginated), diffs against what we've
+ * seen, refetches only the unseen ids — OLDEST first, one small JSON-array
+ * batch at a time (a failed batch never discards the others' work) — records
+ * them, then maps them into the domain — a dynamic table (DynamicRow) or a
+ * core domain table (fixed model, see MondayCoreTargets) — via
+ * MondayItemMapper. Idempotent and toggle-aware: if the integration is
+ * globally disabled (Settings → monday.com), the domain's setting is off, or
+ * no board is connected, nothing is fetched and no quota is spent.
  */
 class MondaySyncService
 {
+    /**
+     * Ids per items() call. monday accepts up to 500; 50 keeps each response
+     * small even for wide boards while staying at a handful of requests.
+     */
+    public const BATCH_SIZE = 50;
+
     public function __construct(protected MondayApiClient $client) {}
 
     /**
@@ -65,17 +73,18 @@ class MondaySyncService
             return ['status' => 'disabled', 'board_id' => $setting->board_id, 'new_items' => collect(), 'seen' => 0, 'message' => "Domain [{$domain}] is connected but has no columns mapped yet. Reconnect (auto-map) first."];
         }
 
-        // 1. Read the board's full id list (lightweight; no column values).
-        $allIds = collect();
+        // 1. Read the board's full item list (lightweight; no column values).
+        $allItems = collect();
         $cursor = null;
 
         do {
             $page = $this->client->itemsPage($boardId, $cursor);
-            $allIds = $allIds->merge(collect($page['items'])->pluck('id'));
+            $allItems = $allItems->merge(collect($page['items']));
             $cursor = $page['cursor'] ?: null;
         } while ($cursor !== null);
 
-        $allIds = $allIds->unique()->values();
+        $allItems = $allItems->unique('id')->values();
+        $allIds = $allItems->pluck('id');
 
         // 2. Diff against what we've already successfully imported. Failed
         //    items stay candidates so the next run retries them (never silently
@@ -87,24 +96,55 @@ class MondaySyncService
             ->pluck('item_id')
             ->flip();
 
-        $candidateIds = $allIds->reject(fn (string $id): bool => $doneIds->has($id))->map('strval')->values();
+        // Candidates in board-age order — OLDEST first — so a run that dies
+        // halfway leaves the oldest, most settled records in place, and the
+        // grid's default newest-first order fills in from the top as the
+        // newer batches land.
+        $candidateIds = $allItems
+            ->reject(fn (array $item): bool => $doneIds->has((string) ($item['id'] ?? '')))
+            ->sortBy(fn (array $item): array => [
+                ($item['created_at'] ?? '') === '' ? '9999-12-31T23:59:59+00:00' : (string) $item['created_at'],
+                (float) ($item['id'] ?? 0),
+            ])
+            ->map(fn (array $item): string => (string) $item['id'])
+            ->values();
 
-        // 3. Refetch candidates (batched, as strings — monday accepts string
-        //    ids and they avoid any integer-coercion surprises).
-        $items = collect();
-        foreach ($candidateIds->chunk(100) as $chunk) {
-            $items = $items->merge($this->client->items($chunk->all()));
-        }
-
-        // 4. Map items into the table. Only successfully mapped items are
-        //    recorded as 'imported'; failures stay candidates for retry.
+        // 3+4. Fetch + import ONE BATCH AT A TIME: each batch is fetched,
+        //    mapped and recorded on its own, so a failed batch never discards
+        //    the others' work. Ids travel as a JSON array of at most
+        //    BATCH_SIZE entries (monday caps an items() call at 500; the
+        //    wire shape is guarded by MondayApiClient::wireVariables).
         $mapper = app(MondayItemMapper::class);
+        $items = collect();
         $imported = 0;
         $failed = 0;
+        $batchesOk = 0;
+        $firstError = null;
 
-        // Dry-run is report-only: nothing is mapped or recorded.
-        if (! $dryRun) {
-            foreach ($items as $item) {
+        foreach ($candidateIds->chunk(self::BATCH_SIZE) as $chunk) {
+            $ids = $chunk->values()->all();
+
+            try {
+                $batchItems = collect($this->client->items($ids));
+            } catch (MondayRateLimitException $exception) {
+                // Global quota — the scheduler honours retryAfter; further
+                // batches in this run would only burn more budget.
+                throw $exception;
+            } catch (Throwable $exception) {
+                $firstError ??= $exception;
+                $failed += count($ids);
+
+                continue;
+            }
+
+            $batchesOk++;
+            $items = $items->merge($batchItems);
+
+            if ($dryRun) {
+                continue; // report-only: fetched, never mapped or recorded
+            }
+
+            foreach ($batchItems as $item) {
                 $itemId = (string) ($item['id'] ?? '');
                 $ok = $mapper->mapItem($domain, $item);
 
@@ -115,6 +155,12 @@ class MondaySyncService
                     ['state' => $ok ? 'imported' : 'failed', 'last_seen_at' => now()],
                 );
             }
+        }
+
+        // Every batch failed (dead token, payload error, network down): fail
+        // loudly instead of reporting a "done" sync that imported nothing.
+        if ($batchesOk === 0 && $firstError !== null) {
+            throw $firstError;
         }
 
         if (! $dryRun) {
