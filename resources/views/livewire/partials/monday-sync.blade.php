@@ -51,6 +51,12 @@
                     <x-mary-icon name="o-link" class="h-4 w-4" />
                     {{ $monday['mondayBoardId'] ? 'Change board' : 'Connect board' }}
                 </button>
+                @if ($monday['mondayBoardId'])
+                    <button type="button" wire:click="openMapColumns" class="admin-secondary-button">
+                        <x-mary-icon name="o-table-cells" class="h-4 w-4" />
+                        Map columns
+                    </button>
+                @endif
                 <button
                     type="button"
                     wire:click="syncNow"
@@ -141,6 +147,61 @@
             <button type="submit" class="admin-primary-button" wire:loading.attr="disabled" wire:target="connectBoard">
                 <span wire:loading.remove wire:target="connectBoard">Connect</span>
                 <span wire:loading wire:target="connectBoard">Connecting…</span>
+            </button>
+        </div>
+    </form>
+</x-admin.modal>
+
+<x-admin.modal
+    name="map-columns"
+    title="Map board columns to this table"
+    description="Choose which table column each monday.com column feeds. Unmapped board columns are skipped on every pull; changes take effect on the next sync."
+    size="lg"
+>
+    <form wire:submit="saveColumnMap" class="space-y-4">
+        @if ($monday['mondayMapColumns'] === [])
+            <p class="rounded-md border border-base-300 bg-base-200/50 px-3 py-2 text-xs text-base-content/60">
+                No board columns loaded — connect a board first.
+            </p>
+        @else
+            <div class="max-h-[60vh] overflow-y-auto rounded-md border border-base-300">
+                <table class="table table-xs w-full">
+                    <thead>
+                        <tr class="text-base-content/60">
+                            <th>monday column</th>
+                            <th>Type</th>
+                            <th class="w-2/5">→ this table's column</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($monday['mondayMapColumns'] as $index => $row)
+                            <tr>
+                                <td class="font-semibold">{{ $row['title'] }}</td>
+                                <td><span class="badge badge-ghost badge-sm">{{ $row['type'] !== '' ? $row['type'] : 'text' }}</span></td>
+                                <td>
+                                    <select wire:model="mapColumns.{{ $index }}.local" class="admin-control w-full">
+                                        <option value="">— Don't sync —</option>
+                                        @foreach ($monday['mondayTableColumns'] as $column)
+                                            <option value="{{ $column['id'] }}">{{ $column['name'] }}</option>
+                                        @endforeach
+                                        <option value="__new__">+ Create new column…</option>
+                                    </select>
+                                    @if ($row['local'] === '__new__')
+                                        <input type="text" wire:model="mapColumns.{{ $index }}.newName" class="admin-control mt-1.5 w-full" placeholder="New column name">
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        @endif
+
+        <div class="flex items-center justify-end gap-2 border-t border-base-300 pt-4">
+            <button type="button" x-on:click="$dispatch('close-modal', { name: 'map-columns' })" class="admin-secondary-button">Cancel</button>
+            <button type="submit" class="admin-primary-button" wire:loading.attr="disabled" wire:target="saveColumnMap">
+                <span wire:loading.remove wire:target="saveColumnMap">Save mapping</span>
+                <span wire:loading wire:target="saveColumnMap">Saving…</span>
             </button>
         </div>
     </form>

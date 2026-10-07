@@ -83,8 +83,9 @@ class MondayItemMapper
     }
 
     /**
-     * Auto-create missing columns on the domain from the board's real columns
-     * and persist the field map (monday column id -> custom column id).
+     * Map the board's real columns onto this table — creating the missing
+     * ones — and persist the field map (monday column id -> custom column
+     * id). Existing entries are kept; board columns win on conflict.
      *
      * @param  array<int, array{id: string, title: string, type: string}>  $boardColumns
      */
@@ -92,15 +93,7 @@ class MondayItemMapper
     {
         $createdBy ??= auth()->user()?->id;
 
-        $existing = CustomTableColumn::query()
-            ->withTrashed()
-            ->where('table_key', $tableKey)
-            ->get()
-            ->keyBy(fn (CustomTableColumn $column): string => $this->nameKey($column->name));
-
-        $nextPosition = (int) CustomTableColumn::query()
-            ->where('table_key', $tableKey)
-            ->max('position') + 1;
+        $known = $this->columnsByName($tableKey);
 
         $fieldMap = [];
         $created = 0;
@@ -108,62 +101,104 @@ class MondayItemMapper
         foreach ($boardColumns as $column) {
             $id = (string) ($column['id'] ?? '');
             $title = trim((string) ($column['title'] ?? ''));
-            $type = (string) ($column['type'] ?? 'text');
 
             if ($id === '' || $title === '') {
                 continue;
             }
 
-            // Map onto an existing column instead of duplicating it. The
-            // unique key (table_key, name) is case-insensitive in MySQL and
-            // counts soft-deleted rows, so the lookup must be too: match on
-            // a lowercased key, trashed rows included (restored — the board
-            // wants the column live again).
-            $key = $this->nameKey($title);
-            $existingColumn = $existing->get($key);
+            $local = $this->resolveColumn($tableKey, $column, $createdBy, $known);
 
-            if ($existingColumn !== null) {
-                if ($existingColumn->trashed()) {
-                    $existingColumn->restore();
-                }
+            $fieldMap[$id] = $local->id;
 
-                $fieldMap[$id] = $existingColumn->id;
-
-                continue;
+            if ($local->wasRecentlyCreated) {
+                $created++;
             }
-
-            $registryType = $this->registryTypeFor($type);
-            $newColumn = CustomTableColumn::create([
-                'table_key' => $tableKey,
-                'name' => $title,
-                'type' => $registryType,
-                'settings' => $this->defaultSettings($registryType, $this->parseOptions((string) ($column['settings_str'] ?? ''), $registryType)),
-                'position' => $nextPosition++,
-                'created_by' => $createdBy,
-            ]);
-
-            $existing->put($key, $newColumn);
-            $fieldMap[$id] = $newColumn->id;
-            $created++;
         }
 
-        // Canonical map home: monday_sync_settings.field_map (works for core
-        // and dynamic domains alike). Merge with any existing entries (the
-        // owner may have mapped extra columns by hand); board columns win.
         $setting = MondaySyncSetting::forDomain($tableKey);
-        $setting->update([
-            'field_map' => array_merge($setting->field_map ?? [], $fieldMap),
-        ]);
-
-        // Legacy mirror: dynamic tables keep their registry map in sync so
-        // older readers (TablesList display, pre-field_map sync rows) work.
-        if ($table = DynamicTable::query()->where('key', $tableKey)->first()) {
-            $table->update([
-                'monday_field_map' => array_merge($table->monday_field_map ?? [], $fieldMap),
-            ]);
-        }
+        $this->persistFieldMap($tableKey, array_merge($setting->field_map ?? [], $fieldMap));
 
         return $created;
+    }
+
+    /**
+     * Resolve ONE board column onto this table: reuse the column with the
+     * same name or create it from the board column's type + dropdown
+     * options. Shared by the connect-time auto-map and the Map-columns
+     * editor so the two paths cannot drift.
+     *
+     * @param  array{title?: string, type?: string, settings_str?: string}  $boardColumn
+     */
+    public function ensureColumn(string $tableKey, array $boardColumn, ?int $createdBy = null): CustomTableColumn
+    {
+        return $this->resolveColumn($tableKey, $boardColumn, $createdBy, $this->columnsByName($tableKey));
+    }
+
+    /**
+     * Persist the FULL field map for a domain: canonical home
+     * (monday_sync_settings.field_map) plus the dynamic table's legacy
+     * mirror, kept equal to it so the two can never disagree.
+     */
+    public function persistFieldMap(string $tableKey, array $fieldMap): void
+    {
+        MondaySyncSetting::forDomain($tableKey)->update(['field_map' => $fieldMap]);
+
+        if ($table = DynamicTable::query()->where('key', $tableKey)->first()) {
+            $table->update(['monday_field_map' => $fieldMap]);
+        }
+    }
+
+    /**
+     * Map onto an existing column instead of duplicating it. The unique key
+     * (table_key, name) is case-insensitive in MySQL and counts soft-deleted
+     * rows, so the lookup must be too: match on a lowercased key, trashed
+     * rows included (restored — the board wants the column live again).
+     *
+     * @param  Collection<string, CustomTableColumn>  $known  nameKey => column; a created column is added so duplicate board titles map instead of colliding.
+     */
+    private function resolveColumn(string $tableKey, array $boardColumn, ?int $createdBy, Collection $known): CustomTableColumn
+    {
+        $title = trim((string) ($boardColumn['title'] ?? ''));
+        $key = $this->nameKey($title);
+
+        $existingColumn = $known->get($key);
+
+        if ($existingColumn !== null) {
+            if ($existingColumn->trashed()) {
+                $existingColumn->restore();
+            }
+
+            return $existingColumn;
+        }
+
+        $registryType = $this->registryTypeFor((string) ($boardColumn['type'] ?? 'text'));
+        $newColumn = CustomTableColumn::create([
+            'table_key' => $tableKey,
+            'name' => $title,
+            'type' => $registryType,
+            'settings' => $this->defaultSettings($registryType, $this->parseOptions((string) ($boardColumn['settings_str'] ?? ''), $registryType)),
+            'position' => (int) CustomTableColumn::query()->where('table_key', $tableKey)->max('position') + 1,
+            'created_by' => $createdBy,
+        ]);
+
+        $known->put($key, $newColumn);
+
+        return $newColumn;
+    }
+
+    /**
+     * All of the table's columns keyed by nameKey() — trashed rows included,
+     * because the unique index counts them.
+     *
+     * @return Collection<string, CustomTableColumn>
+     */
+    private function columnsByName(string $tableKey): Collection
+    {
+        return CustomTableColumn::query()
+            ->withTrashed()
+            ->where('table_key', $tableKey)
+            ->get()
+            ->keyBy(fn (CustomTableColumn $column): string => $this->nameKey($column->name));
     }
 
     /**
