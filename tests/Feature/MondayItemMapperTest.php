@@ -226,4 +226,87 @@ class MondayItemMapperTest extends TestCase
         // Sync status was refreshed.
         $this->assertNotNull(MondaySyncSetting::forDomain('fleet')->last_synced_at);
     }
+
+    public function test_auto_create_columns_matches_existing_names_case_insensitively(): void
+    {
+        $table = $this->makeTable('service-requests');
+        $brand = CustomTableColumn::create([
+            'table_key' => 'service-requests',
+            'name' => 'Brand',
+            'type' => 'text',
+            'position' => 0,
+        ]);
+
+        // The real board shape: a mirror "Brand" AND a dropdown "BRAND" next
+        // to the locally imported "Brand" — the unique key is case-insensitive
+        // in MySQL, so the exact-match lookup must be too.
+        $created = app(MondayItemMapper::class)->autoCreateColumns('service-requests', [
+            ['id' => 'mirror1', 'title' => 'Brand', 'type' => 'mirror'],
+            ['id' => 'text9', 'title' => 'BRAND', 'type' => 'dropdown', 'settings_str' => '{"labels":[{"id":1,"name":"AEONMED"}]}'],
+        ]);
+
+        $this->assertSame(0, $created);
+        $this->assertSame(1, CustomTableColumn::query()->where('table_key', 'service-requests')->count());
+
+        $map = $table->fresh()->monday_field_map;
+        $this->assertSame($brand->id, $map['mirror1']);
+        $this->assertSame($brand->id, $map['text9']);
+    }
+
+    public function test_auto_create_columns_restores_a_trashed_column_with_the_same_name(): void
+    {
+        $table = $this->makeTable('service-requests');
+        $brand = CustomTableColumn::create([
+            'table_key' => 'service-requests',
+            'name' => 'Brand',
+            'type' => 'text',
+            'position' => 0,
+        ]);
+        $brand->delete();
+
+        // The unique index counts soft-deleted rows, so a live-only lookup
+        // would miss and the insert would blow up with 1062.
+        $created = app(MondayItemMapper::class)->autoCreateColumns('service-requests', [
+            ['id' => 'text9', 'title' => 'Brand', 'type' => 'text'],
+        ]);
+
+        $this->assertSame(0, $created);
+        $this->assertNotNull($brand->fresh());
+        $this->assertSame($brand->id, $table->fresh()->monday_field_map['text9']);
+    }
+
+    public function test_dropdown_options_parse_monday_list_shaped_labels(): void
+    {
+        $table = $this->makeTable();
+
+        app(MondayItemMapper::class)->autoCreateColumns($table->key, [
+            ['id' => 'dd1', 'title' => 'Brand', 'type' => 'dropdown',
+                'settings_str' => '{"labels":[{"id":1,"name":"AEONMED"},{"id":2,"name":"GE Healthcare"}]}'],
+        ]);
+
+        $column = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Brand')->firstOrFail();
+
+        $this->assertSame(
+            [['index' => 0, 'label' => 'AEONMED'], ['index' => 1, 'label' => 'GE Healthcare']],
+            $column->settings['options'],
+        );
+        $this->assertTrue($column->settings['multi']);
+    }
+
+    public function test_status_options_drop_blank_labels(): void
+    {
+        $table = $this->makeTable();
+
+        app(MondayItemMapper::class)->autoCreateColumns($table->key, [
+            ['id' => 'status', 'title' => 'Ticket Status', 'type' => 'status',
+                'settings_str' => '{"labels":{"0":"IN-PROGRESS","1":"","2":"COMPLETED"}}'],
+        ]);
+
+        $column = CustomTableColumn::query()->where('table_key', $table->key)->where('name', 'Ticket Status')->firstOrFail();
+
+        $this->assertSame(
+            [['index' => 0, 'label' => 'IN-PROGRESS'], ['index' => 2, 'label' => 'COMPLETED']],
+            $column->settings['options'],
+        );
+    }
 }

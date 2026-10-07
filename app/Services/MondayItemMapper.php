@@ -93,9 +93,10 @@ class MondayItemMapper
         $createdBy ??= auth()->user()?->id;
 
         $existing = CustomTableColumn::query()
+            ->withTrashed()
             ->where('table_key', $tableKey)
             ->get()
-            ->keyBy('name');
+            ->keyBy(fn (CustomTableColumn $column): string => $this->nameKey($column->name));
 
         $nextPosition = (int) CustomTableColumn::query()
             ->where('table_key', $tableKey)
@@ -113,10 +114,20 @@ class MondayItemMapper
                 continue;
             }
 
-            // If a column with the same title already exists, map onto it rather
-            // than duplicating.
-            if ($existing->has($title)) {
-                $fieldMap[$id] = $existing->get($title)->id;
+            // Map onto an existing column instead of duplicating it. The
+            // unique key (table_key, name) is case-insensitive in MySQL and
+            // counts soft-deleted rows, so the lookup must be too: match on
+            // a lowercased key, trashed rows included (restored — the board
+            // wants the column live again).
+            $key = $this->nameKey($title);
+            $existingColumn = $existing->get($key);
+
+            if ($existingColumn !== null) {
+                if ($existingColumn->trashed()) {
+                    $existingColumn->restore();
+                }
+
+                $fieldMap[$id] = $existingColumn->id;
 
                 continue;
             }
@@ -131,7 +142,7 @@ class MondayItemMapper
                 'created_by' => $createdBy,
             ]);
 
-            $existing->put($title, $newColumn);
+            $existing->put($key, $newColumn);
             $fieldMap[$id] = $newColumn->id;
             $created++;
         }
@@ -153,6 +164,17 @@ class MondayItemMapper
         }
 
         return $created;
+    }
+
+    /**
+     * Matching key for column-name lookups: the unique index on
+     * (table_key, name) is case-insensitive (utf8mb4_*_ci, trailing-space
+     * insensitive) — PHP's exact, case-sensitive keys miss matches that the
+     * index rejects with a duplicate-key error.
+     */
+    private function nameKey(string $name): string
+    {
+        return mb_strtolower(trim($name));
     }
 
     /**
@@ -338,8 +360,11 @@ class MondayItemMapper
 
     /**
      * Parse monday's settings_str (a JSON string) into the registry's label
-     * options for status/dropdown columns. monday encodes status labels as
-     * {"labels": {"<index>": "<label>", ...}}; dropdowns use the same shape.
+     * options for status/dropdown columns. Status labels are a map of index
+     * => label ({"labels": {"0": "New"}}); dropdown labels are a list of
+     * objects keyed by name ({"labels": [{"id": 1, "name": "AEONMED"}]}).
+     * Blank labels (real status maps contain them) are dropped — an empty
+     * option can never be picked or validated.
      *
      * @return array<int, array{index: int, label: string}>
      */
@@ -364,9 +389,16 @@ class MondayItemMapper
         $options = [];
         foreach ($labels as $index => $label) {
             if (is_array($label)) {
-                $label = $label['label'] ?? '';
+                $label = $label['label'] ?? $label['name'] ?? $label['title'] ?? '';
             }
-            $options[] = ['index' => (int) $index, 'label' => (string) $label];
+
+            $label = (string) $label;
+
+            if ($label === '') {
+                continue;
+            }
+
+            $options[] = ['index' => (int) $index, 'label' => $label];
         }
 
         return $options;
