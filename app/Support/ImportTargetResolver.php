@@ -30,11 +30,22 @@ class ImportTargetResolver
         if ($managed !== null) {
             // Custom columns previously added to this core table are import
             // targets too: a file column connecting to one overwrites it
-            // (name-based matching) instead of duplicating it.
+            // (name-based matching) instead of duplicating it. A custom whose
+            // label duplicates a managed field's label is a shadow twin
+            // (monday sync auto-creates board columns like "Customer Name"
+            // beside core customer_name): the identical dropdown labels route
+            // workbook headers into shadow cells and poison recall, so the
+            // managed field stays the only target for that label.
+            $managedLabels = [];
+            foreach ($managed['fields'] as $field) {
+                $managedLabels[self::normalizeLabel((string) $field['label'])] = true;
+            }
+
             $custom = CustomTableColumn::query()
                 ->where('table_key', $tableKey)
                 ->orderBy('position')
                 ->get(['id', 'name', 'type'])
+                ->reject(fn (CustomTableColumn $column): bool => isset($managedLabels[self::normalizeLabel($column->name)]))
                 ->map(fn (CustomTableColumn $column): array => [
                     'key' => $column->columnKey(),
                     'label' => $column->name,
@@ -80,5 +91,17 @@ class ImportTargetResolver
     public static function exists(string $tableKey): bool
     {
         return self::for($tableKey) !== null;
+    }
+
+    /**
+     * Label normalization mirroring ImportMappingService::normalizeLabel:
+     * "BU No." and "bu no" are the same target label.
+     */
+    private static function normalizeLabel(string $label): string
+    {
+        $label = strtolower(trim($label));
+        $label = preg_replace('/[^a-z0-9]+/', ' ', $label) ?? '';
+
+        return trim(preg_replace('/\s+/', ' ', $label) ?? '');
     }
 }

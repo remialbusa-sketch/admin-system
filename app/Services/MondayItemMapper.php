@@ -73,6 +73,18 @@ class MondayItemMapper
         'progress' => 'number',
     ];
 
+    /**
+     * Board column names (nameKey-normalized) that carry the account
+     * identity for installations — auto-created from the board's columns
+     * at connect time (Customer Name / Address / Branch).
+     */
+    private const ACCOUNT_IDENTITY_COLUMNS = [
+        'customer name' => 'customer_name',
+        'customer address' => 'customer_address',
+        'address' => 'customer_address',
+        'branch' => 'branch',
+    ];
+
     public function __construct(protected ColumnTypeRegistry $registry) {}
 
     /**
@@ -271,10 +283,11 @@ class MondayItemMapper
                 'raw_data' => ['monday_item_id' => $itemId],
             ];
 
-            // installations.account_id is NOT NULL — anchor monday-sourced
-            // installations to a stable placeholder account per domain.
+            // installations.account_id is NOT NULL — attach the row to the
+            // real Account its board customer names, falling back to the
+            // stable placeholder per domain (see installationAccountIdFor).
             if ($core['model'] === Installation::class) {
-                $values['account_id'] = $this->installationAccountId($tableKey);
+                $values['account_id'] = $this->installationAccountIdFor($tableKey, $item, $fieldMap, $columns);
             }
 
             $row = $core['model']::query()->updateOrCreate(
@@ -371,6 +384,100 @@ class MondayItemMapper
                 'customer_name' => 'monday.com import',
             ],
         )->getKey();
+    }
+
+    /**
+     * The Account a monday-sourced installation belongs to.
+     *
+     * The board carries the real customer identity in its Customer Name /
+     * Address / Branch columns, while the grid's Customer Name/Address/
+     * Branch columns, every filter, and the Product Dashboard read
+     * account.* — so an item with a customer name attaches to a REAL
+     * account: matched by name across sources (workbook-imported and
+     * monday-sourced rows for one customer share one account), created
+     * monday-sourced when none exists. Items without a customer name keep
+     * the stable placeholder (account_id is NOT NULL).
+     */
+    private function installationAccountIdFor(string $tableKey, array $item, array $fieldMap, Collection $columns): int
+    {
+        $identity = $this->accountIdentityFrom($item, $fieldMap, $columns);
+        $name = $identity['customer_name'] ?? '';
+
+        if ($name === '') {
+            return $this->installationAccountId($tableKey);
+        }
+
+        $existing = Account::query()
+            ->where('customer_name', $name)
+            ->orderBy('id')
+            ->first();
+
+        if ($existing !== null) {
+            return $existing->getKey();
+        }
+
+        return Account::query()->firstOrCreate(
+            [
+                'source_system' => 'monday',
+                'source_record_id' => $name,
+            ],
+            [
+                'customer_name' => $name,
+                'customer_address' => $identity['customer_address'] ?? null,
+                'branch' => $identity['branch'] ?? null,
+            ],
+        )->getKey();
+    }
+
+    /**
+     * The account identity a board item carries: values of the mapped
+     * customs whose names match the account-carrying board columns
+     * (ACCOUNT_IDENTITY_COLUMNS), reduced through the same monday->registry
+     * boundary (normalizeValue) the cell writes use.
+     *
+     * @param  array<string, int>  $fieldMap  monday column id => custom column id
+     * @return array<string, string> account attribute => trimmed scalar text
+     */
+    private function accountIdentityFrom(array $item, array $fieldMap, Collection $columns): array
+    {
+        $wanted = []; // monday column id => account attribute
+
+        foreach ($fieldMap as $mondayId => $customId) {
+            $column = $columns->get((int) $customId);
+
+            if ($column === null) {
+                continue;
+            }
+
+            $attribute = self::ACCOUNT_IDENTITY_COLUMNS[$this->nameKey($column->name)] ?? null;
+
+            if ($attribute !== null) {
+                $wanted[(string) $mondayId] = $attribute;
+            }
+        }
+
+        if ($wanted === []) {
+            return [];
+        }
+
+        $identity = [];
+
+        foreach ($item['column_values'] ?? [] as $value) {
+            $attribute = $wanted[(string) ($value['id'] ?? '')] ?? null;
+
+            if ($attribute === null || isset($identity[$attribute])) {
+                continue;
+            }
+
+            $raw = $this->normalizeValue((string) ($value['type'] ?? 'text'), $value);
+            $text = is_scalar($raw) ? trim((string) $raw) : '';
+
+            if ($text !== '') {
+                $identity[$attribute] = $text;
+            }
+        }
+
+        return $identity;
     }
 
     /**

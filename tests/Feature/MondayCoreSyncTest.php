@@ -4,9 +4,11 @@ namespace Tests\Feature;
 
 use App\Enums\UserRole;
 use App\Livewire\TechnicalReportTable;
+use App\Models\Account;
 use App\Models\CustomTableColumn;
 use App\Models\DynamicRow;
 use App\Models\DynamicTable;
+use App\Models\Installation;
 use App\Models\MondaySyncedItem;
 use App\Models\MondaySyncSetting;
 use App\Models\TechnicalReport;
@@ -279,5 +281,91 @@ class MondayCoreSyncTest extends TestCase
         $this->assertSame('9', $table->fresh()->monday_board_id);
         $this->assertSame('9', MondaySyncSetting::forDomain('site-log')->board_id);
         $this->assertSame(1, DynamicRow::query()->where('table_key', 'site-log')->where('source_record_id', '77')->count());
+    }
+
+    /**
+     * Connect installed-products to a board whose Customer Name / Address /
+     * Branch columns carry the account identity, then map one item.
+     */
+    private function mapInstallationItem(array $columnValues, string $itemId = '501'): Installation
+    {
+        MondaySyncSetting::create(['domain' => 'installed-products', 'board_id' => '9', 'enabled' => true]);
+
+        app(MondayItemMapper::class)->autoCreateColumns('installed-products', [
+            ['id' => 'lookup1', 'title' => 'Customer Name', 'type' => 'lookup', 'settings_str' => ''],
+            ['id' => 'addr1', 'title' => 'Address', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'branch1', 'title' => 'Branch', 'type' => 'status', 'settings_str' => ''],
+        ]);
+
+        app(MondayItemMapper::class)->mapItem('installed-products', [
+            'id' => $itemId,
+            'name' => 'SN-04589',
+            'column_values' => $columnValues,
+        ]);
+
+        return Installation::query()
+            ->where('source_system', 'monday:installed-products')
+            ->where('source_record_id', $itemId)
+            ->firstOrFail();
+    }
+
+    public function test_installation_attaches_to_account_from_board_customer_name(): void
+    {
+        $row = $this->mapInstallationItem([
+            ['id' => 'lookup1', 'type' => 'lookup', 'text' => null, 'display_value' => 'RHU Bontoc'],
+            ['id' => 'addr1', 'type' => 'text', 'text' => '123 Jail St'],
+            ['id' => 'branch1', 'type' => 'status', 'text' => 'NLR1', 'label' => 'NLR1'],
+        ]);
+
+        $account = Account::query()->findOrFail($row->account_id);
+
+        // The grid's Customer Name/Address/Branch and every dashboard
+        // aggregation read account.* — the item's real customer must land
+        // there, not in the 'monday.com import' placeholder.
+        $this->assertSame('RHU Bontoc', $account->customer_name);
+        $this->assertSame('123 Jail St', $account->customer_address);
+        $this->assertSame('NLR1', $account->branch);
+        $this->assertSame('monday', $account->source_system);
+    }
+
+    public function test_account_with_the_same_customer_name_is_reused_not_duplicated(): void
+    {
+        $existing = Account::query()->create([
+            'source_system' => 'product_database',
+            'source_record_id' => 'RHU Bontoc',
+            'customer_name' => 'RHU Bontoc',
+            'customer_address' => 'Workbook address',
+        ]);
+
+        $row = $this->mapInstallationItem([
+            ['id' => 'lookup1', 'type' => 'lookup', 'text' => null, 'display_value' => 'RHU Bontoc'],
+            ['id' => 'addr1', 'type' => 'text', 'text' => 'Board address'],
+        ]);
+
+        // One customer, one account across sources: the board row attaches
+        // to the workbook-imported account instead of minting a twin.
+        $this->assertSame($existing->id, $row->account_id);
+        $this->assertSame(1, Account::query()->where('customer_name', 'RHU Bontoc')->count());
+
+        // The workbook owns this account's identity; the board must not rewrite it.
+        $this->assertSame('Workbook address', $existing->fresh()->customer_address);
+    }
+
+    public function test_item_without_a_board_customer_name_keeps_the_placeholder_account(): void
+    {
+        $row = $this->mapInstallationItem([
+            ['id' => 'lookup1', 'type' => 'lookup', 'text' => null, 'display_value' => ''],
+            ['id' => 'addr1', 'type' => 'text', 'text' => ''],
+        ]);
+
+        $placeholder = Account::query()
+            ->where('source_system', 'monday')
+            ->where('source_record_id', 'account-installed-products')
+            ->firstOrFail();
+
+        // account_id is NOT NULL — an item with no customer identity still
+        // needs a stable parent.
+        $this->assertSame($placeholder->id, $row->account_id);
+        $this->assertSame('monday.com import', $placeholder->customer_name);
     }
 }
