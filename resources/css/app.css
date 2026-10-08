@@ -261,6 +261,34 @@
     height: 1px;
 }
 
+/* The pinned bar IS the grid's horizontal scrollbar — remove the holder's
+   native horizontal lane so users never see two scrollbars for one grid
+   (reported as confusing). The holder still scrolls horizontally
+   (wheel/trackpad and the pinned bar's sync); only the lane is gone. */
+.tabulator-tableholder {
+    /* Re-enable ::-webkit-scrollbar styling: an inherited non-auto
+       scrollbar-color (from .admin-scrollbar on <main>) makes Chrome
+       ignore the pseudo rules entirely. */
+    scrollbar-color: auto;
+}
+
+.tabulator-tableholder::-webkit-scrollbar {
+    /* On a plain scrollbar rule, `height` drives the horizontal scrollbar
+       and `width` the vertical one — so height:0 removes only the
+       horizontal lane and the vertical indicator keeps working. (The
+       :horizontal pseudo-class is not supported in Chrome.) */
+    height: 0;
+}
+
+/* Keep the vertical indicator in the app's subtle dark-theme look. */
+.tabulator-tableholder::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, currentColor 20%, transparent);
+}
+
+.tabulator-tableholder::-webkit-scrollbar-track {
+    background: transparent;
+}
+
 .spreadsheet-grid .tabulator-row {
     border-bottom: 1px solid var(--grid-border);
     background: var(--color-base-100) !important;
