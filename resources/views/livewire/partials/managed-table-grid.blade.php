@@ -338,6 +338,15 @@
     </div>
 </section>
 
+{{-- Sticky duplicate of the grid's horizontal scrollbar: the grid is a
+     fixed-height box, so its native scrollbar sits below the fold on tall
+     pages and users had to scroll down just to pan left/right. This bar
+     sticks to the viewport bottom while the table is on screen and pans
+     Tabulator in sync, both directions (wired in managed-table.js). --}}
+<div class="spreadsheet-sticky-hbar no-print" data-managed-table-hbar hidden>
+    <div data-managed-table-hbar-spacer></div>
+</div>
+
 <x-admin.modal name="manage-columns" title="Manage columns" description="Add custom columns to this table just like adding a column in Excel. Toggle visibility/freeze here, or drag &amp; resize headers directly in the grid." size="lg">
     <div class="space-y-6">
         <div>

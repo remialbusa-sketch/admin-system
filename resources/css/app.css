@@ -225,6 +225,42 @@
     background: var(--color-base-100) !important;
 }
 
+/* Pinned duplicate of the grid's horizontal scrollbar (bound in
+   managed-table.js): the grid is a fixed-height box, so its native
+   scrollbar can sit below the fold — this bar pins to the viewport
+   bottom while the table is on screen so panning never needs a page
+   scroll. `fixed`, not `sticky`: the layout's real scroller is an inner
+   <main> (overflow-y: auto) that only scrolls itself at lg widths — at
+   narrow widths the document scrolls instead and sticky resolves against
+   the non-scrolling <main>, never pinning. JS sets left/width from the
+   grid's viewport rect (sidebar-safe). Height collapses to the
+   scrollbar's own lane; [hidden] until the columns actually overflow.
+   z-index below the selection bar. */
+.spreadsheet-sticky-hbar {
+    position: fixed;
+    bottom: 0;
+    /* The bar lives inside a `space-y-5` parent; a leftover margin on a
+       fixed box offsets it from the viewport edge (bottom: 0 pins the
+       margin box). Zero it so the bar sits flush at the bottom. */
+    margin-bottom: 0;
+    z-index: 800;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--color-base-100);
+    border-top: 1px solid var(--color-base-300);
+}
+
+.spreadsheet-sticky-hbar[hidden] {
+    display: none;
+}
+
+/* The spacer must have non-zero height: a zero-area box is excluded from
+   the scrollable overflow union, so a 0px-tall child never extends
+   scrollWidth and the scrollbar (and its lane) never appears. */
+.spreadsheet-sticky-hbar [data-managed-table-hbar-spacer] {
+    height: 1px;
+}
+
 .spreadsheet-grid .tabulator-row {
     border-bottom: 1px solid var(--grid-border);
     background: var(--color-base-100) !important;

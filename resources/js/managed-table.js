@@ -471,6 +471,10 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
 
+            // A Livewire morph may have re-rendered the sticky scrollbar
+            // markup (dropping its JS-set inline styles) — re-assert.
+            this._stickyUpdate?.();
+
             if (!this.table) {
                 this.buildTable(gridEl, payload);
 
@@ -564,6 +568,8 @@ document.addEventListener('alpine:init', () => {
                 },
             });
 
+            this.bindStickyHbar(gridEl);
+
             // Expose density/selection to the toolbar controls.
             if (typeof window !== 'undefined' && this.densitySelect) {
                 this.densitySelect.value = this.loadDensityLabel();
@@ -597,6 +603,108 @@ document.addEventListener('alpine:init', () => {
             this.table.on('columnVisibilityChanged', () => this.persistLayout());
             this.table.on('rowSelectionChanged', () => this.updateSelectionUI());
             this.table.on('dataProcessed', () => this.applySearchHighlight());
+        },
+
+        /**
+         * Bind the pinned duplicate horizontal scrollbar rendered after the
+         * grid shell (managed-table-grid.blade.php). The grid is a
+         * fixed-height box, so its native scrollbar sits below the fold on
+         * tall pages; the duplicate pins to the viewport bottom while the
+         * table is on screen and pans the grid in both directions.
+         *
+         * `position: fixed` (not sticky): the layout's real scroller is an
+         * inner <main> that doesn't scroll at narrow widths, so sticky never
+         * reaches the viewport there — JS positions the bar from the grid's
+         * viewport rect instead.
+         *
+         * The Tabulator holder is NOT in the DOM synchronously after the
+         * constructor — resolve it lazily and wire on `tableBuilt` (the
+         * immediate wire() attempt covers the synchronous case).
+         *
+         * Width notes: the spacer mirrors the holder's scrollWidth, and the
+         * bar gets a right padding equal to the holder's vertical-scrollbar
+         * gutter so both bars reach the same max scrollLeft.
+         */
+        bindStickyHbar(gridEl) {
+            const bar = this.$root.parentElement?.querySelector(':scope > [data-managed-table-hbar]');
+            const spacer = bar?.querySelector('[data-managed-table-hbar-spacer]');
+
+            if (!bar || !spacer) {
+                return;
+            }
+
+            let holder = null;
+
+            const update = () => {
+                holder ??= gridEl.querySelector('.tabulator-tableholder');
+                if (!holder) {
+                    return;
+                }
+
+                const rect = gridEl.getBoundingClientRect();
+                const left = `${Math.round(rect.left)}px`;
+                const width = `${Math.round(rect.width)}px`;
+                // Same-value writes only: this runs at scroll rate.
+                if (bar.style.left !== left) {
+                    bar.style.left = left;
+                }
+                if (bar.style.width !== width) {
+                    bar.style.width = width;
+                }
+
+                const overflows = holder.scrollWidth > holder.clientWidth + 1;
+                const inView = rect.top < window.innerHeight && rect.bottom > 0;
+                const hidden = !(overflows && inView);
+                if (bar.hidden !== hidden) {
+                    bar.hidden = hidden;
+                }
+                if (hidden) {
+                    return;
+                }
+
+                const padRight = `${holder.offsetWidth - holder.clientWidth}px`;
+                if (bar.style.paddingRight !== padRight) {
+                    bar.style.paddingRight = padRight;
+                }
+                const spacerWidth = `${holder.scrollWidth}px`;
+                if (spacer.style.width !== spacerWidth) {
+                    spacer.style.width = spacerWidth;
+                }
+                // Re-sync here too: display:none resets the bar's scroll
+                // position, so it must catch up whenever it re-appears.
+                if (bar.scrollLeft !== holder.scrollLeft) {
+                    bar.scrollLeft = holder.scrollLeft;
+                }
+            };
+
+            // The bar's own scroll events must NOT run update(): it writes
+            // bar.scrollLeft from the holder and would fight a user drag —
+            // the bar's listener below owns that direction.
+            const onScroll = (event) => {
+                if (event.target !== bar) {
+                    update();
+                }
+            };
+
+            bar.addEventListener('scroll', () => {
+                if (holder) {
+                    holder.scrollLeft = bar.scrollLeft;
+                }
+            }, { passive: true });
+
+            // Capture phase catches scroll events from every ancestor
+            // scroller (the document and the inner <main> alike).
+            window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+            window.addEventListener('resize', update, { passive: true });
+            new ResizeObserver(update).observe(gridEl);
+            this.table.on('tableBuilt', () => update());
+            this.table.on('renderComplete', () => update());
+
+            // Re-assert after a Livewire morph (morph.updated →
+            // mountOrRefresh): a morph may strip the JS-set inline styles.
+            this._stickyUpdate = update;
+
+            update();
         },
 
         // --- Density control ------------------------------------------------
