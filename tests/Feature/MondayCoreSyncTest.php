@@ -11,6 +11,7 @@ use App\Models\DynamicTable;
 use App\Models\Installation;
 use App\Models\MondaySyncedItem;
 use App\Models\MondaySyncSetting;
+use App\Models\ServiceRequest;
 use App\Models\TechnicalReport;
 use App\Models\User;
 use App\Services\MondayItemMapper;
@@ -367,5 +368,122 @@ class MondayCoreSyncTest extends TestCase
         // needs a stable parent.
         $this->assertSame($placeholder->id, $row->account_id);
         $this->assertSame('monday.com import', $placeholder->customer_name);
+    }
+
+    public function test_board_values_fill_the_domain_columns_not_only_the_customs(): void
+    {
+        // The grids, filters and dashboards read the DOMAIN columns — a sync
+        // that only writes the custom twins leaves the core columns empty
+        // (the flagged "empty Brand / Serial Number / BU No." report).
+        MondaySyncSetting::create(['domain' => 'installed-products', 'board_id' => '9', 'enabled' => true]);
+
+        app(MondayItemMapper::class)->autoCreateColumns('installed-products', [
+            ['id' => 'brand1', 'title' => 'Brand', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'serial1', 'title' => 'Serial Number', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'bu1', 'title' => 'BU No.', 'type' => 'status', 'settings_str' => '{"labels":{"0":"BU-02"}}'],
+            ['id' => 'model1', 'title' => 'Model', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'ds1', 'title' => 'DEVICE STATUS', 'type' => 'status', 'settings_str' => '{"labels":{"0":"Active"}}'],
+            ['id' => 'inst1', 'title' => 'INSTALLATION DATE', 'type' => 'date', 'settings_str' => ''],
+        ]);
+
+        app(MondayItemMapper::class)->mapItem('installed-products', [
+            'id' => '600',
+            'name' => 'SN-04589',
+            'column_values' => [
+                ['id' => 'brand1', 'type' => 'text', 'text' => 'SYSMEX'],
+                ['id' => 'serial1', 'type' => 'text', 'text' => '23650'],
+                ['id' => 'bu1', 'type' => 'status', 'text' => 'BU-02', 'label' => 'BU-02', 'index' => 0],
+                ['id' => 'model1', 'type' => 'text', 'text' => 'XN-550'],
+                ['id' => 'ds1', 'type' => 'status', 'text' => 'Active', 'label' => 'Active', 'index' => 0],
+                ['id' => 'inst1', 'type' => 'date', 'text' => '2026-06-09', 'date' => '2026-06-09'],
+            ],
+        ]);
+
+        $row = Installation::query()
+            ->where('source_system', 'monday:installed-products')
+            ->where('source_record_id', '600')
+            ->firstOrFail();
+
+        $this->assertSame('SYSMEX', $row->brand);
+        $this->assertSame('23650', $row->serial_number);
+        $this->assertSame('BU-02', $row->bu_no);
+        $this->assertSame('Active', $row->device_status);
+        $this->assertSame('2026-06-09', $row->installation_date?->toDateString());
+        // Device description is the board's Model — the workbook holds model
+        // names there ("XN-550", "UF-4000i"), never the SN item name.
+        $this->assertSame('XN-550', $row->device_description);
+
+        // The custom twin keeps working alongside the domain write.
+        $brandCol = CustomTableColumn::query()->where('table_key', 'installed-products')->where('name', 'Brand')->firstOrFail();
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $brandCol->id,
+            'row_id' => $row->id,
+            'value_text' => 'SYSMEX',
+        ]);
+    }
+
+    public function test_item_name_never_lands_in_device_description_when_the_board_model_is_empty(): void
+    {
+        // The item name is a service request number ("SN-04589") — it must
+        // not masquerade as a device description when Model carries nothing.
+        MondaySyncSetting::create(['domain' => 'installed-products', 'board_id' => '9', 'enabled' => true]);
+
+        app(MondayItemMapper::class)->autoCreateColumns('installed-products', [
+            ['id' => 'model1', 'title' => 'Model', 'type' => 'text', 'settings_str' => ''],
+        ]);
+
+        app(MondayItemMapper::class)->mapItem('installed-products', [
+            'id' => '601',
+            'name' => 'SN-00001',
+            'column_values' => [
+                ['id' => 'model1', 'type' => 'text', 'text' => ''],
+            ],
+        ]);
+
+        $row = Installation::query()
+            ->where('source_system', 'monday:installed-products')
+            ->where('source_record_id', '601')
+            ->firstOrFail();
+
+        $this->assertNull($row->device_description);
+    }
+
+    public function test_service_request_board_values_fill_the_domain_columns(): void
+    {
+        // Same class as installed-products: 4,644 synced SR rows had empty
+        // ticket_status / customer_name / brand because only customs were fed.
+        MondaySyncSetting::create([
+            'domain' => 'service-requests',
+            'board_id' => '9',
+            'enabled' => true,
+            'title_field' => 'service_request_number',
+        ]);
+
+        app(MondayItemMapper::class)->autoCreateColumns('service-requests', [
+            ['id' => 'cn1', 'title' => 'Customer Name', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'ts1', 'title' => 'TICKET STATUS', 'type' => 'status', 'settings_str' => '{"labels":{"0":"Closed"}}'],
+            ['id' => 'br1', 'title' => 'Brand', 'type' => 'text', 'settings_str' => ''],
+        ]);
+
+        app(MondayItemMapper::class)->mapItem('service-requests', [
+            'id' => '700',
+            'name' => 'SN-00037',
+            'column_values' => [
+                ['id' => 'cn1', 'type' => 'text', 'text' => 'RHU Bontoc'],
+                ['id' => 'ts1', 'type' => 'status', 'text' => 'Closed', 'label' => 'Closed', 'index' => 0],
+                ['id' => 'br1', 'type' => 'text', 'text' => 'SYSMEX'],
+            ],
+        ]);
+
+        $row = ServiceRequest::query()
+            ->where('source_system', 'monday:service-requests')
+            ->where('source_record_id', '700')
+            ->firstOrFail();
+
+        // The title keeps working: no board column carries the SR number.
+        $this->assertSame('SN-00037', $row->service_request_number);
+        $this->assertSame('RHU Bontoc', $row->customer_name);
+        $this->assertSame('Closed', $row->ticket_status);
+        $this->assertSame('SYSMEX', $row->brand);
     }
 }

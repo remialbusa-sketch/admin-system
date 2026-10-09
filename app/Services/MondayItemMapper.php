@@ -30,7 +30,12 @@ use Throwable;
  *   2. mapItem() — upsert the domain row (DynamicRow for dynamic tables, the
  *      fixed domain model for core tables; source_system = monday:<key>,
  *      source_record_id = monday item id) and write each mapped column value
- *      through the registry, exactly like a manual cell write.
+ *      through the registry, exactly like a manual cell write. Core tables
+ *      ALSO feed the matching DOMAIN column (MondayCoreTargets `columns`):
+ *      the grids, filters and dashboards read domain columns, so customs
+ *      alone leave the core columns empty (the flagged empty-column class),
+ *      and an empty board value clears the cell — which is what keeps the
+ *      item-name title from surviving in a domain column the loop covers.
  *
  * Status/dropdown values seed their options through ImportOptionSeeder first
  * (the shared import boundary) so board labels never fail validation.
@@ -226,6 +231,17 @@ class MondayItemMapper
     }
 
     /**
+     * Matching key for domain-column LABEL lookups (MondayCoreTargets
+     * `columns`): squished and lowercased, because board titles carry
+     * newlines ("SYSTEM\nTYPE") that nameKey() must preserve for the DB
+     * unique index.
+     */
+    private function labelKey(string $name): string
+    {
+        return mb_strtolower(preg_replace('/\s+/u', ' ', trim($name)) ?? '');
+    }
+
+    /**
      * Upsert the domain row for one monday item and write all mapped column
      * values. Returns true on success (or no mapped columns), false if any
      * mapped value failed validation.
@@ -302,6 +318,13 @@ class MondayItemMapper
         $rowId = $row->getKey();
         $ok = true;
 
+        // Core tables: a matched board column also feeds its DOMAIN column
+        // (MondayCoreTargets `columns`), applied once after the loop. An
+        // empty board value clears the cell — so a domain column the loop
+        // covers can never keep the item-name title either.
+        $domainColumns = $core['columns'] ?? [];
+        $attributes = [];
+
         foreach ($item['column_values'] ?? [] as $value) {
             $columnId = $fieldMap[(string) ($value['id'] ?? '')] ?? null;
 
@@ -315,11 +338,17 @@ class MondayItemMapper
                 continue;
             }
 
+            $attribute = $domainColumns === [] ? null : ($domainColumns[$this->labelKey($column->name)] ?? null);
+
             try {
                 $raw = $this->normalizeValue((string) ($value['type'] ?? 'text'), $value);
 
                 if ($raw === null || $raw === '') {
                     $this->writeValue($rowId, $column, []);
+
+                    if ($attribute !== null) {
+                        $attributes[$attribute] = null;
+                    }
 
                     continue;
                 }
@@ -332,6 +361,12 @@ class MondayItemMapper
                 $validated = $this->registry->resolve($column->type)->validate($raw, $column->settings ?? []);
 
                 $this->writeValue($rowId, $column, $validated);
+
+                if ($attribute !== null) {
+                    $scalar = $this->registry->resolve($column->type)->toDisplayString($validated);
+
+                    $attributes[$attribute] = $scalar === '' ? null : $scalar;
+                }
             } catch (Throwable $exception) {
                 $ok = false;
 
@@ -347,6 +382,10 @@ class MondayItemMapper
                     'error' => $exception->getMessage(),
                 ]);
             }
+        }
+
+        if ($attributes !== []) {
+            $row->update($attributes);
         }
 
         return $ok;

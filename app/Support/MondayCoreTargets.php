@@ -18,11 +18,19 @@ use App\Models\TechnicalReport;
  * board's columns auto-created as table columns — the same custom-column
  * storage their grids already render. Dynamic tables keep the DynamicRow
  * path (see MondayItemMapper::mapItem).
+ *
+ * `columns` maps a squished-lowercase board column label to the DOMAIN
+ * column it feeds alongside its custom twin: the grids, filters and
+ * dashboards read domain columns, so a sync that only writes customs leaves
+ * the core columns empty (the 2026-10-09 "empty Brand / Serial Number"
+ * report). Only labels verified against the connected boards belong here;
+ * manual-only domain fields (import rule: pms_frequency, tsp_in_charge) are
+ * deliberately absent. Domains get their map when their board connects.
  */
 class MondayCoreTargets
 {
     /**
-     * @var array<string, array{model: class-string, title: string, title_options: array<string, string>}>
+     * @var array<string, array{model: class-string, title: string, title_options: array<string, string>, columns?: array<string, string>}>
      */
     public const TARGETS = [
         'installed-products' => [
@@ -35,6 +43,22 @@ class MondayCoreTargets
                 'machine_type' => 'Machine type',
                 'bu_no' => 'BU no.',
             ],
+            // The workbook's device_description holds model names
+            // ("XN-550", "UF-4000i") — the board's Model column is its twin.
+            'columns' => [
+                'brand' => 'brand',
+                'serial number' => 'serial_number',
+                'bu no.' => 'bu_no',
+                'model' => 'device_description',
+                'system type' => 'equipment_type',
+                'installation date' => 'installation_date',
+                'uninstallation date' => 'uninstallation_date',
+                'device status' => 'device_status',
+                'device ownership' => 'device_ownership',
+                'deal type' => 'deal_type',
+                'warranty status' => 'warranty_status',
+                'service contract status' => 'service_contract_status',
+            ],
         ],
         'service-requests' => [
             'model' => ServiceRequest::class,
@@ -44,6 +68,22 @@ class MondayCoreTargets
                 'service_request_number' => 'Service request #',
                 'concerns' => 'Concerns',
                 'requesting_entity' => 'Requesting entity',
+            ],
+            'columns' => [
+                'customer name' => 'customer_name',
+                'ticket status' => 'ticket_status',
+                'branch' => 'branch',
+                'brand' => 'brand',
+                'model' => 'machine_type',
+                'requestor name' => 'requestor_name',
+                'requestor email' => 'requestor_email',
+                'coordinator' => 'coordinator',
+                'contract type' => 'contract_type',
+                'type of request' => 'request_type',
+                'department' => 'department',
+                'date needed' => 'date_needed',
+                'device ownership' => 'device_ownership',
+                'tsp' => 'tsp_assignment',
             ],
         ],
         'technical-reports' => [
@@ -84,7 +124,7 @@ class MondayCoreTargets
     }
 
     /**
-     * @return array{model: class-string, title: string, title_options: array<string, string>}|null
+     * @return array{model: class-string, title: string, title_options: array<string, string>, columns?: array<string, string>}|null
      */
     public static function resolve(string $tableKey): ?array
     {
