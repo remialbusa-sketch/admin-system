@@ -73,5 +73,5 @@ if [ -n "${DEPLOY_DOMAIN:-}" ]; then
 fi
 
 echo "==> Deploy complete."
-echo "    Reminder: run one `monday:sync <domain> --dry-run` after enabling a board,"
-echo "    and confirm the mono cron (`* * * * * … artisan schedule:run`) is installed."
+echo '    Reminder: run one `monday:sync <domain> --dry-run` after enabling a board,'
+echo '    and confirm the mono cron (`* * * * * … artisan schedule:run`) is installed.'
