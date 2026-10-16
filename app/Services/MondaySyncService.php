@@ -95,6 +95,13 @@ class MondaySyncService
         $doneIds = MondaySyncedItem::query()
             ->where('domain', $domain)
             ->where('state', 'imported')
+            ->where('mapping_revision', '>=', (int) $setting->mapping_revision)
+            ->whereIn('item_id', $allIds)
+            ->pluck('item_id')
+            ->flip();
+        $previouslyImportedIds = MondaySyncedItem::query()
+            ->where('domain', $domain)
+            ->where('state', 'imported')
             ->whereIn('item_id', $allIds)
             ->pluck('item_id')
             ->flip();
@@ -111,6 +118,21 @@ class MondaySyncService
             ])
             ->map(fn (array $item): string => (string) $item['id'])
             ->values();
+        $replay = $candidateIds->filter(fn (string $id): bool => $previouslyImportedIds->has($id))->count();
+        $new = $candidateIds->count() - $replay;
+
+        if ($dryRun) {
+            return [
+                'status' => 'ok',
+                'board_id' => $setting->board_id,
+                'new_items' => $allItems->filter(fn (array $item): bool => $candidateIds->contains((string) $item['id']))->values(),
+                'seen' => $allIds->count(),
+                'new' => $new,
+                'replay' => $replay,
+                'imported' => 0,
+                'failed' => 0,
+            ];
+        }
 
         // 3+4. Fetch + import ONE BATCH AT A TIME: each batch is fetched,
         //    mapped and recorded on its own, so a failed batch never discards
@@ -161,10 +183,6 @@ class MondaySyncService
             $batchesOk++;
             $items = $items->merge($batchItems);
 
-            if ($dryRun) {
-                continue; // report-only: fetched, never mapped or recorded
-            }
-
             foreach ($batchItems as $item) {
                 $itemId = (string) ($item['id'] ?? '');
                 $ok = $mapper->mapItem($domain, $item);
@@ -173,7 +191,7 @@ class MondaySyncService
 
                 MondaySyncedItem::query()->updateOrCreate(
                     ['domain' => $domain, 'item_id' => $itemId],
-                    ['state' => $ok ? 'imported' : 'failed', 'last_seen_at' => now()],
+                    ['state' => $ok ? 'imported' : 'failed', 'mapping_revision' => $ok ? (int) $setting->mapping_revision : 0, 'last_seen_at' => now()],
                 );
             }
         }
@@ -193,7 +211,8 @@ class MondaySyncService
             'board_id' => $setting->board_id,
             'new_items' => $items,
             'seen' => $allIds->count(),
-            'new' => $candidateIds->count(),
+            'new' => $new,
+            'replay' => $replay,
             'imported' => $imported,
             'failed' => $failed,
         ];

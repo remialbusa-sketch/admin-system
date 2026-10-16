@@ -15,6 +15,9 @@ class MondaySyncSetting extends Model
         'domain',
         'board_id',
         'field_map',
+        'core_field_map',
+        'skipped_column_ids',
+        'mapping_revision',
         'title_field',
         'enabled',
         'last_synced_at',
@@ -25,6 +28,9 @@ class MondaySyncSetting extends Model
     {
         return [
             'field_map' => 'array',
+            'core_field_map' => 'array',
+            'skipped_column_ids' => 'array',
+            'mapping_revision' => 'integer',
             'enabled' => 'boolean',
             'last_synced_at' => 'datetime',
         ];

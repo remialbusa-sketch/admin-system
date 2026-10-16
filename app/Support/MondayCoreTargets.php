@@ -95,6 +95,25 @@ class MondayCoreTargets
                 'report_name' => 'Report name',
                 'brand' => 'Brand',
             ],
+            'columns' => [
+                'reference number' => 'reference_number',
+                'reference #' => 'reference_number',
+                'service number' => 'service_request_number',
+                'service request #' => 'service_request_number',
+                'customer name' => 'customer_name',
+                'ticket status' => 'ticket_status',
+                'service status' => 'service_status',
+                'report name' => 'report_name',
+                'service start date & time' => 'service_started_at',
+                'service end date & time' => 'service_completed_at',
+                'tsp assigned' => 'tsp_name',
+                'tsp' => 'tsp_name',
+                'brand' => 'brand',
+                'model' => 'machine_type',
+                'job done' => 'job_done',
+                'parts replaced' => 'parts_replaced',
+                'recommendation' => 'recommendation',
+            ],
         ],
         'history-reports' => [
             'model' => HistoricalTsmsReport::class,
@@ -159,5 +178,25 @@ class MondayCoreTargets
         }
 
         return $target['title'];
+    }
+
+    /** Stable domain destinations offered by the monday mapping editor. */
+    public static function fieldOptions(string $tableKey): array
+    {
+        $columns = self::TARGETS[$tableKey]['columns'] ?? [];
+        $options = [];
+
+        foreach ($columns as $label => $field) {
+            $options[$field] ??= ucwords(str_replace('_', ' ', $field));
+        }
+
+        return $options;
+    }
+
+    public static function fieldForLabel(string $tableKey, string $label): ?string
+    {
+        $key = mb_strtolower(preg_replace('/\s+/u', ' ', trim($label)) ?? '');
+
+        return self::TARGETS[$tableKey]['columns'][$key] ?? null;
     }
 }

@@ -1,5 +1,7 @@
 # MCBTSi Admin System — Full Audit
 
+> Historical snapshot. Its findings and roadmap describe the system at the date below; use the current README and source for implemented features, including monday.com integration.
+
 **Date:** February 2026 · **Scope:** security & access control, data correctness, performance, frontend/UX, executive fitness
 **Method:** full-code read of every app surface + three parallel deep-dive audits (security, data/performance, frontend/UX), findings cross-verified against source and the live SQLite database (172.9 MB; service_requests 8,126 · technical_reports 8,156 · historical_tsms 23,309 · installations 7,973 · accounts 1,142 · personnel 64). Test suite re-run: **55/55 passing, 232 assertions** (README says 54 — minor doc drift).
 

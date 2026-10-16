@@ -16,6 +16,12 @@ class MondayWebhookTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['monday.webhook_secret' => str_repeat('s', 32)]);
+    }
+
     private function connectTable(string $key = 'equipment'): DynamicTable
     {
         $table = DynamicTable::create([
@@ -36,9 +42,22 @@ class MondayWebhookTest extends TestCase
     {
         config(['monday.enabled' => true]);
 
-        $this->postJson('/webhooks/monday', ['challenge' => 'abc123'])
+        $this->postJson('/webhooks/monday/'.str_repeat('s', 32), ['challenge' => 'abc123'])
             ->assertOk()
             ->assertJson(['challenge' => 'abc123']);
+    }
+
+    public function test_wrong_webhook_secret_rejects_challenge_and_events(): void
+    {
+        Queue::fake();
+
+        $this->postJson('/webhooks/monday/wrong', ['challenge' => 'abc123'])->assertForbidden();
+        $this->postJson('/webhooks/monday/wrong', [
+            'event' => ['type' => 'create_pulse', 'triggerUuid' => 'fake', 'pulseId' => '50', 'boardId' => '123'],
+        ])->assertForbidden();
+
+        Queue::assertNotPushed(MondaySyncItemJob::class);
+        $this->assertDatabaseCount('monday_webhook_events', 0);
     }
 
     public function test_create_item_webhook_dispaches_job_and_dedups(): void
@@ -57,12 +76,12 @@ class MondayWebhookTest extends TestCase
             ],
         ];
 
-        $this->postJson('/webhooks/monday', $payload)->assertOk()->assertJson(['ok' => true]);
+        $this->postJson('/webhooks/monday/'.str_repeat('s', 32), $payload)->assertOk()->assertJson(['ok' => true]);
 
         Queue::assertPushed(MondaySyncItemJob::class, fn ($job) => $job->itemId === '50' && (string) $job->boardId === '123');
 
         // Duplicate delivery is dropped.
-        $this->postJson('/webhooks/monday', $payload)->assertOk();
+        $this->postJson('/webhooks/monday/'.str_repeat('s', 32), $payload)->assertOk();
         Queue::assertPushed(MondaySyncItemJob::class, 1);
 
         $this->assertDatabaseHas('monday_webhook_events', ['trigger_uuid' => 'uuid-111']);
@@ -75,7 +94,7 @@ class MondayWebhookTest extends TestCase
 
         Queue::fake();
 
-        $this->postJson('/webhooks/monday', [
+        $this->postJson('/webhooks/monday/'.str_repeat('s', 32), [
             'event' => ['type' => 'change_column_value', 'triggerUuid' => 'uuid-222', 'pulseId' => '60', 'boardId' => '123'],
         ])->assertOk()->assertJson(['ok' => true]);
 

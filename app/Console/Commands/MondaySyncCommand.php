@@ -31,7 +31,7 @@ class MondaySyncCommand extends Command
             default => $this->report($result, $dryRun),
         };
 
-        return $result['status'] === 'error' ? self::FAILURE : self::SUCCESS;
+        return $result['status'] === 'error' || (int) ($result['failed'] ?? 0) > 0 ? self::FAILURE : self::SUCCESS;
     }
 
     private function report(array $result, bool $dryRun): void
@@ -39,7 +39,7 @@ class MondaySyncCommand extends Command
         $this->info('Synced '.($result['seen'] ?? 0)." known item(s) on board [{$result['board_id']}].");
 
         if ($dryRun) {
-            $this->info('Dry run — '.($result['new'] ?? 0).' new item(s) would be imported (not recorded):');
+            $this->info('Dry run — '.($result['new'] ?? 0).' new item(s) and '.($result['replay'] ?? 0).' imported item(s) need processing:');
 
             foreach ($result['new_items'] as $item) {
                 $this->line('  - #'.$item['id'].' '.($item['name'] ?? '(untitled)'));
@@ -48,6 +48,6 @@ class MondaySyncCommand extends Command
             return;
         }
 
-        $this->info(($result['new'] ?? 0).' new item(s) discovered and marked for import.');
+        $this->info(($result['new'] ?? 0).' new item(s), '.($result['replay'] ?? 0).' item(s) replayed, '.($result['imported'] ?? 0).' processed, '.($result['failed'] ?? 0).' failed.');
     }
 }

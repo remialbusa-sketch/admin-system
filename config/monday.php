@@ -26,6 +26,7 @@ return [
     'api_url' => env('MONDAY_API_URL', 'https://api.monday.com/v2'),
 
     'transport' => env('MONDAY_TRANSPORT', 'delta'),
+    'webhook_secret' => env('MONDAY_WEBHOOK_SECRET'),
 
     /*
     |--------------------------------------------------------------------------

@@ -1,6 +1,8 @@
 # monday.com Integration + Shared cPanel Deployment — Plan (rev 6, dynamic tables + new-item detection)
 
-Status: **Draft for review** · Applies to the MCBTSi Admin System (Laravel 13 / Livewire 3.8 / Filament 4).
+Status: **Historical design plan** · The current implementation and setup are described in `README.md` and the note below.
+
+**Current mapping and webhook behavior (2026-10-16):** `monday_sync_settings.field_map` pins source column IDs to local columns; `core_field_map` pins core domain fields separately; `skipped_column_ids` preserves explicit skips. A changed mapping increments `mapping_revision`, so the next sync reprocesses previously imported items. Each item write is atomic. Board connection verifies the remote columns before replacing an existing connection. Personal-token board webhooks require a random `MONDAY_WEBHOOK_SECRET` of at least 32 URL-safe characters; `monday:register-webhook` registers `APP_URL/webhooks/monday/{secret}`. After setting the secret, register new webhook URLs and retire old `/webhooks/monday` registrations. The older sections below describe the original plan and may differ from this implementation.
 
 Reference sources this revision reconciles against:
 
@@ -267,7 +269,7 @@ Pin `APP_TIMEZONE` so the digest (Mon 07:00) + sync fire at the intended local t
 
 - `APP_DEBUG=false`, HTTPS forced, `SESSION_SECURE_COOKIE=true`; `TRUSTED_PROXIES` real IPs only.
 - `.env` chmod 600, git-ignored; `MONDAY_API_TOKEN` server-only.
-- Webhook endpoint: allowed monday.com IPs (verify current list); dedup makes replays harmless; no secrets returned.
+- Webhook endpoint: set `MONDAY_WEBHOOK_SECRET` (at least 32 random URL-safe characters), register the resulting secret URL, and retire old registrations. Keep the secret out of logs and screenshots; restrict source IPs at the proxy when feasible.
 - Registration disabled; import/edit Superadmin-gated; Settings toggles Superadmin-gated; `/admin` via `User::canAccessPanel()`; sensitive imported fields restricted.
 - `storage/` outside docroot; cPanel Directory Privacy / `.htaccess` defense in depth.
 

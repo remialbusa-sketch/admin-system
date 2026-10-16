@@ -18,14 +18,19 @@ use Illuminate\Http\Request;
  *   refetches the full item and maps it through the same pipeline as the delta
  *   scan.
  *
- * This endpoint is intentionally unauthenticated (monday IP allow-listing is
- * configured at the reverse proxy / deployment layer, per plan §B9). Dedup on
- * triggerUuid makes replays harmless regardless.
+ * Personal-token board webhooks do not guarantee a signed JWT. Registration
+ * uses a random secret in the callback path; every request, including the
+ * challenge, must provide it. Dedup handles repeated deliveries.
  */
 class MondayWebhookController extends Controller
 {
-    public function __invoke(Request $request): JsonResponse
+    public function __invoke(Request $request, string $secret): JsonResponse
     {
+        $expected = (string) config('monday.webhook_secret', '');
+        if (preg_match('/^[A-Za-z0-9_-]{32,}$/', $expected) !== 1 || ! hash_equals($expected, $secret)) {
+            return response()->json(['error' => 'Unauthorized webhook'], 403);
+        }
+
         // Registration challenge handshake.
         if ($request->has('challenge')) {
             return response()->json(['challenge' => $request->input('challenge')]);

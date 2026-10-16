@@ -15,6 +15,7 @@ class MondaySyncedItem extends Model
         'domain',
         'item_id',
         'state',
+        'mapping_revision',
         'verdict',
         'last_seen_at',
     ];
@@ -23,6 +24,7 @@ class MondaySyncedItem extends Model
     {
         return [
             'verdict' => 'array',
+            'mapping_revision' => 'integer',
             'last_seen_at' => 'datetime',
         ];
     }

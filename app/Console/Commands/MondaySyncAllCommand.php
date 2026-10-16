@@ -58,8 +58,13 @@ class MondaySyncAllCommand extends Command
                     continue;
                 }
 
-                $new = $result['new'] ?? 0;
-                $this->info("[{$domain}] ".($dryRun ? ($new.' new item(s) to import') : ($new.' new item(s) imported'))." (board {$result['board_id']}).");
+                $new = (int) ($result['new'] ?? 0);
+                $replay = (int) ($result['replay'] ?? 0);
+                $failed = (int) ($result['failed'] ?? 0);
+                $this->info("[{$domain}] {$new} new, {$replay} to replay".($dryRun ? '' : ", {$failed} failed")." (board {$result['board_id']}).");
+                if ($failed > 0) {
+                    $exit = self::FAILURE;
+                }
             } catch (Throwable $exception) {
                 $this->error("[{$domain}] sync failed: ".$exception->getMessage());
                 $exit = self::FAILURE;

@@ -250,7 +250,7 @@ class MondayItemMapperTest extends TestCase
         $this->assertSame(1, CustomTableColumn::query()->where('table_key', 'service-requests')->count());
 
         $map = $table->fresh()->monday_field_map;
-        $this->assertSame($brand->id, $map['mirror1']);
+        $this->assertArrayNotHasKey('mirror1', $map);
         $this->assertSame($brand->id, $map['text9']);
     }
 

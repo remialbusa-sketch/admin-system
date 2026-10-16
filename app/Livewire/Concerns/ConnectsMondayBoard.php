@@ -9,6 +9,7 @@ use App\Services\MondayItemMapper;
 use App\Services\MondaySyncService;
 use App\Support\MondayCoreTargets;
 use App\Support\MondaySettings;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 /**
@@ -62,6 +63,8 @@ trait ConnectsMondayBoard
      * @var array<int, array{id: string, title: string, type: string, settingsStr: string, local: string, newName: string}>
      */
     public array $mapColumns = [];
+
+    public string $mapBoardId = '';
 
     protected function mondayDomainKey(): string
     {
@@ -142,36 +145,57 @@ trait ConnectsMondayBoard
 
         $boardId = trim($this->connectBoardId);
 
-        if ($boardId === '') {
-            $this->addError('connectBoardId', 'Choose a board (or enter its id).');
+        if (! ctype_digit($boardId) || (int) $boardId < 1) {
+            $this->addError('connectBoardId', 'Choose a valid numeric board id.');
 
             return;
         }
 
-        // 1. Persist the connection (setting row + any registry mirror).
-        $this->persistMondayBoard($boardId);
-        $this->mondayBoardId = $boardId;
+        if (MondaySyncSetting::query()->where('board_id', $boardId)->where('domain', '!=', $this->mondayDomainKey())->exists()) {
+            $this->addError('connectBoardId', 'This board is already connected to another table.');
 
-        // 2. Optional title-field remap (core tables only — dynamic tables'
-        //    name column is fixed).
-        $titleOptions = MondayCoreTargets::titleFieldOptions($this->mondayDomainKey());
-        if ($titleOptions !== [] && array_key_exists($this->mondayTitleField, $titleOptions)) {
-            $this->mondaySetting()->update(['title_field' => $this->mondayTitleField]);
+            return;
         }
 
-        // 3. Auto-map the board's real columns into table columns.
+        // Verify the remote board before replacing a working connection.
         $created = 0;
 
         try {
             $boardColumns = app(MondayApiClient::class)->boardColumns((int) $boardId);
-            $created = app(MondayItemMapper::class)->autoCreateColumns(
-                $this->mondayDomainKey(),
-                $boardColumns,
-                auth()->user()?->id,
-            );
+            if ($boardColumns === []) {
+                throw new \RuntimeException('The board was not found or returned no columns.');
+            }
+
+            DB::transaction(function () use ($boardId, $boardColumns, &$created): void {
+                $setting = $this->mondaySetting();
+                $isNewBoard = $setting->board_id !== $boardId;
+
+                if ($isNewBoard || empty($setting->field_map)) {
+                    $created = app(MondayItemMapper::class)->autoCreateColumns(
+                        $this->mondayDomainKey(),
+                        $boardColumns,
+                        auth()->user()?->id,
+                    );
+                }
+
+                $titleOptions = MondayCoreTargets::titleFieldOptions($this->mondayDomainKey());
+                if ($titleOptions !== [] && array_key_exists($this->mondayTitleField, $titleOptions)) {
+                    if ($setting->title_field !== $this->mondayTitleField) {
+                        $setting->refresh();
+                        $setting->update([
+                            'title_field' => $this->mondayTitleField,
+                            'mapping_revision' => (int) $setting->mapping_revision + 1,
+                        ]);
+                    }
+                }
+
+                $this->persistMondayBoard($boardId);
+            });
+
+            $this->mondayBoardId = $boardId;
         } catch (Throwable $exception) {
-            $this->closeConnectBoardModal();
-            $this->mondayMessage = 'Board '.$boardId.' saved, but fetching its columns failed: '.$exception->getMessage();
+            $this->addError('connectBoardId', 'Could not verify this board: '.$exception->getMessage());
+            $this->mondayMessage = 'Could not connect board '.$boardId.': '.$exception->getMessage();
             $this->mondayMessageTone = 'error';
 
             return;
@@ -195,10 +219,13 @@ trait ConnectsMondayBoard
 
                     if (($result['status'] ?? '') === 'ok') {
                         $message .= sprintf(
-                            ' Imported %d new item(s), %d failed.',
+                            ' Processed %d item(s), %d failed.',
                             (int) ($result['imported'] ?? 0),
                             (int) ($result['failed'] ?? 0),
                         );
+                        if ((int) ($result['failed'] ?? 0) > 0) {
+                            $tone = 'error';
+                        }
                     } else {
                         $message .= ' Backfill skipped: '.($result['message'] ?? 'sync not ready.');
                         $tone = 'error';
@@ -254,8 +281,24 @@ trait ConnectsMondayBoard
             return;
         }
 
+        $samples = [];
+        try {
+            $client = app(MondayApiClient::class);
+            $firstId = $client->itemsPage((int) $boardId)['items'][0]['id'] ?? null;
+            if ($firstId !== null) {
+                $sampleItem = $client->items([(string) $firstId])[0] ?? [];
+                foreach ($sampleItem['column_values'] ?? [] as $value) {
+                    $samples[(string) ($value['id'] ?? '')] = trim((string) ($value['display_value'] ?? $value['text'] ?? ''));
+                }
+            }
+        } catch (Throwable) {
+            // A sample helps review but is not required to edit a mapping.
+        }
+
         $fieldMap = $this->mondaySetting()->field_map;
         $fieldMap = is_array($fieldMap) ? $fieldMap : [];
+        $coreFieldMap = $this->mondaySetting()->core_field_map;
+        $skipped = $this->mondaySetting()->skipped_column_ids ?? [];
 
         $local = CustomTableColumn::query()
             ->where('table_key', $this->mondayDomainKey())
@@ -275,7 +318,9 @@ trait ConnectsMondayBoard
 
             $mapped = $fieldMap[$id] ?? null;
 
-            if ($mapped !== null && $localIds->has((string) $mapped)) {
+            if (in_array($id, $skipped, true)) {
+                $selected = '';
+            } elseif ($mapped !== null && $localIds->has((string) $mapped)) {
                 $selected = (string) $mapped;
             } else {
                 $selected = (string) ($localByName->get(mb_strtolower($title))?->id ?? '');
@@ -286,12 +331,17 @@ trait ConnectsMondayBoard
                 'title' => $title,
                 'type' => (string) ($column['type'] ?? ''),
                 'settingsStr' => (string) ($column['settings_str'] ?? ''),
+                'sample' => mb_strimwidth($samples[$id] ?? '', 0, 80, '…'),
                 'local' => $selected,
                 'newName' => $title,
+                'coreField' => $coreFieldMap === null
+                    ? MondayCoreTargets::fieldForLabel($this->mondayDomainKey(), $localIds->get($selected)?->name ?? $title) ?? ''
+                    : (string) ($coreFieldMap[$id] ?? ''),
             ];
         }
 
         $this->mapColumns = $rows;
+        $this->mapBoardId = $boardId;
         $this->showMapColumnsModal = true;
         $this->dispatch('open-modal', name: 'map-columns');
     }
@@ -300,9 +350,8 @@ trait ConnectsMondayBoard
      * Save the Map-columns editor. Every row must resolve to an existing
      * table column, "don't sync" (''), or a create-new request — all rows
      * are validated BEFORE anything is written, so one bad choice persists
-     * nothing. Rows are authoritative for their own monday ids; entries for
-     * board columns not shown in the editor are kept (they may belong to a
-     * newer board revision).
+     * nothing. The board schema is refetched to reject stale editor drafts;
+     * skipped IDs and core destinations are saved with the local field map.
      */
     public function saveColumnMap(): void
     {
@@ -310,92 +359,171 @@ trait ConnectsMondayBoard
 
         $domain = $this->mondayDomainKey();
         $mapper = app(MondayItemMapper::class);
+        $setting = $this->mondaySetting();
+        $boardId = (string) ($setting->board_id ?? '');
 
-        $validIds = CustomTableColumn::query()
-            ->where('table_key', $domain)
-            ->pluck('id')
-            ->map(fn ($id): string => (string) $id)
-            ->flip()
-            ->all();
+        if ($boardId === '' || $boardId !== $this->mapBoardId) {
+            $this->mondayMessage = 'The connected board changed. Reopen Map columns before saving.';
+            $this->mondayMessageTone = 'error';
 
-        // Pass 1: validate every choice before touching anything.
+            return;
+        }
+
+        try {
+            $boardColumns = app(MondayApiClient::class)->boardColumns((int) $boardId);
+        } catch (Throwable $exception) {
+            $this->mondayMessage = 'Could not verify the board columns: '.$exception->getMessage();
+            $this->mondayMessageTone = 'error';
+
+            return;
+        }
+
+        $remote = collect($boardColumns)
+            ->filter(fn (array $column): bool => trim((string) ($column['id'] ?? '')) !== '' && trim((string) ($column['title'] ?? '')) !== '')
+            ->keyBy(fn (array $column): string => (string) $column['id']);
+        $submitted = collect($this->mapColumns)->pluck('id')->map(fn ($id): string => (string) $id);
+        if ($remote->isEmpty() || $submitted->count() !== $remote->count()
+            || $submitted->unique()->count() !== $remote->count()
+            || $submitted->diff($remote->keys())->isNotEmpty()) {
+            $this->mondayMessage = 'The board columns changed. Reopen Map columns and review the latest list.';
+            $this->mondayMessageTone = 'error';
+
+            return;
+        }
+
+        $local = CustomTableColumn::query()->where('table_key', $domain)->get();
+        $localIds = $local->keyBy(fn (CustomTableColumn $column): string => (string) $column->id);
+        $localNames = $local->keyBy(fn (CustomTableColumn $column): string => mb_strtolower(trim($column->name)));
+        $coreOptions = MondayCoreTargets::fieldOptions($domain);
+        $destinations = [];
+        $coreDestinations = [];
+
+        // Validate the entire draft before creating columns or changing the map.
         foreach ($this->mapColumns as $row) {
+            $id = (string) $row['id'];
             $choice = (string) ($row['local'] ?? '');
+            if ($choice === '') {
+                continue;
+            }
 
-            if ($choice !== '' && $choice !== '__new__' && ! isset($validIds[$choice])) {
-                $this->mondayMessage = 'That column is not part of this table — nothing was saved.';
+            $source = $remote->get($id);
+            $name = trim((string) ($row['newName'] ?? '')) ?: trim((string) ($source['title'] ?? ''));
+            $column = $choice === '__new__' ? $localNames->get(mb_strtolower($name)) : $localIds->get($choice);
+
+            if (($choice === '__new__' && $name === '') || ($choice !== '__new__' && ! $column)) {
+                $this->mondayMessage = 'Choose a column from this table or enter a new column name.';
                 $this->mondayMessageTone = 'error';
 
                 return;
             }
 
-            if ($choice === '__new__'
-                && trim((string) ($row['newName'] ?? '')) === ''
-                && trim((string) ($row['title'] ?? '')) === '') {
-                $this->mondayMessage = 'A new column needs a name — nothing was saved.';
+            $destination = $column ? 'id:'.$column->id : 'new:'.mb_strtolower($name);
+            if (isset($destinations[$destination])) {
+                $this->mondayMessage = 'Two monday columns target the same table column. Choose one source and skip the other.';
                 $this->mondayMessageTone = 'error';
 
                 return;
+            }
+            $destinations[$destination] = true;
+
+            if ($column && ! $this->mondayTypesCompatible($mapper->registryTypeFor((string) ($source['type'] ?? 'text')), $column->type)) {
+                $this->mondayMessage = 'The monday column '.($source['title'] ?? $id).' is not compatible with '.$column->name.' ('.$column->type.').';
+                $this->mondayMessageTone = 'error';
+
+                return;
+            }
+
+            $coreField = (string) ($row['coreField'] ?? '');
+            if ($coreField !== '' && ! isset($coreOptions[$coreField])) {
+                $this->mondayMessage = 'Choose a valid core field for this table.';
+                $this->mondayMessageTone = 'error';
+
+                return;
+            }
+            if ($coreField !== '' && isset($coreDestinations[$coreField])) {
+                $this->mondayMessage = 'Two monday columns target the same core field. Choose one source.';
+                $this->mondayMessageTone = 'error';
+
+                return;
+            }
+            if ($coreField !== '') {
+                $coreDestinations[$coreField] = true;
             }
         }
 
-        $setting = $this->mondaySetting();
-        $map = is_array($setting->field_map) ? $setting->field_map : [];
+        if ($destinations === []) {
+            $this->mondayMessage = 'Map at least one monday column before saving.';
+            $this->mondayMessageTone = 'error';
 
-        $mapped = 0;
-        $skipped = 0;
+            return;
+        }
+
+        $map = [];
+        $coreMap = [];
+        $skippedIds = [];
         $created = 0;
 
-        // Pass 2: apply.
-        foreach ($this->mapColumns as $row) {
-            $id = (string) ($row['id'] ?? '');
+        try {
+            DB::transaction(function () use ($domain, $mapper, $remote, &$map, &$coreMap, &$skippedIds, &$created): void {
+                foreach ($this->mapColumns as $row) {
+                    $id = (string) $row['id'];
+                    $choice = (string) ($row['local'] ?? '');
+                    if ($choice === '') {
+                        $skippedIds[] = $id;
 
-            if ($id === '') {
-                continue;
-            }
+                        continue;
+                    }
 
-            $choice = (string) ($row['local'] ?? '');
+                    if ($choice === '__new__') {
+                        $source = $remote->get($id);
+                        $source['title'] = trim((string) ($row['newName'] ?? '')) ?: (string) $source['title'];
+                        $column = $mapper->ensureColumn($domain, $source, auth()->user()?->id);
+                        if ($column->wasRecentlyCreated) {
+                            $created++;
+                        }
+                        $map[$id] = $column->id;
+                    } else {
+                        $map[$id] = (int) $choice;
+                    }
 
-            if ($choice === '') {
-                unset($map[$id]);
-                $skipped++;
-
-                continue;
-            }
-
-            if ($choice === '__new__') {
-                $title = trim((string) ($row['newName'] ?? '')) ?: trim((string) ($row['title'] ?? ''));
-
-                $column = $mapper->ensureColumn($domain, [
-                    'title' => $title,
-                    'type' => (string) ($row['type'] ?? 'text'),
-                    'settings_str' => (string) ($row['settingsStr'] ?? ''),
-                ], auth()->user()?->id);
-
-                if ($column->wasRecentlyCreated) {
-                    $created++;
+                    if (($row['coreField'] ?? '') !== '') {
+                        $coreMap[$id] = (string) $row['coreField'];
+                    }
                 }
 
-                $map[$id] = $column->id;
-                $mapped++;
+                $mapper->persistFieldMap($domain, $map, $coreMap, $skippedIds);
+            });
+        } catch (Throwable $exception) {
+            $this->mondayMessage = 'Could not save the mapping: '.$exception->getMessage();
+            $this->mondayMessageTone = 'error';
 
-                continue;
-            }
-
-            $map[$id] = (int) $choice;
-            $mapped++;
+            return;
         }
-
-        $mapper->persistFieldMap($domain, $map);
 
         $this->closeMapColumnsModal();
         $this->mondayMessage = sprintf(
             'Column map saved — %d board column(s) syncing, %d skipped, %d new column(s) created. Run Sync now to apply it.',
-            $mapped,
-            $skipped,
+            count($map),
+            count($skippedIds),
             $created,
         );
         $this->mondayMessageTone = 'success';
+    }
+
+    protected function mondayTypesCompatible(string $source, string $target): bool
+    {
+        $allowed = match ($source) {
+            'number' => ['number', 'text', 'long_text'],
+            'date' => ['date', 'text', 'long_text'],
+            'checkbox' => ['checkbox', 'text', 'long_text'],
+            'status', 'dropdown' => ['status', 'dropdown', 'text', 'long_text'],
+            'email' => ['email', 'text', 'long_text'],
+            'phone' => ['phone', 'text', 'long_text'],
+            'person' => ['person', 'text', 'long_text'],
+            default => null,
+        };
+
+        return $allowed === null || in_array($target, $allowed, true);
     }
 
     protected function closeMapColumnsModal(): void
@@ -448,13 +576,14 @@ trait ConnectsMondayBoard
             'disabled' => $result['message'] ?? 'Sync is not ready.',
             'error' => $result['message'] ?? 'Sync errored.',
             default => sprintf(
-                'Sync done — %d new item(s), %d imported, %d failed.',
+                'Sync done — %d new item(s), %d item(s) replayed, %d processed, %d failed.',
                 (int) ($result['new'] ?? 0),
+                (int) ($result['replay'] ?? 0),
                 (int) ($result['imported'] ?? 0),
                 (int) ($result['failed'] ?? 0),
             ),
         };
-        $this->mondayMessageTone = ($result['status'] ?? '') === 'ok' ? 'success' : 'error';
+        $this->mondayMessageTone = ($result['status'] ?? '') === 'ok' && (int) ($result['failed'] ?? 0) === 0 ? 'success' : 'error';
     }
 
     /**
@@ -465,10 +594,11 @@ trait ConnectsMondayBoard
     {
         abort_unless($this->canImport(), 403);
 
-        $this->persistMondayBoard(null);
-
-        $setting = $this->mondaySetting();
-        $setting->update(['enabled' => false]);
+        DB::transaction(function (): void {
+            app(MondayItemMapper::class)->persistFieldMap($this->mondayDomainKey(), [], [], []);
+            $this->persistMondayBoard(null);
+            $this->mondaySetting()->update(['enabled' => false]);
+        });
 
         $this->mondayBoardId = null;
         $this->mondayEnabled = false;
@@ -500,11 +630,12 @@ trait ConnectsMondayBoard
             'mondayTitleField' => $this->mondayTitleField,
             'mondayTitleFieldOptions' => MondayCoreTargets::titleFieldOptions($this->mondayDomainKey()),
             'mondayMapColumns' => $this->mapColumns,
+            'mondayCoreFieldOptions' => MondayCoreTargets::fieldOptions($this->mondayDomainKey()),
             'mondayTableColumns' => CustomTableColumn::query()
                 ->where('table_key', $this->mondayDomainKey())
                 ->orderBy('position')
-                ->get(['id', 'name'])
-                ->map(fn (CustomTableColumn $column): array => ['id' => (string) $column->id, 'name' => $column->name])
+                ->get(['id', 'name', 'type'])
+                ->map(fn (CustomTableColumn $column): array => ['id' => (string) $column->id, 'name' => $column->name, 'type' => $column->type])
                 ->all(),
             'mondayMessage' => $this->mondayMessage,
             'mondayMessageTone' => $this->mondayMessageTone,

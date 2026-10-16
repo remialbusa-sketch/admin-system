@@ -155,10 +155,13 @@
 <x-admin.modal
     name="map-columns"
     title="Map board columns to this table"
-    description="Choose which table column each monday.com column feeds. Unmapped board columns are skipped on every pull; changes take effect on the next sync."
+    description="Choose one monday.com source for each table column and core field. Saving a change marks previously imported board items for reprocessing on the next sync."
     size="lg"
 >
     <form wire:submit="saveColumnMap" class="space-y-4">
+        @if ($monday['mondayMessageTone'] === 'error' && $monday['mondayMessage'] !== '')
+            <p class="rounded-md border border-error/20 bg-error/5 px-3 py-2 text-xs text-error">{{ $monday['mondayMessage'] }}</p>
+        @endif
         @if ($monday['mondayMapColumns'] === [])
             <p class="rounded-md border border-base-300 bg-base-200/50 px-3 py-2 text-xs text-base-content/60">
                 No board columns loaded — connect a board first.
@@ -171,18 +174,27 @@
                             <th>monday column</th>
                             <th>Type</th>
                             <th class="w-2/5">→ this table's column</th>
+                            @if ($monday['mondayCoreFieldOptions'] !== [])
+                                <th>→ core field</th>
+                            @endif
                         </tr>
                     </thead>
                     <tbody>
                         @foreach ($monday['mondayMapColumns'] as $index => $row)
                             <tr>
-                                <td class="font-semibold">{{ $row['title'] }}</td>
+                                <td class="font-semibold">
+                                    {{ $row['title'] }}
+                                    <span class="block font-normal text-xs text-base-content/50">ID: {{ $row['id'] }}</span>
+                                    @if (($row['sample'] ?? '') !== '')
+                                        <span class="block font-normal text-xs text-base-content/60">Sample: {{ $row['sample'] }}</span>
+                                    @endif
+                                </td>
                                 <td><span class="badge badge-ghost badge-sm">{{ $row['type'] !== '' ? $row['type'] : 'text' }}</span></td>
                                 <td>
                                     <select wire:model="mapColumns.{{ $index }}.local" class="admin-control w-full">
                                         <option value="">— Don't sync —</option>
                                         @foreach ($monday['mondayTableColumns'] as $column)
-                                            <option value="{{ $column['id'] }}">{{ $column['name'] }}</option>
+                                            <option value="{{ $column['id'] }}">{{ $column['name'] }} ({{ $column['type'] }})</option>
                                         @endforeach
                                         <option value="__new__">+ Create new column…</option>
                                     </select>
@@ -190,12 +202,24 @@
                                         <input type="text" wire:model="mapColumns.{{ $index }}.newName" class="admin-control mt-1.5 w-full" placeholder="New column name">
                                     @endif
                                 </td>
+                                @if ($monday['mondayCoreFieldOptions'] !== [])
+                                    <td>
+                                        <select wire:model="mapColumns.{{ $index }}.coreField" class="admin-control w-full">
+                                            <option value="">— Custom column only —</option>
+                                            @foreach ($monday['mondayCoreFieldOptions'] as $field => $label)
+                                                <option value="{{ $field }}">{{ $label }}</option>
+                                            @endforeach
+                                        </select>
+                                    </td>
+                                @endif
                             </tr>
                         @endforeach
                     </tbody>
                 </table>
             </div>
         @endif
+
+        <p class="text-xs text-base-content/60">A saved change reprocesses previously imported items from this board on the next sync. This can take time on large boards.</p>
 
         <div class="flex items-center justify-end gap-2 border-t border-base-300 pt-4">
             <button type="button" x-on:click="$dispatch('close-modal', { name: 'map-columns' })" class="admin-secondary-button">Cancel</button>

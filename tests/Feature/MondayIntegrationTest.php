@@ -209,7 +209,7 @@ class MondayIntegrationTest extends TestCase
 
     public function test_register_webhook_command_registers_and_reports_id(): void
     {
-        config(['monday.token' => 't']);
+        config(['monday.token' => 't', 'monday.webhook_secret' => str_repeat('s', 32)]);
 
         Http::fake([
             'https://api.monday.com/v2' => function ($request) {
@@ -383,6 +383,7 @@ class MondayIntegrationTest extends TestCase
         $result = $service->syncDomain('retry');
         $this->assertSame(1, $result['failed']);
         $this->assertSame('failed', MondaySyncedItem::query()->where('domain', 'retry')->where('item_id', '77')->value('state'));
+        $this->assertDatabaseMissing('dynamic_rows', ['table_key' => 'retry', 'source_record_id' => '77']);
 
         // Because it's failed (not imported), a second run still treats it as a
         // candidate (retries it) rather than skipping it.

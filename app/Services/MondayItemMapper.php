@@ -12,6 +12,7 @@ use App\Models\MondaySyncSetting;
 use App\Support\ImportOptionSeeder;
 use App\Support\MondayCoreTargets;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
@@ -102,8 +103,8 @@ class MondayItemMapper
 
     /**
      * Map the board's real columns onto this table — creating the missing
-     * ones — and persist the field map (monday column id -> custom column
-     * id). Existing entries are kept; board columns win on conflict.
+     * ones — and persist the authoritative field map (monday column id ->
+     * custom column id). A writable source wins over a same-name mirror.
      *
      * @param  array<int, array{id: string, title: string, type: string}>  $boardColumns
      */
@@ -114,6 +115,10 @@ class MondayItemMapper
         $known = $this->columnsByName($tableKey);
 
         $fieldMap = [];
+        $coreFieldMap = [];
+        $chosen = [];
+        $coreChosen = [];
+        $createdIds = [];
         $created = 0;
 
         foreach ($boardColumns as $column) {
@@ -126,15 +131,39 @@ class MondayItemMapper
 
             $local = $this->resolveColumn($tableKey, $column, $createdBy, $known);
 
-            $fieldMap[$id] = $local->id;
+            // Boards can contain a mirror and a writable column with the
+            // same title. One destination must have one authoritative source.
+            $prior = $chosen[$local->id] ?? null;
+            if ($prior !== null) {
+                if ($this->sourcePriority((string) ($column['type'] ?? '')) <= $prior['priority']) {
+                    continue;
+                }
 
-            if ($local->wasRecentlyCreated) {
+                unset($fieldMap[$prior['id']], $coreFieldMap[$prior['id']]);
+            }
+
+            $fieldMap[$id] = $local->id;
+            $chosen[$local->id] = ['id' => $id, 'priority' => $this->sourcePriority((string) ($column['type'] ?? ''))];
+            $coreField = MondayCoreTargets::fieldForLabel($tableKey, $title);
+            if ($coreField !== null) {
+                $priorCore = $coreChosen[$coreField] ?? null;
+                $priority = $this->sourcePriority((string) ($column['type'] ?? ''));
+                if ($priorCore === null || $priority > $priorCore['priority']) {
+                    if ($priorCore !== null) {
+                        unset($coreFieldMap[$priorCore['id']]);
+                    }
+                    $coreFieldMap[$id] = $coreField;
+                    $coreChosen[$coreField] = ['id' => $id, 'priority' => $priority];
+                }
+            }
+
+            if ($local->wasRecentlyCreated && ! isset($createdIds[$local->id])) {
+                $createdIds[$local->id] = true;
                 $created++;
             }
         }
 
-        $setting = MondaySyncSetting::forDomain($tableKey);
-        $this->persistFieldMap($tableKey, array_merge($setting->field_map ?? [], $fieldMap));
+        $this->persistFieldMap($tableKey, $fieldMap, $coreFieldMap, []);
 
         return $created;
     }
@@ -157,13 +186,38 @@ class MondayItemMapper
      * (monday_sync_settings.field_map) plus the dynamic table's legacy
      * mirror, kept equal to it so the two can never disagree.
      */
-    public function persistFieldMap(string $tableKey, array $fieldMap): void
+    public function persistFieldMap(string $tableKey, array $fieldMap, ?array $coreFieldMap = null, ?array $skippedIds = null): void
     {
-        MondaySyncSetting::forDomain($tableKey)->update(['field_map' => $fieldMap]);
+        $setting = MondaySyncSetting::forDomain($tableKey);
+        $updates = ['field_map' => $fieldMap];
+
+        if ($coreFieldMap !== null) {
+            $updates['core_field_map'] = $coreFieldMap;
+        }
+        if ($skippedIds !== null) {
+            $updates['skipped_column_ids'] = array_values($skippedIds);
+        }
+
+        if ($setting->field_map !== $fieldMap
+            || ($coreFieldMap !== null && $setting->core_field_map !== $coreFieldMap)
+            || ($skippedIds !== null && ($setting->skipped_column_ids ?? []) !== array_values($skippedIds))) {
+            $updates['mapping_revision'] = (int) $setting->mapping_revision + 1;
+        }
+
+        $setting->update($updates);
 
         if ($table = DynamicTable::query()->where('key', $tableKey)->first()) {
             $table->update(['monday_field_map' => $fieldMap]);
         }
+    }
+
+    private function sourcePriority(string $type): int
+    {
+        return match (strtolower($type)) {
+            'mirror', 'lookup' => 0,
+            'board_relation' => 1,
+            default => 2,
+        };
     }
 
     /**
@@ -194,7 +248,7 @@ class MondayItemMapper
             'table_key' => $tableKey,
             'name' => $title,
             'type' => $registryType,
-            'settings' => $this->defaultSettings($registryType, $this->parseOptions((string) ($boardColumn['settings_str'] ?? ''), $registryType)),
+            'settings' => $this->defaultSettings($registryType, $this->parseOptions((string) ($boardColumn['settings_str'] ?? ''), $registryType), $title),
             'position' => (int) CustomTableColumn::query()->where('table_key', $tableKey)->max('position') + 1,
             'created_by' => $createdBy,
         ]);
@@ -268,6 +322,7 @@ class MondayItemMapper
             ->whereIn('id', array_values($fieldMap))
             ->get()
             ->keyBy('id');
+        $coreFieldMap = $setting->core_field_map;
 
         $dynamic = DynamicTable::query()->where('key', $tableKey)->first();
         $core = $dynamic ? null : MondayCoreTargets::resolve($tableKey);
@@ -276,119 +331,148 @@ class MondayItemMapper
             return false;
         }
 
-        if ($dynamic) {
-            $row = DynamicRow::query()->updateOrCreate(
-                [
-                    'table_key' => $tableKey,
-                    'source_system' => 'monday:'.$tableKey,
-                    'source_record_id' => $itemId,
-                ],
-                [
-                    'name' => Str::limit((string) ($item['name'] ?? $itemId), 255),
+        DB::beginTransaction();
+
+        try {
+            if ($dynamic) {
+                $row = DynamicRow::query()->updateOrCreate(
+                    [
+                        'table_key' => $tableKey,
+                        'source_system' => 'monday:'.$tableKey,
+                        'source_record_id' => $itemId,
+                    ],
+                    [
+                        'name' => Str::limit((string) ($item['name'] ?? $itemId), 255),
+                        'source_updated_at' => ! empty($item['updated_at']) ? $item['updated_at'] : null,
+                    ],
+                );
+            } else {
+                // Core table: a domain row with the item name in the title field
+                // (setting override or the target's default).
+                $titleField = MondayCoreTargets::titleField($tableKey, $setting->title_field);
+
+                $values = [
+                    $titleField => Str::limit((string) ($item['name'] ?? $itemId), 255),
                     'source_updated_at' => ! empty($item['updated_at']) ? $item['updated_at'] : null,
-                ],
-            );
-        } else {
-            // Core table: a domain row with the item name in the title field
-            // (setting override or the target's default).
-            $titleField = MondayCoreTargets::titleField($tableKey, $setting->title_field);
+                    'raw_data' => ['monday_item_id' => $itemId],
+                ];
 
-            $values = [
-                $titleField => Str::limit((string) ($item['name'] ?? $itemId), 255),
-                'source_updated_at' => ! empty($item['updated_at']) ? $item['updated_at'] : null,
-                'raw_data' => ['monday_item_id' => $itemId],
-            ];
+                // installations.account_id is NOT NULL — attach the row to the
+                // real Account its board customer names, falling back to the
+                // stable placeholder per domain (see installationAccountIdFor).
+                if ($core['model'] === Installation::class) {
+                    $values['account_id'] = $this->installationAccountIdFor($tableKey, $item, $fieldMap, $columns);
+                }
 
-            // installations.account_id is NOT NULL — attach the row to the
-            // real Account its board customer names, falling back to the
-            // stable placeholder per domain (see installationAccountIdFor).
-            if ($core['model'] === Installation::class) {
-                $values['account_id'] = $this->installationAccountIdFor($tableKey, $item, $fieldMap, $columns);
+                $row = $core['model']::query()->updateOrCreate(
+                    [
+                        'source_system' => 'monday:'.$tableKey,
+                        'source_record_id' => $itemId,
+                    ],
+                    $values,
+                );
             }
 
-            $row = $core['model']::query()->updateOrCreate(
-                [
-                    'source_system' => 'monday:'.$tableKey,
-                    'source_record_id' => $itemId,
-                ],
-                $values,
-            );
-        }
+            $rowId = $row->getKey();
+            $ok = true;
 
-        $rowId = $row->getKey();
-        $ok = true;
+            // Core tables: a matched board column also feeds its DOMAIN column
+            // (MondayCoreTargets `columns`), applied once after the loop. An
+            // empty board value clears the cell — so a domain column the loop
+            // covers can never keep the item-name title either.
+            $domainColumns = $core['columns'] ?? [];
+            $attributes = [];
 
-        // Core tables: a matched board column also feeds its DOMAIN column
-        // (MondayCoreTargets `columns`), applied once after the loop. An
-        // empty board value clears the cell — so a domain column the loop
-        // covers can never keep the item-name title either.
-        $domainColumns = $core['columns'] ?? [];
-        $attributes = [];
+            foreach ($item['column_values'] ?? [] as $value) {
+                $columnId = $fieldMap[(string) ($value['id'] ?? '')] ?? null;
 
-        foreach ($item['column_values'] ?? [] as $value) {
-            $columnId = $fieldMap[(string) ($value['id'] ?? '')] ?? null;
-
-            if ($columnId === null) {
-                continue;
-            }
-
-            $column = $columns->get((int) $columnId);
-
-            if (! $column) {
-                continue;
-            }
-
-            $attribute = $domainColumns === [] ? null : ($domainColumns[$this->labelKey($column->name)] ?? null);
-
-            try {
-                $raw = $this->normalizeValue((string) ($value['type'] ?? 'text'), $value);
-
-                if ($raw === null || $raw === '') {
-                    $this->writeValue($rowId, $column, []);
-
-                    if ($attribute !== null) {
-                        $attributes[$attribute] = null;
-                    }
-
+                if ($columnId === null) {
                     continue;
                 }
 
-                // Shared import boundary: board labels seed the column's
-                // options before validate() (the flagged import bug class —
-                // never validate status/dropdown cells without seeding).
-                ImportOptionSeeder::seed($column, $raw);
+                $column = $columns->get((int) $columnId);
 
-                $validated = $this->registry->resolve($column->type)->validate($raw, $column->settings ?? []);
-
-                $this->writeValue($rowId, $column, $validated);
-
-                if ($attribute !== null) {
-                    $scalar = $this->registry->resolve($column->type)->toDisplayString($validated);
-
-                    $attributes[$attribute] = $scalar === '' ? null : $scalar;
+                if (! $column) {
+                    continue;
                 }
-            } catch (Throwable $exception) {
-                $ok = false;
 
-                // Never swallow silently: an unlogged cell failure is
-                // invisible in prod (the 2026-10-07 "missing fields" incident
-                // took three live probes to diagnose).
-                Log::warning('monday: cell value write failed', [
-                    'table' => $tableKey,
-                    'item_id' => $itemId,
-                    'column' => $column->name,
-                    'type' => $column->type,
-                    'monday_type' => $value['type'] ?? null,
-                    'error' => $exception->getMessage(),
-                ]);
+                $sourceId = (string) ($value['id'] ?? '');
+                $attribute = $core === null ? null : ($coreFieldMap === null
+                    ? ($domainColumns[$this->labelKey($column->name)] ?? null)
+                    : ($coreFieldMap[$sourceId] ?? null));
+
+                try {
+                    $raw = $this->normalizeValue((string) ($value['type'] ?? 'text'), $value);
+
+                    if ($raw === null || $raw === '') {
+                        $this->writeValue($rowId, $column, []);
+
+                        if ($attribute !== null) {
+                            $attributes[$attribute] = null;
+                        }
+
+                        continue;
+                    }
+
+                    // Shared import boundary: board labels seed the column's
+                    // options before validate() (the flagged import bug class —
+                    // never validate status/dropdown cells without seeding).
+                    ImportOptionSeeder::seed($column, $raw);
+
+                    $validated = $this->registry->resolve($column->type)->validate($raw, $column->settings ?? []);
+
+                    $this->writeValue($rowId, $column, $validated);
+
+                    if ($attribute !== null) {
+                        $scalar = $this->registry->resolve($column->type)->toDisplayString($validated);
+
+                        if (in_array($attribute, ['service_started_at', 'service_completed_at'], true)
+                            && ! empty($value['date']) && ! empty($value['time'])) {
+                            $scalar = $value['date'].' '.$value['time'];
+                        }
+
+                        $attributes[$attribute] = $scalar === '' ? null : $scalar;
+                    }
+                } catch (Throwable $exception) {
+                    $ok = false;
+
+                    // Never swallow silently: an unlogged cell failure is
+                    // invisible in prod (the 2026-10-07 "missing fields" incident
+                    // took three live probes to diagnose).
+                    Log::warning('monday: cell value write failed', [
+                        'table' => $tableKey,
+                        'item_id' => $itemId,
+                        'column' => $column->name,
+                        'type' => $column->type,
+                        'monday_type' => $value['type'] ?? null,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
             }
-        }
 
-        if ($attributes !== []) {
-            $row->update($attributes);
-        }
+            if ($attributes !== []) {
+                $row->update($attributes);
+            }
 
-        return $ok;
+            if (! $ok) {
+                DB::rollBack();
+
+                return false;
+            }
+
+            DB::commit();
+
+            return true;
+        } catch (Throwable $exception) {
+            DB::rollBack();
+            Log::warning('monday: item mapping failed', [
+                'table' => $tableKey,
+                'item_id' => $itemId,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**
@@ -532,6 +616,10 @@ class MondayItemMapper
      */
     private function normalizeValue(string $mondayType, array $value): mixed
     {
+        if ($mondayType === 'date' && ! empty($value['date'])) {
+            return (string) $value['date'].(! empty($value['time']) ? ' '.(string) $value['time'] : '');
+        }
+
         $text = $value['text'] ?? null;
 
         // Mirror/lookup and board_relation columns never carry 'text' — the
@@ -616,7 +704,7 @@ class MondayItemMapper
         return $options;
     }
 
-    private function defaultSettings(string $type, array $options = []): array
+    private function defaultSettings(string $type, array $options = [], string $title = ''): array
     {
         if (in_array($type, ['status', 'dropdown'], true) && $options !== []) {
             return [
@@ -627,6 +715,7 @@ class MondayItemMapper
 
         return match ($type) {
             'number' => ['precision' => 2],
+            'date' => ['include_time' => preg_match('/\btime\b/i', $title) === 1],
             'formula' => ['expression' => ''],
             default => [],
         };

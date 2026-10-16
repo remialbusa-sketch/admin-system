@@ -178,4 +178,35 @@ class MondayColumnMapTest extends TestCase
         $map = MondaySyncSetting::forDomain('service-requests')->fresh()->field_map;
         $this->assertSame($brand->id, $map['text9']);
     }
+
+    public function test_skipped_column_stays_skipped_when_the_editor_reopens(): void
+    {
+        $brand = CustomTableColumn::create(['table_key' => 'service-requests', 'name' => 'BRAND', 'type' => 'text', 'position' => 0]);
+        $status = CustomTableColumn::create(['table_key' => 'service-requests', 'name' => 'Ticket Status', 'type' => 'status', 'position' => 1]);
+        $this->makeConnectedTable(['text9' => $brand->id, 'status' => $status->id]);
+        $this->fakeBoardColumns();
+
+        $component = $this->tableComponent()->call('openMapColumns');
+        $rows = $component->get('mapColumns');
+        $rows[0]['local'] = '';
+        $component->set('mapColumns', $rows)->call('saveColumnMap')->call('openMapColumns');
+
+        $this->assertSame('', $component->get('mapColumns')[0]['local']);
+        $this->assertContains('text9', MondaySyncSetting::forDomain('service-requests')->fresh()->skipped_column_ids);
+    }
+
+    public function test_two_sources_cannot_write_the_same_destination(): void
+    {
+        $brand = CustomTableColumn::create(['table_key' => 'service-requests', 'name' => 'BRAND', 'type' => 'text', 'position' => 0]);
+        $this->makeConnectedTable(['text9' => $brand->id]);
+        $this->fakeBoardColumns();
+
+        $component = $this->tableComponent()->call('openMapColumns');
+        $rows = $component->get('mapColumns');
+        $rows[2]['local'] = (string) $brand->id;
+        $component->set('mapColumns', $rows)->call('saveColumnMap');
+
+        $component->assertSet('mondayMessageTone', 'error');
+        $this->assertSame(['text9' => $brand->id], MondaySyncSetting::forDomain('service-requests')->fresh()->field_map);
+    }
 }

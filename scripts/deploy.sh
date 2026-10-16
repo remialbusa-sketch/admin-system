@@ -48,7 +48,7 @@ git checkout main
 git pull --ff-only origin main
 
 echo "==> [2/6] Installing Composer deps (no-dev)"
-"$PHP_BIN" -r "file_exists('.env') || exit(1)" || { echo '.env missing — copy .env.production.example to .env and set values.' >&2; exit 1; }
+"$PHP_BIN" -r "file_exists('.env') || exit(1);" || { echo '.env missing — copy .env.production.example to .env and set values.' >&2; exit 1; }
 COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
 echo "==> [3/6] Running migrations (back up the DB in cPanel first!)"

@@ -56,7 +56,7 @@ for the rest of the session.
 | Analytics | `/technical-service-analysis` — **Technical Reports overview** (completion trend, status mix donut, TSP workload, brand mix; every widget drills into the filtered Technical Reports grid; period selector 7D/30D/90D), `/tsp-analytics` | `App\Livewire\TechnicalServiceAnalysis`, `App\Services\TechnicalServiceAnalysisService`, `TspAnalyticsService` |
 | Administration | `/users` (Superadmin-only) — create accounts, assign role + permission level + region, reset passwords | `App\Livewire\UserManagement` |
 | Import pipeline | (triggered via tables UI or `source:import` CLI) | `App\Services\SourceWorkbookImportService` — batch + per-row failure tracking, business-identity upsert + post-import dedupe |
-| monday.com pull | CLI + scheduler + webhook | `monday:inspect-board {id}`, `monday:sync {domain}` (`--dry-run`), `monday:sync-all` (every minute, toggle-gated); `POST /webhooks/monday` (create-item, `triggerUuid` dedup) → `MondaySyncItemJob`. See `docs/monday-integration-and-cpanel-deployment.md`. |
+| monday.com pull | CLI + scheduler + webhook | `monday:inspect-board {id}`, `monday:sync {domain}` (`--dry-run`), `monday:sync-all` (every minute, toggle-gated). The Map columns editor shows sample values, pins core fields by source ID, and replays imported items after a mapping change. `POST /webhooks/monday/{secret}` (create-item, `triggerUuid` dedup) → `MondaySyncItemJob`; set `MONDAY_WEBHOOK_SECRET` before registering. See `docs/monday-integration-and-cpanel-deployment.md`. |
 | Maintenance | (CLI) | `php artisan app:dedupe-installations`, `php artisan app:send-exec-digest` (scheduled Mondays 07:00) |
 
 ### Access model

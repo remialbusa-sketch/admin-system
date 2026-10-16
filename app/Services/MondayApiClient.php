@@ -148,7 +148,7 @@ class MondayApiClient
                 column_values {
                   id text type
                   ... on StatusValue   { label index }
-                  ... on DateValue     { date }
+                   ... on DateValue     { date time }
                   ... on NumbersValue  { number }
                   ... on DropdownValue { text }
                   ... on MirrorValue   { display_value }

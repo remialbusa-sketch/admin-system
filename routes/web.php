@@ -95,10 +95,10 @@ Route::view('profile', 'profile')
     ->middleware(['auth'])
     ->name('profile');
 
-// monday.com create-item webhook. Unauthenticated (monday has no shared secret
-// in the webhook payload); dedup on triggerUuid makes replays harmless, and
-// monday IP allow-listing is applied at the deployment/reverse-proxy layer (§B9).
-Route::post('webhooks/monday', MondayWebhookController::class)->name('webhooks.monday');
+// The personal-token board webhook has no guaranteed JWT. Its callback URL
+// carries a random secret; the controller checks it before the challenge or
+// event payload is accepted.
+Route::post('webhooks/monday/{secret}', MondayWebhookController::class)->name('webhooks.monday');
 
 Route::post('logout', function (Logout $logout) {
     $logout();

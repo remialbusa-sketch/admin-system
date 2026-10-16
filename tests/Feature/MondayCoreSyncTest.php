@@ -144,6 +144,62 @@ class MondayCoreSyncTest extends TestCase
         $this->assertSame(1, TechnicalReport::query()->where('source_system', 'monday:technical-reports')->count());
     }
 
+    public function test_changing_the_core_map_replays_an_imported_item_on_the_next_sync(): void
+    {
+        $this->fakeBoard();
+        MondaySyncSetting::create(['domain' => 'technical-reports', 'board_id' => '9', 'enabled' => true]);
+        app(MondayItemMapper::class)->autoCreateColumns('technical-reports', [
+            ['id' => 'text8', 'title' => 'Site Name', 'type' => 'text'],
+        ]);
+
+        $service = app(MondaySyncService::class);
+        $service->syncDomain('technical-reports');
+        $this->assertNull(TechnicalReport::query()->where('source_record_id', '77')->firstOrFail()->customer_name);
+
+        $setting = MondaySyncSetting::forDomain('technical-reports')->fresh();
+        app(MondayItemMapper::class)->persistFieldMap('technical-reports', $setting->field_map, ['text8' => 'customer_name'], []);
+
+        $result = $service->syncDomain('technical-reports');
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame('Alpha Hospital', TechnicalReport::query()->where('source_record_id', '77')->firstOrFail()->customer_name);
+        $this->assertSame(0, $service->syncDomain('technical-reports')['new']);
+    }
+
+    public function test_a_date_time_column_keeps_the_monday_time(): void
+    {
+        MondaySyncSetting::create(['domain' => 'technical-reports', 'board_id' => '9', 'enabled' => true]);
+        app(MondayItemMapper::class)->autoCreateColumns('technical-reports', [
+            ['id' => 'dt1', 'title' => 'Service Start Date & Time', 'type' => 'date'],
+        ]);
+
+        $this->assertTrue(app(MondayItemMapper::class)->mapItem('technical-reports', [
+            'id' => 'timed-1',
+            'name' => 'Timed report',
+            'column_values' => [['id' => 'dt1', 'type' => 'date', 'text' => 'Oct 10, 2026 09:30', 'date' => '2026-10-10', 'time' => '09:30:00']],
+        ]));
+
+        $report = TechnicalReport::query()->where('source_record_id', 'timed-1')->firstOrFail();
+        $this->assertSame('2026-10-10 09:30:00', $report->service_started_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_an_unavailable_board_does_not_replace_the_existing_connection(): void
+    {
+        config(['monday.token' => 't', 'monday.enabled' => true]);
+        MondaySyncSetting::create(['domain' => 'technical-reports', 'board_id' => '9', 'enabled' => true, 'field_map' => ['old' => 17]]);
+        Http::fake(['https://api.monday.com/v2' => Http::response(['data' => ['boards' => []]])]);
+
+        Livewire::actingAs(User::factory()->create(['role' => UserRole::Superadmin]))
+            ->test(TechnicalReportTable::class)
+            ->set('connectBoardId', '999')
+            ->call('connectBoard')
+            ->assertSet('mondayMessageTone', 'error');
+
+        $setting = MondaySyncSetting::forDomain('technical-reports')->fresh();
+        $this->assertSame('9', $setting->board_id);
+        $this->assertSame(['old' => 17], $setting->field_map);
+        $this->assertTrue($setting->enabled);
+    }
+
     public function test_title_field_override_maps_item_name_to_chosen_column(): void
     {
         $this->fakeBoard();
@@ -485,5 +541,68 @@ class MondayCoreSyncTest extends TestCase
         $this->assertSame('RHU Bontoc', $row->customer_name);
         $this->assertSame('Closed', $row->ticket_status);
         $this->assertSame('SYSMEX', $row->brand);
+    }
+
+    public function test_technical_report_board_values_fill_the_domain_columns(): void
+    {
+        MondaySyncSetting::create([
+            'domain' => 'technical-reports',
+            'board_id' => '10',
+            'enabled' => true,
+            'title_field' => 'reference_number',
+        ]);
+
+        app(MondayItemMapper::class)->autoCreateColumns('technical-reports', [
+            ['id' => 'cn1', 'title' => 'Customer Name', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'ss1', 'title' => 'Service Status', 'type' => 'status', 'settings_str' => '{"labels":{"0":"Completed"}}'],
+            ['id' => 'ts1', 'title' => 'Ticket Status', 'type' => 'status', 'settings_str' => '{"labels":{"0":"Closed"}}'],
+            ['id' => 'br1', 'title' => 'Brand', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'md1', 'title' => 'Model', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'jd1', 'title' => 'Job Done', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'pr1', 'title' => 'Parts Replaced', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'rc1', 'title' => 'Recommendation', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'tsp1', 'title' => 'TSP ASSIGNED', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'sn1', 'title' => 'Service Number', 'type' => 'text', 'settings_str' => ''],
+            ['id' => 'dt1', 'title' => 'Service Start Date & Time', 'type' => 'date', 'settings_str' => ''],
+            ['id' => 'dt2', 'title' => 'Service End Date & Time', 'type' => 'date', 'settings_str' => ''],
+        ]);
+
+        app(MondayItemMapper::class)->mapItem('technical-reports', [
+            'id' => '800',
+            'name' => 'REF-2026-001',
+            'column_values' => [
+                ['id' => 'cn1', 'type' => 'text', 'text' => 'Baguio General Hospital'],
+                ['id' => 'ss1', 'type' => 'status', 'text' => 'Completed', 'label' => 'Completed', 'index' => 0],
+                ['id' => 'ts1', 'type' => 'status', 'text' => 'Closed', 'label' => 'Closed', 'index' => 0],
+                ['id' => 'br1', 'type' => 'text', 'text' => 'Sysmex'],
+                ['id' => 'md1', 'type' => 'text', 'text' => 'XN-550'],
+                ['id' => 'jd1', 'type' => 'text', 'text' => 'Preventive maintenance performed'],
+                ['id' => 'pr1', 'type' => 'text', 'text' => 'Reagent tubing replaced'],
+                ['id' => 'rc1', 'type' => 'text', 'text' => 'Quarterly check recommended'],
+                ['id' => 'tsp1', 'type' => 'text', 'text' => 'Engr. Juan Dela Cruz'],
+                ['id' => 'sn1', 'type' => 'text', 'text' => 'SR-2026-999'],
+                ['id' => 'dt1', 'type' => 'date', 'text' => '2026-10-10'],
+                ['id' => 'dt2', 'type' => 'date', 'text' => '2026-10-11'],
+            ],
+        ]);
+
+        $row = TechnicalReport::query()
+            ->where('source_system', 'monday:technical-reports')
+            ->where('source_record_id', '800')
+            ->firstOrFail();
+
+        $this->assertSame('REF-2026-001', $row->reference_number);
+        $this->assertSame('Baguio General Hospital', $row->customer_name);
+        $this->assertSame('Completed', $row->service_status);
+        $this->assertSame('Closed', $row->ticket_status);
+        $this->assertSame('Sysmex', $row->brand);
+        $this->assertSame('XN-550', $row->machine_type);
+        $this->assertSame('Preventive maintenance performed', $row->job_done);
+        $this->assertSame('Reagent tubing replaced', $row->parts_replaced);
+        $this->assertSame('Quarterly check recommended', $row->recommendation);
+        $this->assertSame('Engr. Juan Dela Cruz', $row->tsp_name);
+        $this->assertSame('SR-2026-999', $row->service_request_number);
+        $this->assertSame('2026-10-10', $row->service_started_at?->toDateString());
+        $this->assertSame('2026-10-11', $row->service_completed_at?->toDateString());
     }
 }

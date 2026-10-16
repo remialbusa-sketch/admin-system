@@ -14,6 +14,7 @@ use App\Models\MondaySyncSetting;
 use App\Models\User;
 use App\Services\DynamicTableImportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -189,12 +190,22 @@ class DynamicTableTest extends TestCase
 
     public function test_connect_board_stores_board_id(): void
     {
+        config(['monday.token' => 'test-token', 'monday.enabled' => false]);
+        Http::fake([
+            'https://api.monday.com/v2' => Http::response([
+                'data' => ['boards' => [['columns' => [
+                    ['id' => 'status', 'title' => 'Status', 'type' => 'status', 'settings_str' => ''],
+                ]]]],
+            ]),
+        ]);
+
         $table = $this->createTableWithColumns();
 
         Livewire::actingAs($this->superadmin())
             ->test(DynamicTable::class, ['table' => $table->key])
             ->call('openConnectBoard')
             ->set('connectBoardId', '1771812698')
+            ->set('mondayBackfill', false)
             ->call('connectBoard');
 
         $this->assertSame('1771812698', $table->fresh()->monday_board_id);
