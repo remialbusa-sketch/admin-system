@@ -6,8 +6,8 @@ namespace App\Support\Dashboard;
  * The data contract every dashboard widget factory resolves against: scalar
  * metrics for the expression engine plus named datasets (regions, install
  * trend, SLA queue...). Built from ProductDashboardService::summary(), so
- * widgets never touch the database themselves — region scope and period are
- * enforced upstream before a widget ever sees the data.
+ * preset widgets consume scoped summaries. Column charts and slicers use the
+ * server-resolved source tables and filters through DashboardColumnService.
  *
  * Multi-table dashboards add connected sources (alias => {metrics, datasets});
  * dataset keys are then namespaced "alias.name", while bare names keep
@@ -77,6 +77,12 @@ final class DashboardContext
     public function withFilters(array $filters): self
     {
         return new self($this->region, $this->period, $this->metrics, $this->datasets, $this->sources, $filters, $this->metricRag);
+    }
+
+    /** Server-resolved source tables; widget props may only refer to these aliases. */
+    public function sourceTables(): array
+    {
+        return array_filter(array_map(fn ($source) => $source['table_key'] ?? null, $this->sources));
     }
 
     public function withMetricRag(array $metricRag): self

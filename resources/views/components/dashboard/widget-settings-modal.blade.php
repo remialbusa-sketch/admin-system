@@ -28,6 +28,17 @@
                                 <option value="{{ $option }}">{{ ucfirst($option) }}</option>
                             @endforeach
                         </select>
+                    @elseif (in_array($field['type'] ?? '', ['column', 'numeric_column'], true))
+                        <select id="widget-field-{{ $wsModal }}-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
+                            <option value="">{{ ($field['required'] ?? false) ? 'Choose a column' : 'None' }}</option>
+                            @foreach ($field['grouped_options'] ?? [] as $group => $grouped)
+                                <optgroup label="{{ $group }}">
+                                    @foreach ($grouped as $value => $columnLabel)
+                                        <option value="{{ $value }}">{{ $columnLabel }}</option>
+                                    @endforeach
+                                </optgroup>
+                            @endforeach
+                        </select>
                     @elseif (($field['type'] ?? '') === 'metric')
                         <select id="widget-field-{{ $wsModal }}-{{ $field['key'] }}" wire:model="{{ $fieldKey }}" class="admin-control w-full">
                             @if (isset($field['grouped_options']))

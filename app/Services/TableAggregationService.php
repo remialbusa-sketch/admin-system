@@ -101,7 +101,9 @@ class TableAggregationService
         }
 
         $columns = $table->columns()->get();
-        $total = DynamicRow::query()->where('table_key', $tableKey)->count();
+        $root = DynamicRow::query()->where('table_key', $tableKey)->active();
+        app(DashboardColumnService::class)->applySlicers($root, $tableKey, $filters);
+        $total = (clone $root)->count();
 
         $datasets = [];
         $usedKeys = [];
@@ -117,15 +119,16 @@ class TableAggregationService
             }
             $usedKeys[] = $key;
 
-            $query = CustomTableColumnValue::query()->where('custom_column_id', $column->id);
+            $query = CustomTableColumnValue::query()->where('custom_column_id', $column->id)
+                ->whereIn('row_id', (clone $root)->select('id'));
 
             // Pick the shadow column that actually holds displayable data for
             // this type (value_text for most; value_number for numbers; value_date for dates).
             $counts = match ($column->type) {
                 'number' => $query
                     ->whereNotNull('value_number')
-                    ->selectRaw('CAST(value_number AS TEXT) as label, count(*) as total')
-                    ->groupBy('label')
+                    ->selectRaw('value_number as label, count(*) as total')
+                    ->groupBy('value_number')
                     ->orderByDesc('total')
                     ->limit(12)
                     ->get()
@@ -160,6 +163,7 @@ class TableAggregationService
         if ($dateColumn) {
             $monthly = CustomTableColumnValue::query()
                 ->where('custom_column_id', $dateColumn->id)
+                ->whereIn('row_id', (clone $root)->select('id'))
                 ->whereNotNull('value_date')
                 ->selectRaw('date(value_date) as d, count(*) as total')
                 ->groupBy('d')
@@ -212,6 +216,7 @@ class TableAggregationService
     private function serviceRequests(?string $region, array $filters = []): array
     {
         $base = fn (): Builder => ServiceRequest::query()
+            ->tap(fn ($q) => app(DashboardColumnService::class)->applySlicers($q, 'service-requests', $filters))
             ->whereNull('archived_at')
             ->when($region, fn (Builder $query) => $query->where('region', $region))
             ->when($filters['branch'] ?? null, fn (Builder $q, $v) => $q->where('branch', $v))
@@ -246,6 +251,7 @@ class TableAggregationService
     private function technicalReports(?string $region, array $filters = []): array
     {
         $base = fn (): Builder => TechnicalReport::query()
+            ->tap(fn ($q) => app(DashboardColumnService::class)->applySlicers($q, 'technical-reports', $filters))
             ->whereNull('archived_at')
             // Technical reports carry no branch column; branch comes from the
             // linked service request.
@@ -285,6 +291,7 @@ class TableAggregationService
     private function historyReports(?string $region, array $filters = []): array
     {
         $base = fn (): Builder => HistoricalTsmsReport::query()
+            ->tap(fn ($q) => app(DashboardColumnService::class)->applySlicers($q, 'history-reports', $filters))
             ->whereNull('archived_at')
             // Historical TSMS reports have no region column, so the region
             // scope cannot narrow them — only branch/status/date filters apply.
@@ -311,6 +318,7 @@ class TableAggregationService
     private function personnel(?string $region, array $filters = []): array
     {
         $base = fn (): Builder => TechnicalPersonnel::query()
+            ->tap(fn ($q) => app(DashboardColumnService::class)->applySlicers($q, 'personnel', $filters))
             ->whereNull('archived_at')
             ->when($region, fn (Builder $query) => $query->where('region', $region))
             ->when($filters['branch'] ?? null, fn (Builder $q, $v) => $q->where('branch', $v))

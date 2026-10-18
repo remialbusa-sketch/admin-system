@@ -47,6 +47,7 @@ class ProductDashboardService
 
         // Canonical, casing-safe fleet buckets (workbook values vary in case).
         $base = Installation::query()
+            ->tap(fn ($q) => app(DashboardColumnService::class)->applySlicers($q, 'installed-products', $filters))
             ->when($scopeRegion, fn ($q) => $q->whereHas('account', fn ($a) => $a->where('region', $scopeRegion)))
             ->when($filters['branch'] ?? null, fn ($q, $branch) => $q->whereHas('account', fn ($a) => $a->where('branch', $branch)))
             ->when($filters['status'] ?? null, fn ($q, $status) => $q->whereRaw('lower(trim(device_status)) = ?', [strtolower(trim((string) $status))]))
@@ -130,6 +131,7 @@ class ProductDashboardService
 
         // Regional position: one grouped query over installations + accounts.
         $regionRows = Installation::query()
+            ->tap(fn ($q) => app(DashboardColumnService::class)->applySlicers($q, 'installed-products', $filters))
             ->join('accounts', 'accounts.id', '=', 'installations.account_id')
             ->when($scopeRegion, fn ($q) => $q->where('accounts.region', $scopeRegion))
             ->when($filters['branch'] ?? null, fn ($q, $branch) => $q->where('accounts.branch', $branch))
@@ -210,6 +212,7 @@ class ProductDashboardService
 
         // Top accounts by installed products.
         $topAccounts = Installation::query()
+            ->tap(fn ($q) => app(DashboardColumnService::class)->applySlicers($q, 'installed-products', $filters))
             ->join('accounts', 'accounts.id', '=', 'installations.account_id')
             ->when($scopeRegion, fn ($q) => $q->where('accounts.region', $scopeRegion))
             ->when($filters['branch'] ?? null, fn ($q, $branch) => $q->where('accounts.branch', $branch))

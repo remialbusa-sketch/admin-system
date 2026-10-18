@@ -1,5 +1,20 @@
 <?php
 
+use App\Support\Dashboard\Widgets\BarChartWidget;
+use App\Support\Dashboard\Widgets\ColumnChartWidget;
+use App\Support\Dashboard\Widgets\DonutChartWidget;
+use App\Support\Dashboard\Widgets\GaugeWidget;
+use App\Support\Dashboard\Widgets\HeadlineKpiWidget;
+use App\Support\Dashboard\Widgets\HeatmapWidget;
+use App\Support\Dashboard\Widgets\KpiCardWidget;
+use App\Support\Dashboard\Widgets\LineChartWidget;
+use App\Support\Dashboard\Widgets\ProgressWidget;
+use App\Support\Dashboard\Widgets\SlaCountdownWidget;
+use App\Support\Dashboard\Widgets\SlicerWidget;
+use App\Support\Dashboard\Widgets\StatWidget;
+use App\Support\Dashboard\Widgets\SupportingKpiWidget;
+use App\Support\Dashboard\Widgets\TableWidget;
+
 /*
 |--------------------------------------------------------------------------
 | Dashboard grid layout engine
@@ -32,18 +47,20 @@ return [
     // Legacy type keys (kpi, goal, trend, pivot, sla) are migrated forward
     // by GridLayoutNormalizer so saved layouts survive the rename.
     'widgets' => [
-        'kpi_card' => App\Support\Dashboard\Widgets\KpiCardWidget::class,
-        'headline_kpi' => App\Support\Dashboard\Widgets\HeadlineKpiWidget::class,
-        'supporting_kpi' => App\Support\Dashboard\Widgets\SupportingKpiWidget::class,
-        'stat' => App\Support\Dashboard\Widgets\StatWidget::class,
-        'progress' => App\Support\Dashboard\Widgets\ProgressWidget::class,
-        'gauge' => App\Support\Dashboard\Widgets\GaugeWidget::class,
-        'line_chart' => App\Support\Dashboard\Widgets\LineChartWidget::class,
-        'bar_chart' => App\Support\Dashboard\Widgets\BarChartWidget::class,
-        'donut_chart' => App\Support\Dashboard\Widgets\DonutChartWidget::class,
-        'table' => App\Support\Dashboard\Widgets\TableWidget::class,
-        'heatmap' => App\Support\Dashboard\Widgets\HeatmapWidget::class,
-        'sla_countdown' => App\Support\Dashboard\Widgets\SlaCountdownWidget::class,
+        'column_chart' => ColumnChartWidget::class,
+        'slicer' => SlicerWidget::class,
+        'kpi_card' => KpiCardWidget::class,
+        'headline_kpi' => HeadlineKpiWidget::class,
+        'supporting_kpi' => SupportingKpiWidget::class,
+        'stat' => StatWidget::class,
+        'progress' => ProgressWidget::class,
+        'gauge' => GaugeWidget::class,
+        'line_chart' => LineChartWidget::class,
+        'bar_chart' => BarChartWidget::class,
+        'donut_chart' => DonutChartWidget::class,
+        'table' => TableWidget::class,
+        'heatmap' => HeatmapWidget::class,
+        'sla_countdown' => SlaCountdownWidget::class,
     ],
 
     // The shipped grid: one of every standard widget, arranged top-left to

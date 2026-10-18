@@ -4,6 +4,7 @@ namespace App\Livewire;
 
 use App\Models\Dashboard;
 use App\Models\DashboardSource;
+use App\Services\DashboardColumnService;
 use App\Services\TableAggregationService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\GridLayoutNormalizer;
@@ -15,6 +16,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 
@@ -52,6 +54,12 @@ class WidgetWizard extends Component
     public string $metric = '';
 
     public string $title = '';
+
+    public array $builderProps = [];
+
+    private const COLUMN_WIDGETS = ['column_chart', 'slicer'];
+
+    private ?string $previewError = null;
 
     public function mount(?string $table = null, ?int $dashboard = null): void
     {
@@ -144,12 +152,18 @@ class WidgetWizard extends Component
 
     public function updatedTableKey(): void
     {
+        $this->builderProps = [];
         $this->applySuggestion();
     }
 
     public function updatedWidgetType(): void
     {
+        $this->builderProps = [];
         $this->applySuggestion(keepType: true);
+        if (in_array($this->widgetType, self::COLUMN_WIDGETS, true)) {
+            $this->builderProps = app(WidgetRegistry::class)->make($this->widgetType)->definition()['defaultProps'];
+            $this->builderProps['column'] = array_key_first($this->builderColumns()) ?? '';
+        }
     }
 
     /**
@@ -221,7 +235,7 @@ class WidgetWizard extends Component
     /** @return array<string, string> dataset key => label */
     public function availableDatasets(): array
     {
-        if ($this->tableKey === '') {
+        if (! $this->visibleTable()) {
             return [];
         }
 
@@ -235,7 +249,7 @@ class WidgetWizard extends Component
     /** @return array<string, string> metric key => label */
     public function availableMetrics(): array
     {
-        if ($this->tableKey === '') {
+        if (! $this->visibleTable()) {
             return [];
         }
 
@@ -292,6 +306,18 @@ class WidgetWizard extends Component
         $props['label'] = $this->title !== '' ? $this->title : ($definition['title'] ?? 'Visualization');
         $props['context'] = $this->tableLabel().' · live';
 
+        if (in_array($this->widgetType, self::COLUMN_WIDGETS, true)) {
+            foreach ($definition['settings'] as $field) {
+                $key = $field['key'];
+                if ($key === 'label' || ! array_key_exists($key, $this->builderProps)) {
+                    continue;
+                }
+                $value = $this->builderProps[$key];
+                $props[$key] = in_array($field['type'], ['column', 'numeric_column'], true) && $value !== ''
+                    ? $alias.'.'.$value : $value;
+            }
+        }
+
         if ($alias !== null && $this->isDatasetWidget($this->widgetType)) {
             $props['dataset'] = $alias.'.'.$this->dataset;
             $props['label_key'] = 'label';
@@ -325,13 +351,13 @@ class WidgetWizard extends Component
             'newDashboardName' => ['nullable', 'string', 'max:100'],
         ]);
 
-        if (! app(TableCatalog::class)->exists($this->tableKey)) {
+        if (! $this->visibleTable()) {
             $this->addError('tableKey', 'That table does not exist.');
 
             return;
         }
 
-        if (! in_array($this->widgetType, [...self::DATASET_WIDGETS, ...self::METRIC_WIDGETS], true)) {
+        if (! in_array($this->widgetType, [...self::DATASET_WIDGETS, ...self::METRIC_WIDGETS, ...self::COLUMN_WIDGETS], true)) {
             $this->addError('widgetType', 'Choose a visualization type.');
 
             return;
@@ -347,6 +373,16 @@ class WidgetWizard extends Component
             $this->addError('metric', 'Choose which number to display.');
 
             return;
+        }
+
+        if (in_array($this->widgetType, self::COLUMN_WIDGETS, true)) {
+            try {
+                app(DashboardColumnService::class)->validateProps($this->widgetType, $this->buildProps('preview'), ['preview' => $this->tableKey]);
+            } catch (ValidationException $exception) {
+                $this->addError('builderProps', $exception->validator->errors()->first());
+
+                return;
+            }
         }
 
         $dashboard = $this->selectedDashboard();
@@ -413,7 +449,7 @@ class WidgetWizard extends Component
      */
     private function preview(): ?array
     {
-        if ($this->widgetType === '' || ($this->isDatasetWidget($this->widgetType) && $this->dataset === '')) {
+        if (! $this->visibleTable() || $this->widgetType === '' || ($this->isDatasetWidget($this->widgetType) && $this->dataset === '')) {
             return null;
         }
 
@@ -421,12 +457,17 @@ class WidgetWizard extends Component
         $summary = $this->tableKey !== ''
             ? app(TableAggregationService::class)->summary($this->tableKey)
             : ['metrics' => [], 'datasets' => []];
+        $summary['table_key'] = $this->tableKey;
 
         $context = DashboardContext::fromSummary('All regions', '12M', [])
             ->withSources([$alias => $summary]);
 
         try {
             return app(WidgetRegistry::class)->make($this->widgetType)->resolve($this->buildProps($alias), $context);
+        } catch (ValidationException $exception) {
+            $this->previewError = $exception->validator->errors()->first();
+
+            return null;
         } catch (\Throwable) {
             return null;
         }
@@ -441,8 +482,13 @@ class WidgetWizard extends Component
             'metrics' => $this->availableMetrics(),
             'datasetWidgets' => self::DATASET_WIDGETS,
             'metricWidgets' => self::METRIC_WIDGETS,
+            'columnWidgets' => self::COLUMN_WIDGETS,
+            'builderColumns' => $this->builderColumns(),
+            'builderSchema' => in_array($this->widgetType, self::COLUMN_WIDGETS, true)
+                ? app(WidgetRegistry::class)->make($this->widgetType)->definition()['settings'] : [],
             'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
             'preview' => $this->preview(),
+            'previewError' => $this->previewError,
         ])
             ->layout('layouts.dashboard')
             ->title('Create visualization');
@@ -452,5 +498,15 @@ class WidgetWizard extends Component
     private function tableOptions(): array
     {
         return app(TableCatalog::class)->optionsFor(auth()->user());
+    }
+
+    private function visibleTable(): bool
+    {
+        return $this->tableKey !== '' && collect($this->tableOptions())->contains('key', $this->tableKey);
+    }
+
+    private function builderColumns(): array
+    {
+        return $this->visibleTable() ? app(DashboardColumnService::class)->columns($this->tableKey) : [];
     }
 }

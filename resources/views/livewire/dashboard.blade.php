@@ -89,7 +89,7 @@
         @if ($hasActiveFilters)
             <button type="button" wire:click="clearFilters" class="admin-secondary-button">
                 <x-mary-icon name="o-x-mark" class="h-4 w-4" />
-                Clear filters ({{ count($activeFilters) }})
+                Clear filters ({{ count($activeFilters) + count($activeSlicers) }})
             </button>
         @endif
     </x-admin.filter-bar>
@@ -109,6 +109,11 @@
             @if (!empty($activeFilters['to']))
                 <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">To: {{ $activeFilters['to'] }}</span>
             @endif
+            @foreach ($activeSlicers as $slicer)
+                <button type="button" wire:click="clearSlicer(@js($slicer['id']))" aria-label="Clear {{ $slicer['label'] }} filter" class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">
+                    {{ $slicer['label'] }}: {{ $slicer['values'] }} <span aria-hidden="true">×</span>
+                </button>
+            @endforeach
         </div>
     @endif
 
@@ -128,7 +133,7 @@
                         &middot; {{ $canEditDashboard ? 'you can edit' : 'view only' }}
                         &middot;
                     @endif
-                    Layout-engine widgets — every value computed live from the imported installed base.
+                    Charts and metrics update together as you filter.
                 </p>
             </div>
             <div class="no-print flex flex-wrap items-center gap-2">

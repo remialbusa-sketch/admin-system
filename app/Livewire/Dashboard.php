@@ -13,6 +13,7 @@ use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use App\Models\User;
+use App\Services\DashboardColumnService;
 use App\Services\ProductDashboardService;
 use App\Services\TableAggregationService;
 use App\Support\Dashboard\DashboardContext;
@@ -29,9 +30,11 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
 use Livewire\Component;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class Dashboard extends Component
 {
@@ -56,6 +59,9 @@ class Dashboard extends Component
 
     #[Url(as: 'to')]
     public string $dateTo = '';
+
+    #[Url(as: 'slicers')]
+    public array $slicerSelections = [];
 
     /** The dashboard being viewed (null = Home, the personal product overview). */
     public ?int $dashboardId = null;
@@ -257,7 +263,7 @@ class Dashboard extends Component
     {
         $user = auth()->user();
 
-        $region = $this->regionLocked && $user?->role === UserRole::RegionalManager
+        $region = $user?->role === UserRole::RegionalManager
             ? $user->region
             : $this->region;
 
@@ -279,6 +285,7 @@ class Dashboard extends Component
             'date_to' => trim($this->dateTo) !== '' ? trim($this->dateTo) : null,
             'region' => $this->regionScope(),
             'period' => $this->period,
+            'slicers' => $this->slicerFilters(),
         ];
     }
 
@@ -288,6 +295,78 @@ class Dashboard extends Component
         $this->statusFilter = 'All statuses';
         $this->dateFrom = '';
         $this->dateTo = '';
+        $this->slicerSelections = [];
+    }
+
+    private function sourceTables(): array
+    {
+        return $this->dashboard()?->sources()->pluck('table_key', 'alias')->all() ?? [];
+    }
+
+    private function activeLayout(): array
+    {
+        $dashboard = $this->dashboard();
+        if ($this->dashboardId !== null) {
+            abort_unless($dashboard?->canBeViewedBy(auth()->user()), 403);
+        }
+        if ($this->customizing && $this->draftLayout !== []) {
+            return $this->draftLayout;
+        }
+        if ($dashboard !== null) {
+            return $dashboard->layout ?? ($dashboard->is_system ? SystemDashboards::defaultLayout($dashboard->name) : null)
+                ?? ['version' => 1, 'widgets' => []];
+        }
+
+        return DashboardLayout::query()->where('user_id', auth()->id())->first()?->layout
+            ?? SystemDashboards::homeLayout() ?? config('dashboard.default_layout');
+    }
+
+    /** Rebuild filter definitions from the authorized layout, never from the URL payload. */
+    private function slicerFilters(): array
+    {
+        if ($this->slicerSelections === []) {
+            return [];
+        }
+        $filters = [];
+        $columns = app(DashboardColumnService::class);
+        $sources = $this->sourceTables();
+        foreach (app(GridLayoutNormalizer::class)->normalize($this->activeLayout())['widgets'] as $widget) {
+            $values = $this->slicerSelections[$widget['id']] ?? [];
+            if ($widget['type'] !== 'slicer' || ! is_array($values) || $values === []) {
+                continue;
+            }
+            try {
+                $props = $widget['props'];
+                $columns->validateProps('slicer', $props, $sources);
+                [$tableKey, $key] = $columns->field($props['column'], $sources);
+                $values = array_values(array_unique(array_filter($values, fn ($v) => is_string($v) && mb_strlen($v) <= 1000)));
+                $values = array_slice($values, 0, ($props['multiple'] ?? true) ? 100 : 1);
+                if ($values !== []) {
+                    $filters[$widget['id']] = ['table_key' => $tableKey, 'key' => $key, 'mode' => $props['mode'] ?? 'value', 'values' => $values];
+                }
+            } catch (ValidationException|HttpException) {
+                // Deleted columns and revoked table access cannot leave a hidden active filter.
+            }
+        }
+
+        return $filters;
+    }
+
+    public function toggleSlicerValue(string $id, string $value): void
+    {
+        $widget = collect($this->activeLayout()['widgets'] ?? [])->firstWhere('id', $id);
+        abort_unless($widget && $widget['type'] === 'slicer' && mb_strlen($value) <= 1000, 422);
+        app(DashboardColumnService::class)->validateProps('slicer', $widget['props'], $this->sourceTables());
+        $selected = $this->slicerFilters()[$id]['values'] ?? [];
+        $this->slicerSelections[$id] = in_array($value, $selected, true)
+            ? array_values(array_diff($selected, [$value]))
+            : (($widget['props']['multiple'] ?? true) ? array_slice([...$selected, $value], -100) : [$value]);
+    }
+
+    public function clearSlicer(string $id): void
+    {
+        $this->activeLayout(); // Recheck view permission before accepting an action.
+        unset($this->slicerSelections[$id]);
     }
 
     /** @return array<int, string> */
@@ -442,7 +521,7 @@ class Dashboard extends Component
             return null;
         }
 
-        $primary = $props['metric'] ?? $props['dataset'] ?? null;
+        $primary = $props['column'] ?? $props['metric'] ?? $props['dataset'] ?? null;
 
         if (is_string($primary) && str_contains($primary, '.')) {
             [$alias] = explode('.', $primary, 2);
@@ -468,7 +547,7 @@ class Dashboard extends Component
         }
 
         foreach ($settings as $field) {
-            if (in_array($field['type'] ?? '', ['metric', 'dataset'], true)) {
+            if (in_array($field['type'] ?? '', ['metric', 'dataset', 'column'], true)) {
                 return ['label' => 'Not configured', 'kind' => 'none'];
             }
         }
@@ -529,6 +608,7 @@ class Dashboard extends Component
 
         foreach ($dashboard->sources()->get() as $source) {
             $data[$source->alias] = $aggregation->summary($source->table_key, $region, $filtersWithRegion);
+            $data[$source->alias]['table_key'] = $source->table_key;
         }
 
         return $data;
@@ -953,7 +1033,9 @@ class Dashboard extends Component
         $metricOptions = $this->metricOptions();
 
         foreach ($this->settingsSchema as $index => $field) {
-            if (($field['type'] ?? '') === 'dataset') {
+            if (in_array($field['type'] ?? '', ['column', 'numeric_column'], true)) {
+                $this->settingsSchema[$index]['grouped_options'] = app(DashboardColumnService::class)->options($this->sourceTables(), $field['type'] === 'numeric_column');
+            } elseif (($field['type'] ?? '') === 'dataset') {
                 $this->settingsSchema[$index]['options'] = array_keys($datasetOptions);
                 $this->settingsSchema[$index]['grouped_options'] = $this->groupedOptions($datasetOptions);
             } elseif (($field['type'] ?? '') === 'metric') {
@@ -1159,6 +1241,20 @@ class Dashboard extends Component
             $this->settingsError = implode(' ', $errors);
 
             return;
+        }
+
+        $editingWidget = collect($this->draftLayout['widgets'] ?? [])->firstWhere('id', $this->settingsWidgetId);
+        if (in_array($editingWidget['type'] ?? '', ['column_chart', 'slicer'], true)) {
+            try {
+                app(DashboardColumnService::class)->validateProps($editingWidget['type'], $clean, $this->sourceTables());
+            } catch (ValidationException $exception) {
+                $this->settingsError = $exception->validator->errors()->first();
+
+                return;
+            }
+            if ($editingWidget['type'] === 'slicer') {
+                unset($this->slicerSelections[$this->settingsWidgetId]);
+            }
         }
 
         // Visual fields also carry their raw canvas graph (formula_tree) —
@@ -1377,7 +1473,7 @@ class Dashboard extends Component
         $user = auth()->user();
         // Enforce the lock at render time too — a tampered property cannot
         // widen a regional manager's scope.
-        $region = $this->regionLocked && $user?->role === UserRole::RegionalManager
+        $region = $user?->role === UserRole::RegionalManager
             ? $user->region
             : $this->region;
 
@@ -1403,28 +1499,13 @@ class Dashboard extends Component
         $context = DashboardContext::fromSummary($region, $this->period, $summary)
             ->withSources($this->sourceData($filters))
             ->withFilters($filters);
-        $savedLayout = $dashboard?->layout
-            ?? ($user ? DashboardLayout::query()->where('user_id', $user->id)->first()?->layout : null)
-            ?? ($this->dashboardId === null ? SystemDashboards::homeLayout() : null);
-
-        // Owned dashboards created via Branch A start empty (no PDB default).
-        // A null layout on an owned board means empty, not Home's default —
-        // but a core row with no layout falls back to the shipped default
-        // (Reset and "never migrated yet" both resolve here).
-        if ($dashboard !== null && $dashboard->layout === null) {
-            $savedLayout = $dashboard->is_system
-                ? (SystemDashboards::defaultLayout($dashboard->name) ?? ['version' => 1, 'widgets' => []])
-                : ['version' => 1, 'widgets' => []];
-        }
-
-        $layout = $this->customizing && $this->draftLayout !== []
-            ? $this->draftLayout
-            : ($savedLayout ?? config('dashboard.default_layout'));
+        $layout = $this->activeLayout();
 
         $hasActiveFilters = $this->branchFilter !== 'All branches'
             || $this->statusFilter !== 'All statuses'
             || trim($this->dateFrom) !== ''
-            || trim($this->dateTo) !== '';
+            || trim($this->dateTo) !== ''
+            || ($filters['slicers'] ?? []) !== [];
 
         // Flag every widget with its data provenance (connected source,
         // Product Database, or not configured) for the edit-mode chips.
@@ -1448,6 +1529,9 @@ class Dashboard extends Component
                 'to' => $filters['date_to'] ?? null,
             ]),
             'grid' => $grid,
+            'activeSlicers' => collect($grid['widgets'])->filter(fn ($widget) => $widget['type'] === 'slicer' && ! empty($widget['data']['selected']))
+                ->map(fn ($widget) => ['id' => $widget['id'], 'label' => $widget['data']['label'],
+                    'values' => collect($widget['data']['options'])->filter(fn ($option) => in_array($option['value'], $widget['data']['selected'], true))->pluck('label')->implode(', ')])->values()->all(),
             'widgetDefinitions' => app(WidgetRegistry::class)->definitions(),
             'widgetPresets' => ($presetPage = $this->presetPage()) !== null
                 ? WidgetPresets::forPage($presetPage)

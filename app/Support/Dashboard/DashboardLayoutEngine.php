@@ -32,7 +32,7 @@ final class DashboardLayoutEngine
         foreach ($layout['widgets'] as $widget) {
             try {
                 $factory = $this->registry->make($widget['type']);
-                $resolved = $factory->resolve($widget['props'], $ctx);
+                $resolved = $factory->resolve(array_merge($widget['props'], ['_widget_id' => $widget['id'], '_widget_height' => $widget['h']]), $ctx);
 
                 $widgets[] = $widget + [
                     'view' => $resolved['view'],
