@@ -38,7 +38,9 @@ class ImportTargetResolver
             // managed field stays the only target for that label.
             $managedLabels = [];
             foreach ($managed['fields'] as $field) {
-                $managedLabels[self::normalizeLabel((string) $field['label'])] = true;
+                foreach ([$field['label'], $field['key'], ...($field['aliases'] ?? [])] as $label) {
+                    $managedLabels[self::normalizeLabel((string) $label)] = true;
+                }
             }
 
             $custom = CustomTableColumn::query()

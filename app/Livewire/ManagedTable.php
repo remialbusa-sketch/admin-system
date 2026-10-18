@@ -7,11 +7,14 @@ use App\Livewire\Concerns\ConnectsMondayBoard;
 use App\Livewire\Concerns\HasTableFilters;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
+use App\Models\MondaySyncSetting;
 use App\Models\RecordEditLog;
 use App\Models\TableColumnOption;
 use App\Models\TableColumnPreference;
 use App\Services\ColumnTypeRegistry;
 use App\Support\AttachmentValue;
+use App\Support\CoreColumnMapping;
+use App\Support\MondayCoreTargets;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -842,6 +845,8 @@ abstract class ManagedTable extends Component
             ->get()
             ->keyBy('column_key');
 
+        $currentColumns = collect($this->orderedColumns())->keyBy('key');
+
         foreach (array_values($orderedKeys) as $index => $key) {
             $pref = $existing->get($key);
 
@@ -850,7 +855,7 @@ abstract class ManagedTable extends Component
                 [
                     'position' => $index,
                     'width' => $pref?->width,
-                    'hidden' => (bool) ($pref?->hidden ?? false),
+                    'hidden' => (bool) ($pref?->hidden ?? $currentColumns[$key]['hidden'] ?? false),
                     'frozen' => (bool) ($pref?->frozen ?? false),
                 ],
             );
@@ -1048,6 +1053,7 @@ abstract class ManagedTable extends Component
             return;
         }
 
+        $currentColumns = collect($this->orderedColumns())->keyBy('key');
         foreach ($layout as $index => $entry) {
             $key = $entry['key'] ?? null;
 
@@ -1060,7 +1066,7 @@ abstract class ManagedTable extends Component
                 [
                     'position' => $entry['position'] ?? $index,
                     'width' => $entry['width'] ?? null,
-                    'hidden' => (bool) ($entry['hidden'] ?? false),
+                    'hidden' => (bool) ($entry['hidden'] ?? $currentColumns[$key]['hidden'] ?? false),
                     'frozen' => (bool) ($entry['frozen'] ?? false),
                 ],
             );
@@ -1092,7 +1098,8 @@ abstract class ManagedTable extends Component
             'table_key' => $this->tableKey(),
             'column_key' => $key,
         ]);
-        $pref->hidden = ! $pref->hidden;
+        $current = collect($this->orderedColumns())->firstWhere('key', $key);
+        $pref->hidden = ! ($pref->exists ? $pref->hidden : ($current['hidden'] ?? false));
         $pref->save();
     }
 
@@ -1109,6 +1116,8 @@ abstract class ManagedTable extends Component
             'table_key' => $this->tableKey(),
             'column_key' => $key,
         ]);
+        $current = collect($this->orderedColumns())->firstWhere('key', $key);
+        $pref->hidden ??= $current['hidden'] ?? false;
         $pref->frozen = ! $pref->frozen;
         $pref->save();
     }
@@ -1173,15 +1182,36 @@ abstract class ManagedTable extends Component
             return $this->allColumnsCache;
         }
 
+        $sourceBindings = [];
+        if ((MondayCoreTargets::resolve($this->tableKey())['model'] ?? null) === $this->model()) {
+            $setting = MondaySyncSetting::where('domain', $this->tableKey())->first();
+            foreach ($this->customColumnModels() as $sourceColumn) {
+                $destination = CoreColumnMapping::destination($this->tableKey(), $sourceColumn, $setting);
+                if ($destination !== null) {
+                    $sourceBindings[$sourceColumn->id] = $destination;
+                }
+            }
+        }
         $core = array_filter(
             array_map(fn (array $column): array => $column + ['custom' => false, 'editable' => true], $this->columns()),
-            fn (array $column): bool => $this->coreColumnHasValues((string) $column['key']),
+            fn (array $column): bool => in_array($column['key'], $sourceBindings, true) || $this->coreColumnHasValues((string) $column['key']),
         );
 
         $columns = array_merge(
             array_values($core),
             $this->customColumnDefinitions(),
         );
+        $coreKeys = array_column($core, 'key');
+        foreach ($columns as &$column) {
+            $destination = $sourceBindings[$column['custom_id'] ?? 0] ?? null;
+            if ($destination !== null && in_array($destination, $coreKeys, true)) {
+                // Account records are shared across products and sources;
+                // retain source address/branch cells for conflict review.
+                $column['default_hidden'] = ! str_contains($destination, '.');
+                $column['label'] .= ' (source)';
+            }
+        }
+        unset($column);
 
         // Merge any user-added dropdown options (from the "+ New Label" button)
         // into select/status/dropdown columns.
@@ -1378,7 +1408,7 @@ abstract class ManagedTable extends Component
         return array_map(function (array $column) use ($prefs): array {
             $pref = $prefs[$column['key']] ?? null;
             $column['width'] = $pref?->width;
-            $column['hidden'] = (bool) ($pref?->hidden ?? false);
+            $column['hidden'] = (bool) ($pref?->hidden ?? $column['default_hidden'] ?? false);
             $column['frozen'] = (bool) ($pref?->frozen ?? false);
 
             return $column;

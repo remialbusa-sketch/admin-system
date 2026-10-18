@@ -17,10 +17,19 @@ class AttachmentValue
         $input = $value['files'] ?? null;
         if ($input === null) {
             $url = $value['url'] ?? $value['text'] ?? null;
-            if (! is_string($url) || ! self::safeUrl(trim($url))) {
+            if (! is_string($url)) {
                 return [];
             }
-            $input = [['url' => trim($url)]];
+            // Older monday text payloads join multiple files with commas.
+            // Split only at a new URL, preserving commas inside file names
+            // and query strings. Every token must still be a safe URL.
+            $urls = preg_split('/(?:,\s*|\s*\R\s*)(?=https?:\/\/)/i', trim($url)) ?: [];
+            foreach ($urls as $candidate) {
+                if (! self::safeUrl($candidate)) {
+                    return [];
+                }
+            }
+            $input = array_map(fn ($candidate) => ['url' => $candidate], $urls);
         }
         $files = [];
         foreach ($input as $file) {

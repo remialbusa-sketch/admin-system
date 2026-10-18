@@ -26,18 +26,18 @@ class ImportMappingService
             'title' => 'customer_name',
             'fields' => [
                 ['key' => 'customer_name', 'label' => 'Customer Name', 'required' => true, 'kind' => 'text'],
-                ['key' => 'device_description', 'label' => 'Device Description', 'required' => true, 'kind' => 'text'],
+                ['key' => 'device_description', 'label' => 'Device Description', 'required' => true, 'kind' => 'text', 'aliases' => ['model']],
                 ['key' => 'brand', 'label' => 'Brand', 'required' => false, 'kind' => 'text'],
                 ['key' => 'machine_type', 'label' => 'Machine Type', 'required' => false, 'kind' => 'text'],
                 ['key' => 'serial_number', 'label' => 'Serial Number', 'required' => false, 'kind' => 'text'],
-                ['key' => 'customer_address', 'label' => 'Customer Address', 'required' => false, 'kind' => 'text'],
+                ['key' => 'customer_address', 'label' => 'Customer Address', 'required' => false, 'kind' => 'text', 'aliases' => ['address']],
                 ['key' => 'hospital_section', 'label' => 'Hospital Section', 'required' => false, 'kind' => 'text'],
                 ['key' => 'branch', 'label' => 'Branch', 'required' => false, 'kind' => 'status'],
                 ['key' => 'region', 'label' => 'Region', 'required' => false, 'kind' => 'text'],
                 ['key' => 'bu_no', 'label' => 'BU No.', 'required' => false, 'kind' => 'text'],
-                ['key' => 'system_type', 'label' => 'Equipment Type (System)', 'required' => false, 'kind' => 'status'],
+                ['key' => 'system_type', 'label' => 'Equipment Type (System)', 'required' => false, 'kind' => 'status', 'aliases' => ['system type', 'equipment type']],
                 ['key' => 'installation_date', 'label' => 'Installation Date', 'required' => false, 'kind' => 'date'],
-                ['key' => 'pulled_out_date', 'label' => 'Pulled-out Date', 'required' => false, 'kind' => 'date'],
+                ['key' => 'pulled_out_date', 'label' => 'Pulled-out Date', 'required' => false, 'kind' => 'date', 'aliases' => ['uninstallation date', 'uninstalled date']],
                 ['key' => 'device_status', 'label' => 'Device Status', 'required' => false, 'kind' => 'status'],
                 ['key' => 'device_ownership', 'label' => 'Device Ownership', 'required' => false, 'kind' => 'status'],
                 ['key' => 'deal_type', 'label' => 'Deal Type', 'required' => false, 'kind' => 'status'],
@@ -402,37 +402,45 @@ class ImportMappingService
         $suggested = [];
         $usedLetters = [];
 
-        foreach ($fields as $field) {
-            $target = $this->normalizeLabel((string) ($field['label'] ?? ''));
-            $key = $this->normalizeLabel((string) ($field['key'] ?? ''));
-            $keys = array_values(array_filter(array_merge(
-                [$key],
-                array_map(fn ($alias): string => $this->normalizeLabel((string) $alias), (array) ($field['aliases'] ?? []))
-            )));
+        // Reserve exact labels/keys/aliases for all destinations before any
+        // fuzzy match can consume them ("Installation Date" used to take
+        // "Uninstallation Date" before its exact alias was considered).
+        foreach ([100, 60] as $minimumScore) {
+            foreach ($fields as $field) {
+                if (isset($suggested[(string) $field['key']])) {
+                    continue;
+                }
+                $target = $this->normalizeLabel((string) ($field['label'] ?? ''));
+                $key = $this->normalizeLabel((string) ($field['key'] ?? ''));
+                $keys = array_values(array_filter(array_merge(
+                    [$key],
+                    array_map(fn ($alias): string => $this->normalizeLabel((string) $alias), (array) ($field['aliases'] ?? []))
+                )));
 
-            if ($target === '' && $keys === []) {
-                continue;
-            }
-
-            $bestLetter = null;
-            $bestScore = 0;
-
-            foreach ($normalizedColumns as $column) {
-                if (in_array($column['letter'], $usedLetters, true)) {
+                if ($target === '' && $keys === []) {
                     continue;
                 }
 
-                $score = $this->similarityScore($column['norm'], $target, $keys);
+                $bestLetter = null;
+                $bestScore = 0;
 
-                if ($score > $bestScore) {
-                    $bestScore = $score;
-                    $bestLetter = $column['letter'];
+                foreach ($normalizedColumns as $column) {
+                    if (in_array($column['letter'], $usedLetters, true)) {
+                        continue;
+                    }
+
+                    $score = $this->similarityScore($column['norm'], $target, $keys);
+
+                    if ($score > $bestScore) {
+                        $bestScore = $score;
+                        $bestLetter = $column['letter'];
+                    }
                 }
-            }
 
-            if ($bestLetter !== null && $bestScore >= 60) {
-                $suggested[(string) $field['key']] = $bestLetter;
-                $usedLetters[] = $bestLetter;
+                if ($bestLetter !== null && $bestScore >= $minimumScore) {
+                    $suggested[(string) $field['key']] = $bestLetter;
+                    $usedLetters[] = $bestLetter;
+                }
             }
         }
 

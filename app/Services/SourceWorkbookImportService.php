@@ -125,7 +125,7 @@ class SourceWorkbookImportService
                 'bu_no' => $this->value($data, 'bu_no'),
                 'equipment_type' => $this->value($data, 'system_type'),
                 'installation_date' => $this->date($this->value($data, 'installation_date')),
-                'uninstallation_date' => $this->date($this->value($data, 'pulled_out_date')),
+                'uninstallation_date' => $this->date($this->value($data, 'pulled_out_date') ?: $this->value($data, 'uninstallation_date')),
                 'device_status' => $this->value($data, 'device_status'),
                 'device_ownership' => $this->value($data, 'device_ownership'),
                 'deal_type' => $this->value($data, 'deal_type'),
