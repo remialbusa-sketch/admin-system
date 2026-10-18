@@ -7,6 +7,7 @@ use App\Models\MondaySyncSetting;
 use App\Services\MondayApiClient;
 use App\Services\MondayItemMapper;
 use App\Services\MondaySyncService;
+use App\Support\MondayColumnCompatibility;
 use App\Support\MondayCoreTargets;
 use App\Support\MondaySettings;
 use Illuminate\Support\Facades\DB;
@@ -440,6 +441,12 @@ trait ConnectsMondayBoard
 
                 return;
             }
+            if ($coreField !== '' && ! MondayColumnCompatibility::core($coreField, (string) ($source['type'] ?? 'text'))) {
+                $this->mondayMessage = 'The monday column '.($source['title'] ?? $id).' cannot feed '.$coreField.'. Choose a compatible source.';
+                $this->mondayMessageTone = 'error';
+
+                return;
+            }
             if ($coreField !== '' && isset($coreDestinations[$coreField])) {
                 $this->mondayMessage = 'Two monday columns target the same core field. Choose one source.';
                 $this->mondayMessageTone = 'error';
@@ -512,18 +519,7 @@ trait ConnectsMondayBoard
 
     protected function mondayTypesCompatible(string $source, string $target): bool
     {
-        $allowed = match ($source) {
-            'number' => ['number', 'text', 'long_text'],
-            'date' => ['date', 'text', 'long_text'],
-            'checkbox' => ['checkbox', 'text', 'long_text'],
-            'status', 'dropdown' => ['status', 'dropdown', 'text', 'long_text'],
-            'email' => ['email', 'text', 'long_text'],
-            'phone' => ['phone', 'text', 'long_text'],
-            'person' => ['person', 'text', 'long_text'],
-            default => null,
-        };
-
-        return $allowed === null || in_array($target, $allowed, true);
+        return MondayColumnCompatibility::local($source, $target);
     }
 
     protected function closeMapColumnsModal(): void

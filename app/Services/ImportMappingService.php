@@ -441,11 +441,18 @@ class ImportMappingService
 
     private function similarityScore(string $column, string $target, array $keys): int
     {
+        // "TSP" must never consume "TSP Signature" (or a photo/file) just
+        // because its label is a substring. Apply this to every target.
+        $attachments = '/\b(signature|files?|images?|photos?|attachments?)\b/';
+        if (preg_match($attachments, $column) && ! preg_match($attachments, implode(' ', [$target, ...$keys]))) {
+            return 0;
+        }
+
         if ($column === $target || in_array($column, $keys, true)) {
             return 100;
         }
 
-        if ($target !== '' && (str_contains($column, $target) || str_contains($target, $column))) {
+        if (strlen($target) > 3 && (str_contains($column, $target) || str_contains($target, $column))) {
             return 70 + min(20, strlen($column));
         }
 

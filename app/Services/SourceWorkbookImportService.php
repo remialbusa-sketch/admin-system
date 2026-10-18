@@ -14,6 +14,7 @@ use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use App\Support\ExcelDate;
 use App\Support\ImportOptionSeeder;
+use App\Support\PersonName;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
@@ -184,7 +185,7 @@ class SourceWorkbookImportService
                 'ticket_status' => $this->value($data, 'ticket_status'),
                 'group_status' => $this->normalizeStatus($this->value($data, 'group')),
                 'branch' => $this->value($data, 'branch'),
-                'tsp_assignment' => $this->value($data, 'tsp_assigned') ?: $this->value($data, 'reassigned_tsp'),
+                'tsp_assignment' => PersonName::clean($this->value($data, 'tsp_assigned')) ?? PersonName::clean($this->value($data, 'reassigned_tsp')),
                 'coordinator' => $this->value($data, 'coordinator'),
                 'requesting_entity' => $this->value($data, 'requesting_entity'),
                 'requestor_name' => $this->value($data, 'requestors_name'),
@@ -263,8 +264,7 @@ class SourceWorkbookImportService
                 'customer_name' => $this->value($data, 'customer_name_sr'),
                 'service_started_at' => $this->dateTime($this->value($data, 'service_start_date_time')),
                 'service_completed_at' => $this->dateTime($this->value($data, 'service_end_date_time')),
-                'tsp_name' => $this->value($data, 'tsp_name') ?: $this->value($data, 'tsp'),
-                'tsp_display_name' => $this->value($data, 'tsp') ?: $this->value($data, 'tsp_name'),
+                ...PersonName::technician($this->value($data, 'tsp_name'), $this->value($data, 'tsp')),
                 'brand' => $this->value($data, 'brand'),
                 'machine_type' => $this->value($data, 'machine_type'),
                 'job_done' => $this->value($data, 'job_done'),
@@ -327,8 +327,8 @@ class SourceWorkbookImportService
                 'service_at' => $this->dateTime($this->value($data, 'service_start_time')),
                 'logout_at' => $this->dateTime($this->value($data, 'log_out_date').' '.$this->value($data, 'log_out_time')),
                 'tsr_number' => $this->value($data, 'tsr'),
-                'tsp_name' => $this->value($data, 'tsp_name'),
-                'work_with_personnel' => $this->value($data, 'tsp_workwith'),
+                'tsp_name' => PersonName::clean($this->value($data, 'tsp_name')),
+                'work_with_personnel' => PersonName::clean($this->value($data, 'tsp_workwith')),
                 'branch' => $this->value($data, 'branch'),
                 'document_reference' => $this->value($data, 'document_reference_number') ?: $this->value($data, 'document_reference'),
                 'raw_data' => $data,

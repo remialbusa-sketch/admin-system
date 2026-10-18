@@ -11,6 +11,7 @@ use App\Models\RecordEditLog;
 use App\Models\TableColumnOption;
 use App\Models\TableColumnPreference;
 use App\Services\ColumnTypeRegistry;
+use App\Support\AttachmentValue;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -1673,7 +1674,10 @@ abstract class ManagedTable extends Component
             foreach ($columns as $column) {
                 if ($column['custom'] ?? false) {
                     $value = $customValues->get($record->id)?->get($column['custom_id']);
-                    $out[$column['key']] = $value?->value ? $this->customRawValueForEditing($column['type'], $value->value) : null;
+                    $out[$column['key']] = $value?->value
+                        ? (AttachmentValue::grid($value->value, (int) $column['custom_id'], (int) $record->id, $column['type'] === 'files')
+                            ?? $this->customRawValueForEditing($column['type'], $value->value))
+                        : null;
                 } else {
                     $out[$column['key']] = $this->normalizeCoreValue(data_get($record, $column['key']), $column['type']);
                 }

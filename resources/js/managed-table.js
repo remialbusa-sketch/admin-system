@@ -1,4 +1,5 @@
 import { TabulatorFull as Tabulator } from 'tabulator-tables';
+import { fileCell } from './table-files';
 import 'tabulator-tables/dist/css/tabulator.min.css';
 
 const escapeHtml = (value) => String(value ?? '')
@@ -1100,6 +1101,9 @@ document.addEventListener('alpine:init', () => {
                     ...buildEditor(column, (method, ...args) => this.callWire(method, ...args), () => this.columnDefs.find((c) => c.key === column.key) || column, (v) => { this._suppressRefresh = v; }),
                 };
 
+                def.editable = (cell) => this.editable && column.editable && !cell.getValue()?.files;
+                def.accessorClipboard = (value) => value?.files ? value.files.map((file) => file.name).join(', ') : value;
+
                 if (column.type === 'status') {
                     def.formatter = (cell) => {
                         const value = cell.getValue();
@@ -1119,7 +1123,7 @@ document.addEventListener('alpine:init', () => {
                     def.hozAlign = 'right';
                     def.formatter = (cell) => escapeHtml(cell.getValue() ?? '');
                 } else {
-                    def.formatter = (cell) => escapeHtml(cell.getValue() ?? '');
+                    def.formatter = (cell) => cell.getValue()?.files ? fileCell(cell.getValue()) : escapeHtml(cell.getValue() ?? '');
                 }
 
                 return def;

@@ -3,6 +3,7 @@
 use App\Http\Controllers\ClassicImportController;
 use App\Http\Controllers\ImportStreamController;
 use App\Http\Controllers\MondayWebhookController;
+use App\Http\Controllers\TableFileController;
 use App\Livewire\Actions\Logout;
 use App\Livewire\Dashboard;
 use App\Livewire\DashboardsIndex;
@@ -24,6 +25,9 @@ use Illuminate\Support\Facades\Route;
 Route::redirect('/', '/login');
 
 Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('table-files/{column}/{row}/{file}', [TableFileController::class, 'show'])
+        ->whereNumber('column')->whereNumber('row')->whereNumber('file')
+        ->middleware('throttle:600,1')->name('table-files.show');
     Route::get('dashboard', Dashboard::class)->name('dashboard');
     Route::redirect('president', 'dashboard')->name('president');
 

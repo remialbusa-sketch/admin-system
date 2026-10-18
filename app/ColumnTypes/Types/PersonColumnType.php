@@ -3,6 +3,7 @@
 namespace App\ColumnTypes\Types;
 
 use App\ColumnTypes\AbstractColumnType;
+use App\Support\PersonName;
 
 class PersonColumnType extends AbstractColumnType
 {
@@ -73,6 +74,10 @@ class PersonColumnType extends AbstractColumnType
             }
 
             $name = trim((string) $name);
+
+            if ($name !== '' && PersonName::clean($name) === null) {
+                $this->fail('A person value cannot contain a URL or attachment.');
+            }
 
             if ($name !== '') {
                 $clean[] = $name;

@@ -3,6 +3,7 @@
 namespace App\ColumnTypes\Types;
 
 use App\ColumnTypes\AbstractColumnType;
+use App\Support\AttachmentValue;
 
 class FilesColumnType extends AbstractColumnType
 {
@@ -14,6 +15,10 @@ class FilesColumnType extends AbstractColumnType
     public function validate(mixed $raw, array $settings = []): array
     {
         $input = $this->valueArray($raw);
+        $files = AttachmentValue::files($raw);
+        if ($files !== []) {
+            return ['files' => $files];
+        }
         $fileIds = $input['file_ids'] ?? $raw;
         $fileIds = is_array($fileIds) ? $fileIds : [$fileIds];
 
@@ -31,6 +36,10 @@ class FilesColumnType extends AbstractColumnType
 
     public function toDisplayString(?array $value): string
     {
+        $files = AttachmentValue::files($value);
+        if ($files !== []) {
+            return implode(', ', array_column($files, 'name'));
+        }
         $count = count($value['file_ids'] ?? []);
 
         return $count === 0 ? '' : $count.' file'.($count === 1 ? '' : 's');

@@ -10,7 +10,9 @@ use App\Models\DynamicTable;
 use App\Models\Installation;
 use App\Models\MondaySyncSetting;
 use App\Support\ImportOptionSeeder;
+use App\Support\MondayColumnCompatibility;
 use App\Support\MondayCoreTargets;
+use App\Support\PersonName;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -58,6 +60,7 @@ class MondayItemMapper
         'people' => 'person',
         'location' => 'location',
         'files' => 'files',
+        'file' => 'files',
         'formula' => 'text', // mirror/formula/flat types -> kept as text
         'mirror' => 'text',
         'color' => 'text',
@@ -145,7 +148,7 @@ class MondayItemMapper
             $fieldMap[$id] = $local->id;
             $chosen[$local->id] = ['id' => $id, 'priority' => $this->sourcePriority((string) ($column['type'] ?? ''))];
             $coreField = MondayCoreTargets::fieldForLabel($tableKey, $title);
-            if ($coreField !== null) {
+            if ($coreField !== null && MondayColumnCompatibility::core($coreField, (string) ($column['type'] ?? 'text'))) {
                 $priorCore = $coreChosen[$coreField] ?? null;
                 $priority = $this->sourcePriority((string) ($column['type'] ?? ''));
                 if ($priorCore === null || $priority > $priorCore['priority']) {
@@ -235,15 +238,26 @@ class MondayItemMapper
 
         $existingColumn = $known->get($key);
 
+        $registryType = $this->registryTypeFor((string) ($boardColumn['type'] ?? 'text'));
+
         if ($existingColumn !== null) {
             if ($existingColumn->trashed()) {
                 $existingColumn->restore();
             }
 
+            if ($registryType === 'files' && in_array($existingColumn->type, ['text', 'long_text'], true)) {
+                $existingColumn->update(['type' => 'files']);
+            } elseif (! MondayColumnCompatibility::local($registryType, $existingColumn->type)) {
+                // Identical labels do not make a signature and an assignee
+                // the same column. Keep incompatible same-name sources apart.
+                $boardColumn['title'] = $title.' ('.$registryType.')';
+
+                return $this->resolveColumn($tableKey, $boardColumn, $createdBy, $known);
+            }
+
             return $existingColumn;
         }
 
-        $registryType = $this->registryTypeFor((string) ($boardColumn['type'] ?? 'text'));
         $newColumn = CustomTableColumn::create([
             'table_key' => $tableKey,
             'name' => $title,
@@ -402,7 +416,17 @@ class MondayItemMapper
                     : ($coreFieldMap[$sourceId] ?? null));
 
                 try {
-                    $raw = $this->normalizeValue((string) ($value['type'] ?? 'text'), $value);
+                    $sourceType = (string) ($value['type'] ?? 'text');
+                    if ($this->registryTypeFor($sourceType) === 'files' && in_array($column->type, ['text', 'long_text'], true)) {
+                        // Older releases treated monday's singular "file"
+                        // type as text. Existing URL values remain readable.
+                        $column->update(['type' => 'files']);
+                    }
+                    if (! MondayColumnCompatibility::local($this->registryTypeFor($sourceType), $column->type)
+                        || ($attribute !== null && ! MondayColumnCompatibility::core($attribute, $sourceType))) {
+                        throw new \InvalidArgumentException('The saved monday mapping has incompatible source and destination types. Review Map columns.');
+                    }
+                    $raw = $this->normalizeValue((string) ($value['type'] ?? 'text'), $value, $column->type);
 
                     if ($raw === null || $raw === '') {
                         $this->writeValue($rowId, $column, []);
@@ -425,6 +449,11 @@ class MondayItemMapper
 
                     if ($attribute !== null) {
                         $scalar = $this->registry->resolve($column->type)->toDisplayString($validated);
+
+                        if (in_array($attribute, ['tsp_name', 'tsp_assignment', 'coordinator'], true)
+                            && PersonName::clean($scalar) === null) {
+                            throw new \InvalidArgumentException('A person field cannot receive a URL or attachment. Review Map columns.');
+                        }
 
                         if (in_array($attribute, ['service_started_at', 'service_completed_at'], true)
                             && ! empty($value['date']) && ! empty($value['time'])) {
@@ -451,6 +480,9 @@ class MondayItemMapper
             }
 
             if ($attributes !== []) {
+                if (array_key_exists('tsp_name', $attributes)) {
+                    $attributes['tsp_display_name'] = $attributes['tsp_name'];
+                }
                 $row->update($attributes);
             }
 
@@ -614,8 +646,40 @@ class MondayItemMapper
      *   - people: display text (name/email) — accepted by the person type as
      *     a display name, since monday person ids are not local user ids.
      */
-    private function normalizeValue(string $mondayType, array $value): mixed
+    private function normalizeValue(string $mondayType, array $value, ?string $targetType = null): mixed
     {
+        $json = is_string($value['value'] ?? null) ? json_decode($value['value'], true) : ($value['value'] ?? []);
+        $json = is_array($json) ? $json : [];
+        if (in_array($mondayType, ['file', 'files'], true)) {
+            if (array_key_exists('files', $value)) {
+                return $value['files'] === [] ? null : ['files' => $value['files']];
+            }
+
+            return ! empty($json['files']) ? ['files' => $json['files']] : ($value['text'] ?? null);
+        }
+
+        if ($mondayType === 'link' && ! empty($json['url'])) {
+            return $targetType === 'link' ? $json : $json['url'];
+        }
+        if ($mondayType === 'location' && $json !== []) {
+            return $targetType === 'location' ? $json : ($json['address'] ?? $value['text'] ?? null);
+        }
+        if ($mondayType === 'email' && ! empty($json['email'])) {
+            return $json['email'];
+        }
+        if ($mondayType === 'phone' && ! empty($json['phone'])) {
+            return $json['phone'];
+        }
+        if ($mondayType === 'numbers' && isset($value['number'])) {
+            return $value['number'];
+        }
+        if ($mondayType === 'status' && isset($value['label'])) {
+            return $value['label'];
+        }
+        if ($mondayType === 'checkbox' && array_key_exists('checked', $json)) {
+            return in_array($json['checked'], [true, 'true', 1, '1'], true) ? true : null;
+        }
+
         if ($mondayType === 'date' && ! empty($value['date'])) {
             return (string) $value['date'].(! empty($value['time']) ? ' '.(string) $value['time'] : '');
         }

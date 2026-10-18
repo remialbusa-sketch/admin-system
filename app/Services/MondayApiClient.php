@@ -146,13 +146,20 @@ class MondayApiClient
               items(ids: $ids) {
                 id name created_at updated_at
                 column_values {
-                  id text type
+                  id text type value
                   ... on StatusValue   { label index }
                    ... on DateValue     { date time }
                   ... on NumbersValue  { number }
                   ... on DropdownValue { text }
                   ... on MirrorValue   { display_value }
                   ... on BoardRelationValue { display_value }
+                  ... on FileValue {
+                    files {
+                      ... on FileAssetValue { asset_id name is_image }
+                      ... on FileLinkValue { name url }
+                      ... on FileDocValue { url }
+                    }
+                  }
                 }
               }
             }
@@ -161,6 +168,14 @@ class MondayApiClient
         $data = $this->query($query, ['ids' => $itemIds]);
 
         return $data['data']['items'] ?? [];
+    }
+
+    /** Resolve the short-lived public URL only when an authorized file is opened. */
+    public function assetUrl(int $assetId): ?string
+    {
+        $data = $this->query('query Asset($ids: [ID!]!) { assets(ids: $ids) { id public_url } }', ['ids' => [(string) $assetId]]);
+
+        return $data['data']['assets'][0]['public_url'] ?? null;
     }
 
     /**
