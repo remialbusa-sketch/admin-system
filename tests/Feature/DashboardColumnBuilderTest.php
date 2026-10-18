@@ -12,6 +12,7 @@ use App\Models\DynamicRow;
 use App\Models\DynamicTable;
 use App\Models\Installation;
 use App\Models\ServiceRequest;
+use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
 use App\Models\User;
 use App\Services\DashboardColumnService;
@@ -218,5 +219,17 @@ class DashboardColumnBuilderTest extends TestCase
         $this->assertSame(1, $summary['metrics']['installed']);
         $this->assertSame(1, $summary['regions'][0]['products']);
         $this->assertSame(['Hospital A'], array_column($summary['topAccounts'], 'customer'));
+    }
+
+    public function test_personnel_position_is_chartable_while_dynamic_row_order_is_not(): void
+    {
+        $owner = User::factory()->superadmin()->create();
+        $this->actingAs($owner);
+        TechnicalPersonnel::create(['source_system' => 'test', 'source_record_id' => 'person-1', 'name' => 'Test engineer', 'position' => 'Engineer', 'region' => 'NCR']);
+        $service = app(DashboardColumnService::class);
+        $chart = $service->chart(['column' => 'people.position'], ['people' => 'personnel'], []);
+        $this->assertSame([['label' => 'Engineer', 'values' => [1.0]]], $chart['points']);
+        DynamicTable::create(['key' => 'row-order-test', 'name' => 'Row order test', 'created_by' => $owner->id]);
+        $this->assertArrayNotHasKey('position', $service->columns('row-order-test'));
     }
 }

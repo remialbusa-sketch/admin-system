@@ -42,7 +42,8 @@ class DashboardColumnService
         $casts = $model->getCasts();
         $columns = [];
         foreach ($model->getFillable() as $key) {
-            if (in_array($key, ['raw_data', 'position', 'table_key', 'archived_at'], true)
+            if (in_array($key, ['raw_data', 'table_key', 'archived_at'], true)
+                || ($model instanceof DynamicRow && $key === 'position')
                 || str_ends_with($key, '_id') || str_starts_with($key, 'source_')) {
                 continue;
             }
