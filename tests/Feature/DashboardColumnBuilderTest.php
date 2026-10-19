@@ -72,6 +72,24 @@ class DashboardColumnBuilderTest extends TestCase
         $this->assertSame(1, app(TableAggregationService::class)->summary('service-requests', null, $filters)['metrics']['rows']);
     }
 
+    public function test_slicer_options_label_person_fields_with_their_display_name_but_filter_by_the_stored_id(): void
+    {
+        $this->actingAs(User::factory()->superadmin()->create());
+        TechnicalReport::create(['source_system' => 'test', 'source_record_id' => 'one', 'tsp_name' => 'TSP-9', 'tsp_display_name' => 'Maria Santos']);
+        TechnicalReport::create(['source_system' => 'test', 'source_record_id' => 'two', 'tsp_name' => 'TSP-9', 'tsp_display_name' => 'Maria Santos']);
+
+        $choices = app(DashboardColumnService::class)->choices(['column' => 'tr.tsp_name', 'mode' => 'value'], ['tr' => 'technical-reports'], [], 'tsp');
+        $this->assertSame([['value' => 'TSP-9', 'label' => 'Maria Santos', 'count' => 2]], $choices['options']);
+
+        // A selected value the other filters exclude keeps its display label.
+        $filters = ['slicers' => [
+            'tsp' => ['table_key' => 'technical-reports', 'key' => 'tsp_name', 'mode' => 'value', 'values' => ['TSP-9']],
+            'model' => ['table_key' => 'technical-reports', 'key' => 'machine_type', 'mode' => 'value', 'values' => ['NO-SUCH-MODEL']],
+        ]];
+        $choices = app(DashboardColumnService::class)->choices(['column' => 'tr.tsp_name', 'mode' => 'value'], ['tr' => 'technical-reports'], $filters, 'tsp');
+        $this->assertSame([['value' => 'TSP-9', 'label' => 'Maria Santos', 'count' => 0]], $choices['options']);
+    }
+
     public function test_monthly_trends_sort_chronologically_and_blank_categories_are_counted(): void
     {
         $this->actingAs(User::factory()->superadmin()->create());

@@ -96,6 +96,17 @@ class DashboardColumnService
                 'sql' => 'c'.$column->id.'.'.$shadow, 'custom_id' => $column->id];
         }
 
+        // A *_name field with a *_display_name sibling (tsp_name →
+        // tsp_display_name) presents options by its display text; the stored
+        // key stays the option value so filters keep matching imported data.
+        foreach ($columns as $key => &$definition) {
+            $displayKey = str_ends_with($key, '_name') ? substr($key, 0, -5).'_display_name' : null;
+            if ($displayKey !== null && isset($columns[$displayKey])) {
+                $definition['display_key'] = $displayKey;
+            }
+        }
+        unset($definition);
+
         return $this->catalogs[$tableKey] = $columns;
     }
 
@@ -308,16 +319,38 @@ class DashboardColumnService
     public function choices(array $props, array $sources, array $filters, string $id): array
     {
         $this->validateProps('slicer', $props, $sources);
-        [$tableKey, $key] = $this->field($props['column'], $sources);
+        [$tableKey, $key, $column] = $this->field($props['column'], $sources);
         $selected = $filters['slicers'][$id]['values'] ?? [];
         unset($filters['slicers'][$id]);
-        $expression = $this->bucket($key, $props['mode'] ?? 'value');
-        $rows = $this->rows($tableKey, [$key], $filters)->selectRaw($expression.' as choice, COUNT(*) as total')
+        $mode = $props['mode'] ?? 'value';
+        $expression = $this->bucket($key, $mode);
+        // Display-keyed fields (tsp_name → tsp_display_name) label their
+        // options with the display text; the value stays the stored key.
+        $displayKey = $column['display_key'] ?? null;
+        $select = $expression.' as choice, COUNT(*) as total';
+        if ($displayKey !== null) {
+            $select .= ', MAX(COALESCE(NULLIF('.$this->wrap($displayKey).", ''), ".$this->wrap($key).')) as choice_label';
+        }
+        $rows = $this->rows($tableKey, array_filter([$key, $displayKey]), $filters)->selectRaw($select)
             ->groupBy('choice')->orderBy('choice')->limit(501)->get();
         $truncated = $rows->count() > 500;
-        $options = $rows->take(500)->map(fn ($r) => ['value' => (string) $r->choice, 'label' => $this->label((string) $r->choice, $props['mode'] ?? 'value'), 'count' => (int) $r->total])->keyBy('value')->all();
+        $options = $rows->take(500)->map(function ($r) use ($displayKey, $mode): array {
+            $label = $displayKey !== null && trim((string) ($r->choice_label ?? '')) !== ''
+                ? (string) $r->choice_label : $this->label((string) $r->choice, $mode);
+
+            return ['value' => (string) $r->choice, 'label' => $label, 'count' => (int) $r->total];
+        })->keyBy('value')->all();
         foreach ($selected as $value) {
-            $options[$value] ??= ['value' => $value, 'label' => $this->label($value, $props['mode'] ?? 'value'), 'count' => 0];
+            if (isset($options[$value])) {
+                continue;
+            }
+            $label = $this->label($value, $mode);
+            if ($displayKey !== null && $value !== '') {
+                // Keep the chip's display name even when other filters hide
+                // every row of the selected value.
+                $label = (string) ($this->rows($tableKey, array_filter([$key, $displayKey]))->where($key, $value)->max($displayKey) ?: $label);
+            }
+            $options[$value] = ['value' => $value, 'label' => $label, 'count' => 0];
         }
 
         return ['options' => array_values($options), 'selected' => $selected, 'truncated' => $truncated];

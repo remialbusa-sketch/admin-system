@@ -140,8 +140,11 @@ class TechnicalServiceAnalysis extends Component
     {
         // Stamping the saved layouts tells resolvedLayout() the merge done:
         // later changes are the admin's — their deletions persist, the
-        // reference widgets are never re-appended against their wishes.
+        // reference widgets are never re-appended against their wishes. The
+        // version stamp is what lets a NEW reference widget land exactly once
+        // on an already-saved layout (TechnicalServiceReference::merge).
         $layout['reference_marked'] = true;
+        $layout['version'] = TechnicalServiceReference::LAYOUT_VERSION;
         SystemDashboards::storeLayout(self::CORE_NAME, $layout);
     }
 

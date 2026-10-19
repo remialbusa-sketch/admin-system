@@ -11,8 +11,20 @@ class TechnicalServiceReference
     public const SOURCES = ['tr' => 'technical-reports'];
 
     /** The widget ids this reference set owns, in canonical shipping order. */
-    public const IDS = ['tsa-service', 'tsa-year', 'tsa-month', 'tsa-model',
+    public const IDS = ['tsa-service', 'tsa-year', 'tsa-month', 'tsa-model', 'tsa-tsp',
         'tsa-calls-month', 'tsa-service-model', 'tsa-service-total'];
+
+    /**
+     * Layout schema version, stamped on every Done. It is how a NEWLY shipped
+     * reference widget reaches layouts that were already saved
+     * (reference_marked) exactly once: merge() appends each id in
+     * INTRODUCED_IN whose version the saved layout predates — and never
+     * again, so a later deletion of that widget persists like any other.
+     */
+    public const LAYOUT_VERSION = 2;
+
+    /** Widget ids a layout version introduces to marked layouts saved below it. */
+    private const INTRODUCED_IN = [2 => ['tsa-tsp']];
 
     /**
      * Chart-fields roles: these specific props are owned by the page's
@@ -65,6 +77,7 @@ class TechnicalServiceReference
             $slicer('tsa-year', 'Year', $date, 'year', 3, 2, 3),
             $slicer('tsa-month', 'Month', $date, 'month', 4, 2, 3),
             $slicer('tsa-model', 'Model', $model, 'value', 5, 2, 2),
+            $slicer('tsa-tsp', 'TSP', 'tr.tsp_name', 'value', 5, 2, 2),
             $chart('tsa-calls-month', 'Total Calls/Month', $date, ['chart_type' => 'line', 'grouping' => 'year_month'], 12, 5),
         ];
 
@@ -77,7 +90,7 @@ class TechnicalServiceReference
             $widgets[] = $chart('tsa-service-total', 'Service Type in Total', $service, ['orientation' => 'horizontal', 'sort' => 'value_desc'], 12, 5);
         }
 
-        return ['version' => 1, 'widgets' => $widgets];
+        return ['version' => self::LAYOUT_VERSION, 'widgets' => $widgets];
     }
 
     /**
@@ -90,8 +103,10 @@ class TechnicalServiceReference
      *   the Service Type column was deleted) are dropped;
      * - the missing reference widgets are appended at the end — but only for
      *   layouts that predate the merge. An explicitly saved layout
-     *   (`reference_marked`, written on every Done) is the admin's final word:
-     *   their deletions persist, nothing resurrects.
+     *   (`reference_marked`, written on every Done) is the admin's final
+     *   word: their deletions persist, nothing resurrects — except widgets
+     *   shipped after the layout's `version` (INTRODUCED_IN), which land once
+     *   and are deletions again from the next Done on.
      *
      * @param  array<string, mixed>  $base
      * @return array{version: int, widgets: array<int, array<string, mixed>>}
@@ -101,6 +116,8 @@ class TechnicalServiceReference
         $canonical = new Collection(self::layout($overrides)['widgets']);
         $canonical = $canonical->keyBy('id');
         $widgets = is_array($base['widgets'] ?? null) ? $base['widgets'] : [];
+        $marked = ($base['reference_marked'] ?? false) === true;
+        $version = (int) ($base['version'] ?? 1);
         $out = [];
 
         foreach ($widgets as $widget) {
@@ -128,13 +145,27 @@ class TechnicalServiceReference
             $out[] = $widget;
         }
 
-        if (($base['reference_marked'] ?? false) !== true && $widgets !== []) {
+        if (! $marked && $widgets !== []) {
             foreach ($canonical as $widget) {
                 $out[] = $widget;
             }
+        } elseif ($marked && $widgets !== []) {
+            // Post-merge reference widgets (INTRODUCED_IN) reach a marked
+            // layout once; from the next Done on they behave like all others.
+            foreach (self::INTRODUCED_IN as $since => $ids) {
+                if ($version >= $since) {
+                    continue;
+                }
+                foreach ($ids as $id) {
+                    if ($canonical->has($id)) {
+                        $out[] = $canonical->get($id);
+                        $canonical->forget($id);
+                    }
+                }
+            }
         }
 
-        return ['version' => 1, 'widgets' => array_values($out)];
+        return ['version' => self::LAYOUT_VERSION, 'widgets' => array_values($out)];
     }
 
     /**

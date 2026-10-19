@@ -54,10 +54,10 @@ class TsaWidgetConversionTest extends TestCase
             ->assertViewHas('tsaGrid', function (array $grid): bool {
                 $widgets = $grid['widgets'];
 
-                // Shipped default: 7 curated KPI cards + the reference chart
-                // set (no Service Type column exists in this fixture, so the
-                // service trio is omitted by design).
-                if (count($widgets) !== 11) {
+                // Shipped default: 7 curated KPI cards + the reference
+                // slicer/chart set (no Service Type column exists in this
+                // fixture, so the service trio is omitted by design).
+                if (count($widgets) !== 12) {
                     return false;
                 }
 
@@ -78,7 +78,7 @@ class TsaWidgetConversionTest extends TestCase
                 $ids = array_column($widgets, 'id');
                 $kpiIndex = array_search('tsa-unassigned', $ids, true);
 
-                return collect(['tsa-year', 'tsa-month', 'tsa-model', 'tsa-calls-month'])
+                return collect(['tsa-year', 'tsa-month', 'tsa-model', 'tsa-tsp', 'tsa-calls-month'])
                     ->every(fn (string $id): bool => array_search($id, $ids, true) > $kpiIndex)
                     && collect($widgets)->every(fn (array $widget): bool => in_array($widget['type'], ['headline_kpi', 'supporting_kpi', 'slicer', 'column_chart'], true));
             })
@@ -139,7 +139,7 @@ class TsaWidgetConversionTest extends TestCase
 
         Livewire::actingAs($owner)
             ->test(TechnicalServiceAnalysis::class)
-            ->assertViewHas('tsaGrid', fn (array $grid): bool => count($grid['widgets']) === 11);
+            ->assertViewHas('tsaGrid', fn (array $grid): bool => count($grid['widgets']) === 12);
     }
 
     public function test_tsa_customizing_requires_edit_access(): void

@@ -6,6 +6,7 @@ use App\Livewire\TechnicalServiceAnalysis;
 use App\Models\CustomTableColumn;
 use App\Models\TechnicalReport;
 use App\Models\User;
+use App\Support\Dashboard\TechnicalServiceReference;
 use App\Support\SystemDashboards;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -21,7 +22,7 @@ class TsaMergedReferenceTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const WIDGET_IDS = ['tsa-service', 'tsa-year', 'tsa-month', 'tsa-model',
+    private const WIDGET_IDS = ['tsa-service', 'tsa-year', 'tsa-month', 'tsa-model', 'tsa-tsp',
         'tsa-calls-month', 'tsa-service-model', 'tsa-service-total'];
 
     private function makeServiceColumn(string $name = 'Service Type'): CustomTableColumn
@@ -109,14 +110,14 @@ class TsaMergedReferenceTest extends TestCase
                 foreach (['tsa-service', 'tsa-service-model', 'tsa-service-total'] as $id) {
                     $this->assertNotContains($id, $ids, sprintf('%s must not ship when no service column exists.', $id));
                 }
-                foreach (['tsa-model', 'tsa-calls-month', 'tsa-year', 'tsa-month'] as $id) {
+                foreach (['tsa-model', 'tsa-calls-month', 'tsa-year', 'tsa-month', 'tsa-tsp'] as $id) {
                     $this->assertContains($id, $ids);
                 }
                 $ids = array_column($grid['widgets'], 'id');
                 foreach (['tsa-service', 'tsa-service-model', 'tsa-service-total'] as $id) {
                     $this->assertNotContains($id, $ids, sprintf('%s must not ship when no service column exists.', $id));
                 }
-                foreach (['tsa-model', 'tsa-calls-month', 'tsa-year', 'tsa-month'] as $id) {
+                foreach (['tsa-model', 'tsa-calls-month', 'tsa-year', 'tsa-month', 'tsa-tsp'] as $id) {
                     $this->assertContains($id, $ids);
                 }
                 foreach ($grid['widgets'] as $widget) {
@@ -236,6 +237,108 @@ class TsaMergedReferenceTest extends TestCase
             });
 
         $this->assertNull(SystemDashboards::coreRow('Technical Service Analysis')->layout);
+    }
+
+    public function test_a_marked_layout_gains_the_new_reference_widget_once(): void
+    {
+        $this->makeServiceColumn();
+
+        // The admin's saved layout: two widgets only, marked — so the other
+        // reference widgets stay deleted — and written before the TSP filter
+        // existed (version 1).
+        SystemDashboards::storeLayout('Technical Service Analysis', ['version' => 1, 'reference_marked' => true, 'widgets' => [
+            ['id' => 'tsa-reports', 'type' => 'headline_kpi', 'w' => 12, 'h' => 2,
+                'props' => ['label' => 'Reports', 'metric' => 'reports_total', 'context' => '', 'formula' => '', 'href' => '', 'decimals' => 0,
+                    'context_metric' => '', 'context_suffix' => '', 'context_prefix' => '', 'context_decimals' => 0, 'variant' => 'lead', 'caption' => '', 'suffix' => '']],
+            ['id' => 'tsa-year', 'type' => 'slicer', 'w' => 3, 'h' => 2,
+                'props' => ['label' => 'Year', 'column' => 'tr.service_started_at', 'mode' => 'year', 'columns' => 3, 'multiple' => true]],
+        ]]);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(TechnicalServiceAnalysis::class)
+            ->assertViewHas('tsaGrid', function (array $grid): bool {
+                $ids = array_column($grid['widgets'], 'id');
+                $this->assertContains('tsa-tsp', $ids, 'The new reference widget reaches a marked layout once.');
+                $this->assertSame('tr.tsp_name', collect($grid['widgets'])->firstWhere('id', 'tsa-tsp')['props']['column']);
+                foreach (['tsa-month', 'tsa-model', 'tsa-calls-month'] as $id) {
+                    $this->assertNotContains($id, $ids, sprintf('%s stays deleted.', $id));
+                }
+
+                return true;
+            });
+    }
+
+    public function test_the_introduced_tsp_filter_stays_deleted_after_done(): void
+    {
+        $this->makeServiceColumn();
+        SystemDashboards::storeLayout('Technical Service Analysis', ['version' => 1, 'reference_marked' => true, 'widgets' => [
+            ['id' => 'tsa-year', 'type' => 'slicer', 'w' => 3, 'h' => 2,
+                'props' => ['label' => 'Year', 'column' => 'tr.service_started_at', 'mode' => 'year', 'columns' => 3, 'multiple' => true]],
+        ]]);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(TechnicalServiceAnalysis::class)
+            ->call('toggleCustomizingFor', 'tsa')
+            ->assertViewHas('tsaState', fn (array $state) => collect($state['draftLayout']['widgets'])->pluck('id')->contains('tsa-tsp'))
+            ->call('saveWidgetGrid', [['id' => 'tsa-year', 'w' => 3, 'h' => 2]], 'tsa'); // Done with the TSP filter deleted.
+
+        $stored = SystemDashboards::coreRow('Technical Service Analysis')->layout;
+        $this->assertSame(TechnicalServiceReference::LAYOUT_VERSION, $stored['version'], 'Done stamps the current layout version.');
+        $this->assertSame(['tsa-year'], array_column($stored['widgets'], 'id'));
+
+        // Re-render: the introduction never repeats after an explicit save.
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(TechnicalServiceAnalysis::class)
+            ->assertViewHas('tsaGrid', fn (array $grid) => array_column($grid['widgets'], 'id') === ['tsa-year']);
+    }
+
+    public function test_the_tsp_filter_lists_display_names_and_filters_by_the_stored_id(): void
+    {
+        $this->makeServiceColumn();
+        TechnicalReport::create(['source_system' => 'test', 'source_record_id' => 'one', 'machine_type' => 'XN', 'tsp_name' => 'TSP-1', 'tsp_display_name' => 'Reynan Ochea']);
+        TechnicalReport::create(['source_system' => 'test', 'source_record_id' => 'two', 'machine_type' => 'XN', 'tsp_name' => 'TSP-1', 'tsp_display_name' => 'Reynan Ochea']);
+        TechnicalReport::create(['source_system' => 'test', 'source_record_id' => 'three', 'machine_type' => 'XN', 'tsp_name' => 'TSP-2', 'tsp_display_name' => 'Jun Cruz']);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(TechnicalServiceAnalysis::class)
+            ->assertViewHas('tsaGrid', function (array $grid): bool {
+                $widget = collect($grid['widgets'])->firstWhere('id', 'tsa-tsp');
+                $this->assertSame('slicer', $widget['type']);
+                $options = collect($widget['data']['options'])->keyBy('value');
+                $this->assertSame('Reynan Ochea', $options['TSP-1']['label'], 'The button shows the display name.');
+                $this->assertSame(2, $options['TSP-1']['count']);
+                $this->assertSame('Jun Cruz', $options['TSP-2']['label']);
+
+                return true;
+            })
+            ->call('toggleSlicerValue', 'tsa-tsp', 'TSP-1')
+            ->assertViewHas('metrics', fn (array $metrics) => $metrics['reports_total'] === 2, 'Selection filters by the stored tsp_name, not the label.');
+    }
+
+    public function test_the_tsp_filter_keeps_user_configured_props(): void
+    {
+        $this->makeServiceColumn();
+
+        // The admin re-pointed the TSP filter at another column and renamed
+        // it — no Chart-fields role pins it back, unlike the other slicers.
+        SystemDashboards::storeLayout('Technical Service Analysis', ['version' => TechnicalServiceReference::LAYOUT_VERSION, 'reference_marked' => true, 'widgets' => [
+            ['id' => 'tsa-tsp', 'type' => 'slicer', 'w' => 6, 'h' => 3,
+                'props' => ['label' => 'My TSPs', 'column' => 'tr.brand', 'mode' => 'value', 'columns' => 3, 'multiple' => true]],
+        ]]);
+        TechnicalReport::create(['source_system' => 'test', 'source_record_id' => 'one', 'machine_type' => 'XN', 'brand' => 'AEONMED']);
+
+        Livewire::actingAs(User::factory()->superadmin()->create())
+            ->test(TechnicalServiceAnalysis::class)
+            ->assertViewHas('tsaGrid', function (array $grid): bool {
+                $widget = collect($grid['widgets'])->firstWhere('id', 'tsa-tsp');
+                $this->assertSame('My TSPs', $widget['props']['label']);
+                $this->assertSame('tr.brand', $widget['props']['column'], 'The user-picked column is never re-pinned.');
+                $this->assertSame(6, $widget['w']);
+                $this->assertSame(3, $widget['h']);
+                $this->assertSame(['AEONMED'], array_column($widget['data']['options'], 'value'));
+
+                return true;
+            });
     }
 
     public function test_url_slicers_of_a_removed_widget_do_not_filter_anything(): void
