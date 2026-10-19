@@ -33,6 +33,12 @@ class TableFileController extends Controller
         }
         abort_unless(is_string($url) && AttachmentValue::safeUrl($url), 404);
 
-        return redirect()->away($url)->header('Cache-Control', 'private, no-store');
+        // Privately cacheable so repeat <img> hits (page flips, reloads, tab
+        // switches) come from the browser cache instead of burning the
+        // route's request budget — a grid page costs one request per image
+        // cell per TTL, not per view. The TTL stays under the 45-minute
+        // monday asset-URL cache above, so a cached redirect never outlives
+        // the URL it points at.
+        return redirect()->away($url)->header('Cache-Control', 'private, max-age=900');
     }
 }

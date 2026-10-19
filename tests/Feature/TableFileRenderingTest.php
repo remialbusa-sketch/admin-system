@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\MondayApiClient;
 use App\Support\AttachmentValue;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Route;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -50,6 +51,34 @@ class TableFileRenderingTest extends TestCase
         $this->get($url)->assertRedirect('https://example.com/fresh-photo.png');
         $this->get(route('table-files.show', [$column->id, $row->id + 100, 0]))->assertNotFound();
         $this->get(route('table-files.show', [$column->id, $row->id, 1]))->assertNotFound();
+    }
+
+    public function test_image_redirects_cache_privately_and_the_budget_covers_grid_browsing(): void
+    {
+        $column = CustomTableColumn::create(['table_key' => 'technical-reports', 'name' => 'TSP Signature', 'type' => 'text', 'position' => 1]);
+        $report = TechnicalReport::create(['source_system' => 'executive_dashboard', 'source_record_id' => 'row-cache', 'reference_number' => 'REF2']);
+        CustomTableColumnValue::create(['custom_column_id' => $column->id, 'row_id' => $report->id, 'value' => ['text' => 'https://test.monday.com/protected_static/123/resources/456/photo.png']]);
+
+        $client = $this->mock(MondayApiClient::class);
+        $client->shouldReceive('assetUrl')->once()->with(456)->andReturn('https://example.com/fresh-photo.png');
+
+        $response = $this->actingAs(User::factory()->create())
+            ->get(route('table-files.show', [$column->id, $report->id, 0]));
+
+        $response->assertRedirect('https://example.com/fresh-photo.png');
+
+        // A grid page spends one request per image cell; repeats (page flips,
+        // reloads, tab switches) must come from the browser cache or the
+        // route's throttle empties mid-browse and every image 429s.
+        $cache = (string) $response->headers->get('Cache-Control');
+        $this->assertStringContainsString('private', $cache);
+        $this->assertStringContainsString('max-age=900', $cache);
+        $this->assertStringNotContainsString('no-store', $cache);
+
+        $this->assertContains(
+            'throttle:1200,1',
+            Route::getRoutes()->getByName('table-files.show')->gatherMiddleware(),
+        );
     }
 
     public function test_attachment_decoder_rejects_executable_urls_and_keeps_nonimages_as_files(): void

@@ -25,9 +25,12 @@ use Illuminate\Support\Facades\Route;
 Route::redirect('/', '/login');
 
 Route::middleware(['auth', 'verified'])->group(function () {
+    // Grid pages request one file per image cell (up to ~100 on a 50-row
+    // table), so the budget must absorb a few page flips per minute; the
+    // redirect is privately cached (TableFileController) to spare repeats.
     Route::get('table-files/{column}/{row}/{file}', [TableFileController::class, 'show'])
         ->whereNumber('column')->whereNumber('row')->whereNumber('file')
-        ->middleware('throttle:600,1')->name('table-files.show');
+        ->middleware('throttle:1200,1')->name('table-files.show');
     Route::get('dashboard', Dashboard::class)->name('dashboard');
     Route::redirect('president', 'dashboard')->name('president');
 
