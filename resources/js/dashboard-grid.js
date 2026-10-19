@@ -33,14 +33,49 @@ const gridKeyOf = (grid) => grid.dataset.gridKey || 'default';
 
 // Draft sync: keeps the server-side draft aligned with the DOM without
 // persisting anything and without leaving customize mode. The grid key
-// lets several independent grids share one page.
-const syncDraft = debounce((grid) => {
+// lets several independent grids share one page. Resize releases push
+// immediately; drag/remove keep the debounce.
+const pushLayout = (grid) => {
     if (!window.Livewire) {
         return;
     }
 
     window.Livewire.dispatch('dashboard-layout-sync', { layout: collectLayout(grid), grid: gridKeyOf(grid) });
-}, 400);
+};
+
+const syncDraft = debounce(pushLayout, 400);
+
+// Optimistic spans from a finished resize stay on the section until the
+// Livewire rerender brings the draft's classes back — then they are
+// cleared so the responsive classes own the layout again. (Clearing them
+// at pointerup instead made the widget snap back to its old size for the
+// debounce + round-trip window.)
+const clearPendingSpans = (root = document) => {
+    const targets = [];
+
+    if (root?.matches?.('[data-span-pending]')) {
+        targets.push(root);
+    }
+
+    root?.querySelectorAll?.('[data-span-pending]').forEach((el) => targets.push(el));
+
+    targets.forEach((el) => {
+        el.style.gridColumn = '';
+        el.style.gridRow = '';
+        delete el.dataset.spanPending;
+    });
+};
+
+let morphCleanupHooked = false;
+
+const hookMorphCleanup = () => {
+    if (morphCleanupHooked || !window.Livewire?.hook) {
+        return;
+    }
+
+    morphCleanupHooked = true;
+    window.Livewire.hook('morphed', ({ el }) => clearPendingSpans(el ?? document));
+};
 
 // Done: commit the draft (persist + exit customize mode).
 const commitLayout = (grid) => {
@@ -71,7 +106,11 @@ const initGrid = (grid) => {
     grid.addEventListener('dragstart', (event) => {
         const section = event.target.closest('[data-widget-id]');
 
-        if (!isEditing() || !section) {
+        // A native drag must never start while a resize session is armed:
+        // touch drag-and-drop can fire dragstart even though pointerdown
+        // was canceled, and a native drag stops all pointer events —
+        // hijacking the gesture and freezing the resize mid-way.
+        if (resizing || !isEditing() || !section) {
             event.preventDefault();
             return;
         }
@@ -130,8 +169,9 @@ const initGrid = (grid) => {
 
     // --- Resize: right edge = width, bottom edge = height, corner = both.
     // Width snaps to the 12 columns, height to row spans (1-6, mirroring the
-    // server clamp in mergeWidgetGeometry). Feedback is inline grid spans,
-    // cleared on release so the draft classes take over after rerender. -----
+    // server clamp in mergeWidgetGeometry). Feedback is inline grid spans
+    // that stay until the Livewire rerender lands (clearPendingSpans), so a
+    // release never snaps the widget back to the pre-drag size. -------------
     let resizing = null;
 
     const resizeCursor = (mode) => (mode === 'y' ? 'ns-resize' : mode === 'xy' ? 'nwse-resize' : 'ew-resize');
@@ -143,9 +183,33 @@ const initGrid = (grid) => {
             return;
         }
 
+        // Primary button only: a right-click on a grip must not arm a resize
+        // (the context menu swallows the pointerup and the session stays
+        // stuck, resizing again on the next unbuttoned move).
+        if (event.button !== 0) {
+            return;
+        }
+
         event.preventDefault();
 
         const section = handle.closest('[data-widget-id]');
+
+        // Self-heal: a previous session's optimistic spans are moot once a
+        // new drag starts on the same widget.
+        clearPendingSpans(section);
+
+        // Explicit capture keeps events flowing when the cursor leaves the
+        // viewport mid-drag (height shrink pulls toward the window edge) and
+        // guarantees the release is delivered even outside the window.
+        // Without it the resize froze part-way and a release outside was
+        // never received, leaving the drag stuck armed.
+        try {
+            handle.setPointerCapture(event.pointerId);
+        } catch {
+            // Capture may refuse a stale pointer; the document listeners
+            // still cover the in-viewport part of the gesture.
+        }
+
         const mode = handle.dataset.widgetResize || 'x';
         const gridRect = grid.getBoundingClientRect();
         const styles = getComputedStyle(grid);
@@ -162,6 +226,7 @@ const initGrid = (grid) => {
         resizing = {
             section,
             mode,
+            pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
             startW: parseInt(section.dataset.w || '4', 10),
@@ -178,7 +243,7 @@ const initGrid = (grid) => {
     });
 
     document.addEventListener('pointermove', (event) => {
-        if (!resizing) {
+        if (!resizing || event.pointerId !== resizing.pointerId) {
             return;
         }
 
@@ -203,19 +268,30 @@ const initGrid = (grid) => {
         }
     });
 
-    document.addEventListener('pointerup', () => {
+    const endResize = () => {
         if (!resizing) {
             return;
         }
 
-        resizing.section.classList.remove('is-dragging');
-        resizing.section.style.gridColumn = '';
-        resizing.section.style.gridRow = '';
-        syncDraft(grid);
+        const { section } = resizing;
+
+        section.classList.remove('is-dragging');
+
+        // The optimistic spans stay until the Livewire rerender lands (the
+        // morph hook above clears them); push the draft immediately instead
+        // of debouncing so that rerender arrives as soon as possible.
+        section.dataset.spanPending = '1';
+        pushLayout(grid);
+
         resizing = null;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
-    });
+    };
+
+    document.addEventListener('pointerup', endResize);
+    document.addEventListener('pointercancel', endResize);
+    document.addEventListener('lostpointercapture', endResize);
+    window.addEventListener('blur', endResize);
 
     // --- Remove widget (draft only; Done persists) ------------------------
     grid.addEventListener('click', (event) => {
@@ -271,6 +347,7 @@ const bindDoneButton = () => {
 };
 
 const bootDashboardGrid = () => {
+    hookMorphCleanup();
     bindDoneButton();
     initDashboardGrid();
 };
@@ -280,6 +357,10 @@ if (document.readyState === 'loading') {
 } else {
     bootDashboardGrid();
 }
+
+// Wire up the morph cleanup as soon as Livewire is available: a boot can
+// run before the Livewire script has defined window.Livewire.
+document.addEventListener('livewire:init', hookMorphCleanup);
 
 // wire:navigate swaps page content — re-arm after every navigation.
 document.addEventListener('livewire:navigated', bootDashboardGrid);

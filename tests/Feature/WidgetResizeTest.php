@@ -58,4 +58,58 @@ class WidgetResizeTest extends TestCase
         $this->assertSame(6, $resized['w']);
         $this->assertSame(4, $resized['h']);
     }
+
+    public function test_shrinking_to_the_minimum_grid_units_survives_save(): void
+    {
+        Livewire::actingAs($this->superadmin())
+            ->test(TechnicalServiceAnalysis::class)
+            ->call('toggleCustomizingFor', 'tsa')
+            ->call('saveWidgetGrid', [
+                ['id' => 'tsa-reports', 'w' => 1, 'h' => 1],
+            ], 'tsa')
+            ->assertHasNoErrors();
+
+        $resized = collect(SystemDashboards::coreRow('Technical Service Analysis')->layout['widgets'] ?? [])
+            ->firstWhere('id', 'tsa-reports');
+
+        $this->assertNotNull($resized);
+        $this->assertSame(1, $resized['w'], 'Width must shrink all the way down to one column.');
+        $this->assertSame(1, $resized['h'], 'Height must shrink all the way down to one row.');
+    }
+
+    public function test_geometry_above_the_grid_maximum_clamps_to_twelve_by_six(): void
+    {
+        Livewire::actingAs($this->superadmin())
+            ->test(TechnicalServiceAnalysis::class)
+            ->call('toggleCustomizingFor', 'tsa')
+            ->call('saveWidgetGrid', [
+                ['id' => 'tsa-reports', 'w' => 99, 'h' => 99],
+            ], 'tsa')
+            ->assertHasNoErrors();
+
+        $resized = collect(SystemDashboards::coreRow('Technical Service Analysis')->layout['widgets'] ?? [])
+            ->firstWhere('id', 'tsa-reports');
+
+        $this->assertNotNull($resized);
+        $this->assertSame(12, $resized['w']);
+        $this->assertSame(6, $resized['h']);
+    }
+
+    public function test_geometry_below_the_grid_minimum_clamps_to_one_by_one(): void
+    {
+        Livewire::actingAs($this->superadmin())
+            ->test(TechnicalServiceAnalysis::class)
+            ->call('toggleCustomizingFor', 'tsa')
+            ->call('saveWidgetGrid', [
+                ['id' => 'tsa-reports', 'w' => 0, 'h' => 0],
+            ], 'tsa')
+            ->assertHasNoErrors();
+
+        $resized = collect(SystemDashboards::coreRow('Technical Service Analysis')->layout['widgets'] ?? [])
+            ->firstWhere('id', 'tsa-reports');
+
+        $this->assertNotNull($resized);
+        $this->assertSame(1, $resized['w']);
+        $this->assertSame(1, $resized['h']);
+    }
 }
