@@ -221,6 +221,70 @@ class MondayCoreSyncTest extends TestCase
         $this->assertNull($report->reference_number);
     }
 
+    public function test_item_id_echo_column_is_never_chosen_as_a_core_source(): void
+    {
+        app(MondayItemMapper::class)->autoCreateColumns('technical-reports', [
+            ['id' => 'pulse1', 'title' => 'Reference Number', 'type' => 'item_id', 'settings_str' => ''],
+            ['id' => 'text8', 'title' => 'Site Name', 'type' => 'text', 'settings_str' => ''],
+        ]);
+
+        $setting = MondaySyncSetting::forDomain('technical-reports');
+        $mirror = CustomTableColumn::query()->where('table_key', 'technical-reports')->where('name', 'Reference Number')->firstOrFail();
+
+        // The board column still mirrors as a custom column ...
+        $this->assertSame($mirror->id, $setting->field_map['pulse1'] ?? null);
+        // ... but an item id echo is identity, never a core-field source.
+        $this->assertArrayNotHasKey('pulse1', $setting->core_field_map ?? []);
+    }
+
+    public function test_item_id_echo_column_cannot_clobber_the_item_name_reference(): void
+    {
+        $mirror = CustomTableColumn::create([
+            'table_key' => 'technical-reports',
+            'name' => 'Reference Number',
+            'type' => 'text',
+            'position' => 0,
+        ]);
+
+        $this->fakeBoard([
+            'items' => [['id' => '88', 'name' => 'SN-05050', 'created_at' => null, 'updated_at' => null]],
+            'fullItems' => [[
+                'id' => '88',
+                'name' => 'SN-05050',
+                'created_at' => null,
+                'updated_at' => null,
+                'column_values' => [
+                    ['id' => 'pulse1', 'text' => '2883916961', 'type' => 'item_id'],
+                ],
+            ]],
+        ]);
+
+        // A saved map from the old behaviour: the echo column pinned to the
+        // domain reference. New suggestions no longer produce this, but prod
+        // still carries the mapping.
+        MondaySyncSetting::create([
+            'domain' => 'technical-reports',
+            'board_id' => '9',
+            'enabled' => true,
+            'field_map' => ['pulse1' => $mirror->id],
+            'core_field_map' => ['pulse1' => 'reference_number'],
+        ]);
+
+        app(MondaySyncService::class)->syncDomain('technical-reports');
+
+        $report = TechnicalReport::query()->where('source_record_id', '88')->firstOrFail();
+
+        // The title write survives: the real reference is the item name.
+        $this->assertSame('SN-05050', $report->reference_number);
+
+        // The board's own column still mirrors what the board shows.
+        $this->assertDatabaseHas('table_custom_column_values', [
+            'custom_column_id' => $mirror->id,
+            'row_id' => $report->id,
+            'value_text' => '2883916961',
+        ]);
+    }
+
     public function test_sync_all_command_includes_core_domains(): void
     {
         $this->fakeBoard();

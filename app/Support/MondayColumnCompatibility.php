@@ -25,6 +25,14 @@ class MondayColumnCompatibility
 
     public static function core(string $field, string $source): bool
     {
+        // item_id columns echo the item's own id — identity, never content.
+        // A board column titled "Reference Number" of this type clobbered the
+        // real reference the title write had already produced, so such a
+        // source is never a core-field candidate.
+        if ($source === 'item_id') {
+            return false;
+        }
+
         if (in_array($source, ['file', 'files', 'link', 'location'], true)) {
             return $field === 'report_url' && $source === 'link';
         }

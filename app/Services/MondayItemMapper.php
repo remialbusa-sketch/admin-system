@@ -417,6 +417,15 @@ class MondayItemMapper
 
                 try {
                     $sourceType = (string) ($value['type'] ?? 'text');
+
+                    // Saved maps may still point an item_id column at a core
+                    // field (the board's "Reference Number" echo overwrote the
+                    // item-name reference). Identity is never content: keep
+                    // the custom mirror but never write the domain column.
+                    if ($sourceType === 'item_id') {
+                        $attribute = null;
+                    }
+
                     if ($this->registryTypeFor($sourceType) === 'files' && in_array($column->type, ['text', 'long_text'], true)) {
                         // Older releases treated monday's singular "file"
                         // type as text. Existing URL values remain readable.
