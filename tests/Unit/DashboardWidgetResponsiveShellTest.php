@@ -44,10 +44,37 @@ class DashboardWidgetResponsiveShellTest extends TestCase
                 $source,
                 $path.' sizes the content box with a bare pixel height that can overshoot the widget shell.'
             );
-            $this->assertStringContainsString(
+            $this->assertStringNotContainsString(
                 'height: min({{ $contentHeight }}px, 100%)',
                 $source,
-                $path.' must cap the content box at its shell with min(…, 100%).'
+                $path.' must not cap the content box with a percentage height: the grid shell is '
+                .'indefinite during intrinsic row sizing, so min(…, 100%) resolves as auto there and '
+                .'the full content height (hundreds of option buttons, an oversized chart) inflates '
+                .'the shared row tracks — see the super-long TSA reference slicers.'
+            );
+            $this->assertStringContainsString(
+                'style="height: {{ $contentHeight }}px; max-height: 100%"',
+                $source,
+                $path.' must size the content box with a definite pixel height (so intrinsic row '
+                .'sizing can never inflate the track) and cap it at the shell with max-height: 100% '
+                .'(the live-resize follow that min(…, 100%) used to provide).'
+            );
+        }
+    }
+
+    public function test_no_widget_blade_caps_a_content_height_with_a_percentage(): void
+    {
+        foreach (glob(resource_path('views/components/dashboard/widgets/*.blade.php')) as $file) {
+            $source = file_get_contents($file);
+            $this->assertNotFalse($source);
+
+            $this->assertStringNotContainsString(
+                'height: min(',
+                $source,
+                basename($file).' caps a content height with min(…): a percentage inside a height is '
+                .'indefinite while the grid sizes its row tracks, so the cap silently resolves as auto '
+                .'and the full content height inflates every track the widget spans. Use a definite '
+                .'pixel height plus max-height: 100% instead.'
             );
         }
     }

@@ -25,7 +25,7 @@
     $step = ($plotRight - $plotLeft) / max(1, count($points));
     $formatValue = fn ($v) => rtrim(rtrim(number_format($v, 2, '.', ','), '0'), '.');
 @endphp
-<div class="flex min-h-0 flex-col" style="height: min({{ $contentHeight }}px, 100%)">
+<div class="flex min-h-0 flex-col" style="height: {{ $contentHeight }}px; max-height: 100%">
     <h3 class="text-sm font-bold text-base-content">{{ $label }}</h3>
     @if (! $configured)
         <p class="mt-4 text-sm text-base-content/50">Choose columns from a connected table in Widget settings.</p>

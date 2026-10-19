@@ -1,4 +1,4 @@
-<div class="flex min-h-0 flex-col" style="height: min({{ $contentHeight }}px, 100%)" x-data="{ search: '' }">
+<div class="flex min-h-0 flex-col" style="height: {{ $contentHeight }}px; max-height: 100%" x-data="{ search: '' }">
     <div class="flex items-start justify-between gap-2">
         <div>
             <h3 class="text-sm font-bold text-base-content">{{ $label }}</h3>
