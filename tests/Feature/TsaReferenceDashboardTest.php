@@ -24,7 +24,7 @@ class TsaReferenceDashboardTest extends TestCase
         Livewire::actingAs(User::factory()->create(['role' => UserRole::RegionalManager, 'region' => null]))
             ->test(TechnicalServiceAnalysis::class)
             ->assertViewHas('metrics', fn ($metrics) => $metrics['reports_total'] === 0)
-            ->assertViewHas('referenceGrid', fn ($grid) => collect($grid['widgets'])->firstWhere('id', 'tsa-calls-month')['data']['points'] === []);
+            ->assertViewHas('tsaGrid', fn ($grid) => collect($grid['widgets'])->firstWhere('id', 'tsa-calls-month')['data']['points'] === []);
     }
 
     public function test_reference_chart_retains_more_than_100_models_and_20_service_types(): void
@@ -58,7 +58,7 @@ class TsaReferenceDashboardTest extends TestCase
             ->assertSee('Year')->assertSee('Month')->assertSee('Model')->assertSee('Service Type');
         $page->call('toggleSlicerValue', 'tsa-year', '2025')->call('toggleSlicerValue', 'tsa-month', '01');
         $page->assertViewHas('metrics', fn ($metrics) => $metrics['reports_total'] === 1);
-        $page->assertViewHas('referenceGrid', function ($grid): bool {
+        $page->assertViewHas('tsaGrid', function ($grid): bool {
             $charts = collect($grid['widgets'])->keyBy('id');
             $this->assertSame([['label' => '2025-01', 'values' => [1.0]]], $charts['tsa-calls-month']['data']['points']);
             $this->assertSame([['label' => 'XN', 'values' => [1.0]]], $charts['tsa-service-model']['data']['points']);
@@ -71,6 +71,6 @@ class TsaReferenceDashboardTest extends TestCase
         $page->set('analysisColumns.model', 'brand')->assertSet('slicerSelections', [])
             ->assertViewHas('metrics', fn ($m) => $m['reports_total'] === 3);
         $page->set('analysisColumns.model', 'machine_type); DROP TABLE technical_reports;')
-            ->assertViewHas('referenceGrid', fn ($g) => collect($g['widgets'])->firstWhere('id', 'tsa-model')['props']['column'] === 'tr.machine_type');
+            ->assertViewHas('tsaGrid', fn ($g) => collect($g['widgets'])->firstWhere('id', 'tsa-model')['props']['column'] === 'tr.machine_type');
     }
 }

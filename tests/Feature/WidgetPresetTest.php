@@ -127,7 +127,9 @@ class WidgetPresetTest extends TestCase
         $this->assertSame('status', $donut['props']['dataset'] ?? null);
 
         // The Home preset was refused: wrong page, nothing stored for it.
-        $this->assertSame(8, count($widgets));
+        // The shipped default adds its reference set (4 widgets, no service
+        // column in this fixture) to the preset the test added.
+        $this->assertSame(12, count($widgets));
     }
 
     public function test_tsa_preset_widgets_render_live_data(): void

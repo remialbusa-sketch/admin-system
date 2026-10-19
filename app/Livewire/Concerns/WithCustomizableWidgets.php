@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Concerns;
 
+use App\Services\DashboardColumnService;
 use App\Support\Dashboard\DashboardContext;
 use App\Support\Dashboard\DashboardLayoutEngine;
 use App\Support\Dashboard\ExpressionEngine;
@@ -9,6 +10,7 @@ use App\Support\Dashboard\ExpressionSyntaxError;
 use App\Support\Dashboard\GridLayoutNormalizer;
 use App\Support\Dashboard\WidgetPresets;
 use App\Support\Dashboard\WidgetRegistry;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\On;
 
 /**
@@ -48,6 +50,19 @@ trait WithCustomizableWidgets
     protected function widgetScopeKind(string $grid): string
     {
         return 'source';
+    }
+
+    /**
+     * Connected sources backing the settings gear's column/numeric_column
+     * pickers (source alias => table key). Hosts whose widgets never expose
+     * column-typed settings return [] — those fields then render as plain
+     * selects without options.
+     *
+     * @return array<string, string>
+     */
+    protected function widgetColumnSources(string $grid): array
+    {
+        return [];
     }
 
     public function widgetSettingsModalName(string $grid): string
@@ -262,6 +277,8 @@ trait WithCustomizableWidgets
                 $vocab = ($field['key'] ?? '') === 'metric' ? $metricVocab : $this->pageExpressionLabels($grid);
                 $schema[$index]['options'] = array_keys($vocab);
                 $schema[$index]['grouped_options'] = $this->groupedWidgetOptions($grid, $vocab);
+            } elseif (in_array($field['type'] ?? '', ['column', 'numeric_column'], true) && ($sources = $this->widgetColumnSources($grid)) !== []) {
+                $schema[$index]['grouped_options'] = app(DashboardColumnService::class)->options($sources, $field['type'] === 'numeric_column');
             }
         }
 
@@ -413,6 +430,27 @@ trait WithCustomizableWidgets
             return;
         }
 
+        // Column-backed widgets (chart builder, slicer) share the connected
+        // table's rules: the saved choice must be a real column of a
+        // connected table — and editing a slicer's column invalidates any
+        // previously selected values.
+        $sources = $this->widgetColumnSources($grid);
+        $editingWidget = collect($state['draftLayout']['widgets'] ?? [])->firstWhere('id', $state['settingsWidgetId']);
+
+        if (in_array($editingWidget['type'] ?? '', ['column_chart', 'slicer'], true) && $sources !== []) {
+            try {
+                app(DashboardColumnService::class)->validateProps($editingWidget['type'], $clean, $sources);
+            } catch (ValidationException $exception) {
+                $this->patchWidgetGridState($grid, ['settingsProps' => $props, 'settingsError' => $exception->validator->errors()->first()]);
+
+                return;
+            }
+
+            if ($editingWidget['type'] === 'slicer' && property_exists($this, 'slicerSelections')) {
+                unset($this->slicerSelections[$state['settingsWidgetId']]);
+            }
+        }
+
         foreach ($state['settingsSchema'] as $field) {
             if (($field['type'] ?? '') === 'expression' && ($field['visual'] ?? false)) {
                 $treeKey = ($field['key'] ?? '').'_tree';
@@ -536,13 +574,18 @@ trait WithCustomizableWidgets
     }
 
     /**
-     * Data-provenance flag for a widget card. Editorial only.
+     * Data-provenance flag for a widget card. Editorial only. Hosts may pin
+     * provenance for widget kinds they own via widgetProvenanceOverrideFor.
      *
      * @param  array<string, mixed>  $widget
      * @return array{label: string, kind: string}|null
      */
     protected function widgetProvenanceFor(string $grid, array $widget): ?array
     {
+        if (($override = $this->widgetProvenanceOverrideFor($grid, $widget)) !== null) {
+            return $override;
+        }
+
         $props = $widget['props'] ?? [];
 
         if (! is_array($props)) {
@@ -576,6 +619,18 @@ trait WithCustomizableWidgets
             }
         }
 
+        return null;
+    }
+
+    /**
+     * Host-owned provenance override, checked first. Returning null keeps the
+     * default provenance rules (metric/dataset references, bare configs).
+     *
+     * @param  array<string, mixed>  $widget
+     * @return array{label: string, kind: string}|null
+     */
+    protected function widgetProvenanceOverrideFor(string $grid, array $widget): ?array
+    {
         return null;
     }
 

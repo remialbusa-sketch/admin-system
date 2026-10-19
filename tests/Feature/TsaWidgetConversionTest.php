@@ -54,7 +54,10 @@ class TsaWidgetConversionTest extends TestCase
             ->assertViewHas('tsaGrid', function (array $grid): bool {
                 $widgets = $grid['widgets'];
 
-                if (count($widgets) !== 7) {
+                // Shipped default: 7 curated KPI cards + the reference chart
+                // set (no Service Type column exists in this fixture, so the
+                // service trio is omitted by design).
+                if (count($widgets) !== 11) {
                     return false;
                 }
 
@@ -66,9 +69,18 @@ class TsaWidgetConversionTest extends TestCase
 
                 $byId = collect($widgets)->keyBy('id');
 
-                return ($byId['tsa-reports']['props']['metric'] ?? null) === 'reports_total'
-                    && ($byId['tsa-window']['props']['metric'] ?? null) === 'window_completed'
-                    && collect($widgets)->every(fn (array $widget): bool => in_array($widget['type'], ['headline_kpi', 'supporting_kpi'], true));
+                if (($byId['tsa-reports']['props']['metric'] ?? null) !== 'reports_total'
+                    || ($byId['tsa-window']['props']['metric'] ?? null) !== 'window_completed') {
+                    return false;
+                }
+
+                // The KPI cards lead; the reference widgets sit after them.
+                $ids = array_column($widgets, 'id');
+                $kpiIndex = array_search('tsa-unassigned', $ids, true);
+
+                return collect(['tsa-year', 'tsa-month', 'tsa-model', 'tsa-calls-month'])
+                    ->every(fn (string $id): bool => array_search($id, $ids, true) > $kpiIndex)
+                    && collect($widgets)->every(fn (array $widget): bool => in_array($widget['type'], ['headline_kpi', 'supporting_kpi', 'slicer', 'column_chart'], true));
             })
             ->assertDontSee('Headline metrics');
     }
@@ -120,14 +132,14 @@ class TsaWidgetConversionTest extends TestCase
             ->assertHasNoErrors();
 
         // Reset clears the shared row's layout: the shipped default applies
-        // again through the page's fallback.
+        // again through the page's fallback — KPI cards plus reference set.
         $this->assertNull(
             SystemDashboards::coreRow('Technical Service Analysis')->fresh()->layout,
         );
 
         Livewire::actingAs($owner)
             ->test(TechnicalServiceAnalysis::class)
-            ->assertViewHas('tsaGrid', fn (array $grid): bool => count($grid['widgets']) === 7);
+            ->assertViewHas('tsaGrid', fn (array $grid): bool => count($grid['widgets']) === 11);
     }
 
     public function test_tsa_customizing_requires_edit_access(): void

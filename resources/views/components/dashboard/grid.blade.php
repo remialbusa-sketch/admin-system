@@ -36,7 +36,7 @@
                 </span>
             @endif
 
-            <div class="flex min-h-0 flex-1 flex-col p-5 sm:p-6">
+            <div class="widget-body flex min-h-0 flex-1 flex-col">
                 @include($widget['view'], $widget['data'])
             </div>
 

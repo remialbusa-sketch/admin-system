@@ -118,8 +118,7 @@
     @endif
 
     {{-- Grid layout engine: registry-driven, expression-powered widget
-        grid, customizable per user. Sits between the header and the
-        hardcoded overview sections. --}}
+        grid, customizable per user (Home renders the shared system row). --}}
     <section aria-label="Operations grid">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>

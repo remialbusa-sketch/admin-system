@@ -1,0 +1,127 @@
+<?php
+
+namespace Tests\Unit;
+
+use Tests\TestCase;
+
+class DashboardWidgetResponsiveShellTest extends TestCase
+{
+    /**
+     * Phase 2 — the widget shell responds to the widget's own width, not
+     * just the viewport: a 320px phone, a narrow desktop column
+     * (md:col-span-3) and paper all render the same blade set. These scans
+     * pin the contracts that make that work:
+     *  - content boxes never overshoot the widget shell they live in;
+     *  - sparse vertical charts scale fluidly, dense/horizontal ones keep
+     *    natural size and scroll instead of becoming unreadable;
+     *  - widgets are size containers and the padded body reacts to them;
+     *  - paper shows whole charts, never scroll-cropped ones;
+     *  - resize grips keep a real target on touch screens.
+     */
+    protected function css(): string
+    {
+        $css = file_get_contents(resource_path('css/app.css'));
+        $this->assertNotFalse($css);
+
+        return $css;
+    }
+
+    protected function widgetView(string $path): string
+    {
+        $source = file_get_contents(resource_path('views/components/dashboard/'.$path));
+        $this->assertNotFalse($source);
+
+        return $source;
+    }
+
+    public function test_widget_content_boxes_fit_the_shell_instead_of_fixed_pixels(): void
+    {
+        foreach (['widgets/column-chart.blade.php', 'widgets/slicer.blade.php'] as $path) {
+            $source = $this->widgetView($path);
+
+            $this->assertStringNotContainsString(
+                'style="height: {{ $contentHeight }}px"',
+                $source,
+                $path.' sizes the content box with a bare pixel height that can overshoot the widget shell.'
+            );
+            $this->assertStringContainsString(
+                'height: min({{ $contentHeight }}px, 100%)',
+                $source,
+                $path.' must cap the content box at its shell with min(…, 100%).'
+            );
+        }
+    }
+
+    public function test_sparse_charts_scale_fluidly_and_horizontal_ones_fold_without_an_800px_floor(): void
+    {
+        $source = $this->widgetView('widgets/column-chart.blade.php');
+
+        $this->assertDoesNotMatchRegularExpression(
+            '/\$isHorizontal \? 800\b/',
+            $source,
+            'Horizontal drawings need no 800px natural floor; 460 (labels + plot) stays readable without forcing phone-sized columns to scroll horizontally.'
+        );
+        $this->assertStringContainsString(
+            '$isHorizontal ? 460 :',
+            $source,
+            'Horizontal natural width: 200px label column + 260px plot.'
+        );
+        $this->assertStringContainsString(
+            '$fluidHeight',
+            $source,
+            'Squish-tolerant vertical drawings must size to their box.'
+        );
+        $this->assertStringContainsString(
+            'max-height: 100%',
+            $source,
+            'Fluid drawings must be capped by their box, never overflow it.'
+        );
+    }
+
+    public function test_every_widget_is_a_size_container_and_the_body_reacts_to_it(): void
+    {
+        $css = $this->css();
+
+        $this->assertStringContainsString('container-type: inline-size', $css);
+        $this->assertStringContainsString('container-name: widget', $css);
+        $this->assertMatchesRegularExpression(
+            '/@container widget \(/',
+            $css,
+            'The container context exists specifically so widget-level rules can key off it.'
+        );
+
+        $grid = $this->widgetView('grid.blade.php');
+        $this->assertStringContainsString('widget-body', $grid);
+        $this->assertStringContainsString(
+            'padding: 1rem',
+            $css,
+            'A narrow widget (a phone-scale column) tightens its body padding via the container query.'
+        );
+    }
+
+    public function test_print_shows_whole_charts_not_scroll_crops(): void
+    {
+        $css = $this->css();
+
+        $start = strpos($css, '@media print');
+        $this->assertNotFalse($start);
+
+        $end = strpos($css, '/* Home', $start);
+        $print = substr($css, $start, $end === false ? null : $end - $start);
+
+        $this->assertStringContainsString(
+            '.dashboard-widget svg',
+            $print,
+            'Print must scale charts inside their widget instead of cropping them at the screen-only scroll box.'
+        );
+    }
+
+    public function test_resize_grips_have_a_touch_target(): void
+    {
+        $css = $this->css();
+
+        $this->assertStringContainsString('@media (pointer: coarse)', $css);
+        $coarse = substr($css, (int) strpos($css, '@media (pointer: coarse)'), 600);
+        $this->assertStringContainsString('widget-resize-x', $coarse, 'The pointer-coarse block must enlarge the resize grips.');
+    }
+}

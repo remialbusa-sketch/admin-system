@@ -855,6 +855,13 @@
         overflow: visible !important;
     }
 
+    /* On screen, widget scroll areas crop oversized charts. On paper every
+       chart shrinks proportionally into its widget instead — no cutoffs,
+       no half-printed bars. */
+    .dashboard-widget svg {
+        max-height: 100% !important;
+    }
+
     .admin-surface {
         break-inside: avoid;
         border: 1px solid oklch(90% 0.01 260) !important;
@@ -870,29 +877,6 @@
         text-decoration: none !important;
         color: inherit !important;
     }
-}
-
-/* Home dashboard — installation trend: hover a month point and it glows and
-   grows; the whole point area is a generous click target. */
-.install-trend a {
-    cursor: pointer;
-}
-
-.install-trend .trend-halo {
-    opacity: 0;
-    transition: opacity 0.2s ease;
-}
-
-.install-trend a:hover .trend-halo {
-    opacity: 0.3;
-}
-
-.install-trend .trend-dot {
-    transition: r 0.15s ease;
-}
-
-.install-trend a:hover .trend-dot {
-    r: 6px;
 }
 
 /* Categorical chart palette — eight visually distinct hues for multi-slice
@@ -914,6 +898,30 @@
    transform/opacity only; the editor is pointer-first on desktop. */
 .dashboard-widget {
     min-width: 0;
+    /* Each widget answers to its own column width, not the viewport:
+       wide viewports still produce narrow widgets (md:col-span-3), and
+       phones only ever have full-width columns. */
+    container-type: inline-size;
+    container-name: widget;
+}
+
+/* The padded body every widget's content sits in — its own class so a
+   container query can tighten it on narrow widgets, instead of the
+   viewport's sm breakpoint deciding for a wide-but-short column. */
+.widget-body {
+    padding: 1.25rem;
+}
+
+@media (min-width: 640px) {
+    .widget-body {
+        padding: 1.5rem;
+    }
+}
+
+@container widget (max-width: 23.5rem) {
+    .widget-body {
+        padding: 1rem;
+    }
 }
 
 [data-dashboard-grid][data-editing] .dashboard-widget {
@@ -1208,6 +1216,24 @@
     bottom: 0;
     height: 10px;
     cursor: ns-resize;
+}
+
+/* Touch: edge grips are hover-only hints on a pointer device, but a finger
+   needs a real target. The whole widget stays draggable in edit mode, so
+   a modest bump is enough. */
+@media (pointer: coarse) {
+    .widget-resize-x {
+        width: 22px;
+    }
+
+    .widget-resize-y {
+        height: 22px;
+    }
+
+    .widget-resize-xy {
+        width: 22px;
+        height: 22px;
+    }
 }
 
 /* Expression tree editor canvas: dotted grid surface for the drag-drop

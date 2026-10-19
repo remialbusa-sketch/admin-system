@@ -6,9 +6,16 @@
     $range = $high - $low;
     $isHorizontal = $horizontal && $chartType === 'bar';
     $seriesCount = max(1, count($series));
-    $width = $isHorizontal ? 800 : max(520, count($points) * 65 + 90);
+    // Horizontal drawings: 200px of label column + 260px of plot — the old
+    // hard 800 forced heavy horizontal scroll on phone-scale widgets.
+    $width = $isHorizontal ? 460 : max(520, count($points) * 65 + 90);
     $groupHeight = max(34, $seriesCount * 18 + 10);
     $height = $isHorizontal ? max(220, count($points) * $groupHeight + 50) : 350;
+    // Rendering strategy in narrow containers: sparse vertical drawings
+    // (natural width <= 800) scale fluidly into the widget box; anything
+    // denser, or horizontal, keeps its natural size and scrolls instead.
+    $minWidth = $isHorizontal ? $width : ($width > 800 ? $width : 0);
+    $fluidHeight = ! $isHorizontal && $width <= 800;
     $plotLeft = $isHorizontal ? 200 : 65;
     $plotRight = $width - 70;
     $plotTop = 25;
@@ -18,7 +25,7 @@
     $step = ($plotRight - $plotLeft) / max(1, count($points));
     $formatValue = fn ($v) => rtrim(rtrim(number_format($v, 2, '.', ','), '0'), '.');
 @endphp
-<div class="flex min-h-0 flex-col" style="height: {{ $contentHeight }}px">
+<div class="flex min-h-0 flex-col" style="height: min({{ $contentHeight }}px, 100%)">
     <h3 class="text-sm font-bold text-base-content">{{ $label }}</h3>
     @if (! $configured)
         <p class="mt-4 text-sm text-base-content/50">Choose columns from a connected table in Widget settings.</p>
@@ -31,7 +38,7 @@
             @endforeach
         </div>
         <div class="mt-2 min-h-0 flex-1 overflow-auto" tabindex="0" aria-label="Scrollable chart: {{ $label }}">
-            <svg viewBox="0 0 {{ $width }} {{ $height }}" role="img" aria-label="{{ $label }}" style="width: 100%; min-width: {{ $width > 800 ? $width : 0 }}px; height: {{ $height }}px" class="text-base-content">
+            <svg viewBox="0 0 {{ $width }} {{ $height }}" role="img" aria-label="{{ $label }}" style="width: 100%; min-width: {{ $minWidth ? $minWidth.'px' : '0' }}; height: {{ $fluidHeight ? 'auto' : $height.'px' }};{{ $fluidHeight ? ' max-height: 100%;' : '' }}" class="text-base-content">
                 <title>{{ $label }}</title>
                 @for ($tick = 0; $tick <= 4; $tick++)
                     @php $value = $low + $range * $tick / 4; @endphp
