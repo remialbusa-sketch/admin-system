@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\DynamicTable;
 use App\Models\MondaySyncedItem;
 use App\Models\MondaySyncSetting;
+use App\Support\DashboardCache;
 use App\Support\MondayCoreTargets;
 use App\Support\MondaySettings;
 use Illuminate\Support\Collection;
@@ -202,8 +203,10 @@ class MondaySyncService
             throw $firstError;
         }
 
-        if (! $dryRun) {
-            $setting->update(['last_synced_at' => now(), 'last_item_id_seen' => $candidateIds->last()]);
+        $setting->update(['last_synced_at' => now(), 'last_item_id_seen' => $candidateIds->last()]);
+
+        if ($imported > 0) {
+            DashboardCache::invalidateDomain($domain);
         }
 
         return [

@@ -13,7 +13,7 @@ use App\Models\MondaySyncSetting;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
-use Illuminate\Support\Facades\Cache;
+use App\Support\DashboardCache;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -258,16 +258,6 @@ class ImportUndoService
     /** Mirror the import paths so dashboards recompute after removals. */
     private function invalidateCaches(): void
     {
-        TableAggregationService::invalidate();
-
-        foreach ([...ProductDashboardService::REGIONS, 'all'] as $scope) {
-            foreach (ProductDashboardService::PERIODS as $months) {
-                Cache::forget('product:summary:'.$scope.':'.$months);
-            }
-        }
-
-        foreach (TechnicalServiceAnalysisService::PERIODS as $days) {
-            Cache::forget('tsa:summary:'.$days);
-        }
+        DashboardCache::invalidateAll();
     }
 }

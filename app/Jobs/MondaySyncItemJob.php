@@ -7,6 +7,7 @@ use App\Models\MondaySyncedItem;
 use App\Models\MondaySyncSetting;
 use App\Services\MondayApiClient;
 use App\Services\MondayItemMapper;
+use App\Support\DashboardCache;
 use App\Support\MondaySettings;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -71,8 +72,12 @@ class MondaySyncItemJob implements ShouldQueue
 
         MondaySyncedItem::query()->updateOrCreate(
             ['domain' => $setting->domain, 'item_id' => (string) $this->itemId],
-            ['state' => $ok ? 'imported' : 'failed', 'last_seen_at' => now()],
+            ['state' => $ok ? 'imported' : 'failed', 'mapping_revision' => $ok ? (int) $setting->mapping_revision : 0, 'last_seen_at' => now()],
         );
+
+        if ($ok) {
+            DashboardCache::invalidateDomain($setting->domain);
+        }
     }
 
     public function failed(Throwable $exception): void

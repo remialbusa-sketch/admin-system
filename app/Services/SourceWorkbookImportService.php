@@ -12,6 +12,7 @@ use App\Models\Installation;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
+use App\Support\DashboardCache;
 use App\Support\ExcelDate;
 use App\Support\ImportOptionSeeder;
 use App\Support\PersonName;
@@ -1289,18 +1290,12 @@ class SourceWorkbookImportService
 
     private function forgetProductSummaryCache(): void
     {
-        foreach ([...ProductDashboardService::REGIONS, 'all'] as $scope) {
-            foreach (ProductDashboardService::PERIODS as $months) {
-                Cache::forget('product:summary:'.$scope.':'.$months);
-            }
-        }
+        DashboardCache::invalidateProductSummary();
     }
 
     private function forgetTsaSummaryCache(): void
     {
-        foreach (TechnicalServiceAnalysisService::PERIODS as $days) {
-            Cache::forget('tsa:summary:'.$days);
-        }
+        DashboardCache::invalidateTsaSummary();
     }
 
     /**

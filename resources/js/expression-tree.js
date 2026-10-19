@@ -1,7 +1,6 @@
-// Drag-drop expression tree editor (Alpine): builds formulas by placing
-// blocks (metrics, numbers, operators, functions) on a canvas and connecting
-// them left-to-right into one result. Replaces raw formula text areas for
-// non-technical users.
+// Drag-drop & Guided expression tree editor (Alpine): builds formulas
+// either via one-click guided templates (Percentage, Ratio, Sum, Difference,
+// Single Metric, Round) or by connecting visual blocks on an interactive canvas.
 //
 // The server (ExpressionEngine::toTree) converts an existing expression into
 // positioned nodes when it is canvas-representable, or signals "advanced"
@@ -11,8 +10,8 @@
 // parentheses, pushed into the Livewire settings property exactly like a
 // typed formula — the stored props/DB structure is unchanged.
 
-const NODE_W = 150;
-const NODE_H = 56;
+const NODE_W = 160;
+const NODE_H = 60;
 
 const OP_GLYPHS = { '+': '+', '-': '−', '*': '×', '/': '÷', '%': '%', '^': 'xʸ' };
 
@@ -34,6 +33,16 @@ document.addEventListener('alpine:init', () => {
         linkMouse: null,
         drag: null, // { id, offX, offY }
 
+        // Two friendly modes: 'guided' (default zero-friction) vs 'canvas' (power block graph)
+        viewMode: 'guided',
+        activeTemplate: 'single', // 'single' | 'percentage' | 'ratio' | 'sum' | 'difference' | 'round' | 'custom'
+        guided: {
+            metricA: '',
+            metricB: '',
+            digits: 1,
+        },
+        metricSearch: '',
+
         ops: ['+', '-', '*', '/', '%', '^'],
         fns: ['round', 'min', 'max', 'abs', 'if', 'coalesce', 'sum', 'pct'],
 
@@ -54,15 +63,28 @@ document.addEventListener('alpine:init', () => {
 
             this.nodes = source ? source.nodes.map((node) => ({ ...node })) : [];
 
+            const keys = Object.keys(this.metricLabels);
+            this.guided.metricA = keys[0] ?? '';
+            this.guided.metricB = keys[1] ?? (keys[0] ?? '');
+
+            if (this.nodes.length > 0) {
+                this.detectTemplate();
+                // If it's a custom multi-step graph, switch to canvas so user sees it;
+                // otherwise keep guided mode for instant readability and editing.
+                if (this.activeTemplate === 'custom') {
+                    this.viewMode = 'canvas';
+                }
+            } else {
+                this.activeTemplate = 'single';
+                this.viewMode = 'guided';
+            }
+
             // Apply reads graphs straight from this in-memory registry at
             // click time — they travel inside the Apply request itself, so
             // no separate sync request can be lost or arrive late. Clear
             // any stale entry from a previous editing session of this field.
             window.__treeGraphs = window.__treeGraphs || {};
             window.__treeGraphs[this.graphKey] = null;
-
-            // No commit on init: the Livewire fields already hold the
-            // stored state; the canvas writes only when the user edits.
         },
 
         byId(id) {
@@ -238,8 +260,208 @@ document.addEventListener('alpine:init', () => {
             return this.expression !== null;
         },
 
-        // The canvas as a JSON string for the wire:model hidden inputs —
-        // the same deferred channel every other settings field uses.
+        // Available metrics formatted with live values and labels
+        get metricList() {
+            const list = [];
+            for (const [key, label] of Object.entries(this.metricLabels)) {
+                const val = this.metricValues[key];
+                const formatted = typeof val === 'number'
+                    ? val.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                    : (val !== undefined && val !== null ? String(val) : '—');
+                list.push({ key, label, val, formatted });
+            }
+
+            if (!this.metricSearch) {
+                return list;
+            }
+
+            const q = this.metricSearch.toLowerCase().trim();
+            return list.filter((m) => m.label.toLowerCase().includes(q) || m.key.toLowerCase().includes(q));
+        },
+
+        // ---- Template & Guided Mode -------------------------------------
+
+        detectTemplate() {
+            if (this.nodes.length === 0) {
+                this.activeTemplate = 'single';
+                return;
+            }
+
+            const root = this.byId(this.rootId);
+            if (!root) {
+                this.activeTemplate = 'custom';
+                return;
+            }
+
+            if (this.nodes.length === 1 && root.kind === 'metric') {
+                this.activeTemplate = 'single';
+                this.guided.metricA = root.value;
+                return;
+            }
+
+            if (this.nodes.length === 3 && root.kind === 'fn' && root.value === 'pct') {
+                const nodeA = this.byId(root.inputs[0]);
+                const nodeB = this.byId(root.inputs[1]);
+                if (nodeA && nodeB && nodeA.kind === 'metric' && nodeB.kind === 'metric') {
+                    this.activeTemplate = 'percentage';
+                    this.guided.metricA = nodeA.value;
+                    this.guided.metricB = nodeB.value;
+                    return;
+                }
+            }
+
+            if (this.nodes.length === 3 && root.kind === 'op') {
+                const nodeA = this.byId(root.inputs[0]);
+                const nodeB = this.byId(root.inputs[1]);
+                if (nodeA && nodeB && nodeA.kind === 'metric' && nodeB.kind === 'metric') {
+                    if (root.value === '/') this.activeTemplate = 'ratio';
+                    else if (root.value === '+') this.activeTemplate = 'sum';
+                    else if (root.value === '-') this.activeTemplate = 'difference';
+                    else this.activeTemplate = 'custom';
+
+                    this.guided.metricA = nodeA.value;
+                    this.guided.metricB = nodeB.value;
+                    return;
+                }
+            }
+
+            if (this.nodes.length === 3 && root.kind === 'fn' && root.value === 'round') {
+                const nodeA = this.byId(root.inputs[0]);
+                const nodeB = this.byId(root.inputs[1]);
+                if (nodeA && nodeA.kind === 'metric' && nodeB && nodeB.kind === 'number') {
+                    this.activeTemplate = 'round';
+                    this.guided.metricA = nodeA.value;
+                    this.guided.digits = parseInt(nodeB.value, 10) || 1;
+                    return;
+                }
+            }
+
+            this.activeTemplate = 'custom';
+        },
+
+        applyTemplate(type) {
+            this.activeTemplate = type;
+            const keys = Object.keys(this.metricLabels);
+            const metA = this.guided.metricA || keys[0] || 'installed';
+            const metB = this.guided.metricB || keys[1] || keys[0] || 'active';
+            const digits = this.guided.digits ?? 1;
+
+            if (type === 'single') {
+                this.nodes = [
+                    { id: 'm1', kind: 'metric', value: metA, inputs: [], x: 60, y: 70 },
+                ];
+                this.selected = 'm1';
+            } else if (type === 'percentage') {
+                this.nodes = [
+                    { id: 'm1', kind: 'metric', value: metA, inputs: [], x: 40, y: 40 },
+                    { id: 'm2', kind: 'metric', value: metB, inputs: [], x: 40, y: 130 },
+                    { id: 'fn1', kind: 'fn', value: 'pct', inputs: ['m1', 'm2'], x: 240, y: 85 },
+                ];
+                this.selected = 'fn1';
+            } else if (type === 'ratio') {
+                this.nodes = [
+                    { id: 'm1', kind: 'metric', value: metA, inputs: [], x: 40, y: 40 },
+                    { id: 'm2', kind: 'metric', value: metB, inputs: [], x: 40, y: 130 },
+                    { id: 'op1', kind: 'op', value: '/', inputs: ['m1', 'm2'], x: 240, y: 85 },
+                ];
+                this.selected = 'op1';
+            } else if (type === 'sum') {
+                this.nodes = [
+                    { id: 'm1', kind: 'metric', value: metA, inputs: [], x: 40, y: 40 },
+                    { id: 'm2', kind: 'metric', value: metB, inputs: [], x: 40, y: 130 },
+                    { id: 'op1', kind: 'op', value: '+', inputs: ['m1', 'm2'], x: 240, y: 85 },
+                ];
+                this.selected = 'op1';
+            } else if (type === 'difference') {
+                this.nodes = [
+                    { id: 'm1', kind: 'metric', value: metA, inputs: [], x: 40, y: 40 },
+                    { id: 'm2', kind: 'metric', value: metB, inputs: [], x: 40, y: 130 },
+                    { id: 'op1', kind: 'op', value: '-', inputs: ['m1', 'm2'], x: 240, y: 85 },
+                ];
+                this.selected = 'op1';
+            } else if (type === 'round') {
+                this.nodes = [
+                    { id: 'm1', kind: 'metric', value: metA, inputs: [], x: 40, y: 40 },
+                    { id: 'num1', kind: 'number', value: String(digits), inputs: [], x: 40, y: 130 },
+                    { id: 'fn1', kind: 'fn', value: 'round', inputs: ['m1', 'num1'], x: 240, y: 85 },
+                ];
+                this.selected = 'fn1';
+            }
+
+            this.commit();
+        },
+
+        onGuidedChange() {
+            if (this.activeTemplate === 'custom') return;
+            this.applyTemplate(this.activeTemplate);
+        },
+
+        // Automatically position blocks cleanly left-to-right
+        autoArrange() {
+            if (this.nodes.length === 0) return;
+
+            const getDepth = (id, visited = new Set()) => {
+                if (!id || visited.has(id)) return 0;
+                visited.add(id);
+                const node = this.byId(id);
+                if (!node || !node.inputs || node.inputs.length === 0) return 0;
+                let maxChild = 0;
+                for (const input of node.inputs) {
+                    if (input) {
+                        maxChild = Math.max(maxChild, 1 + getDepth(input, new Set(visited)));
+                    }
+                }
+                return maxChild;
+            };
+
+            const depths = new Map();
+            for (const node of this.nodes) {
+                depths.set(node.id, getDepth(node.id));
+            }
+
+            const byCol = new Map();
+            for (const node of this.nodes) {
+                const col = depths.get(node.id) || 0;
+                if (!byCol.has(col)) byCol.set(col, []);
+                byCol.get(col).push(node);
+            }
+
+            const sortedCols = Array.from(byCol.keys()).sort((a, b) => a - b);
+            sortedCols.forEach((colIndex, xRank) => {
+                const colNodes = byCol.get(colIndex) || [];
+                colNodes.forEach((node, yRank) => {
+                    node.x = 24 + xRank * 210;
+                    node.y = 24 + yRank * 84;
+                });
+            });
+
+            this.commit();
+        },
+
+        getPortLabel(node, index) {
+            if (!node) return 'Input';
+            if (node.kind === 'op') {
+                if (node.value === '/') return index === 0 ? 'Numerator (Top)' : 'Denominator (Bottom)';
+                if (node.value === '-') return index === 0 ? 'Left (Base)' : 'Right (Subtract)';
+                if (node.value === '+') return index === 0 ? 'Left value' : 'Right value';
+                if (node.value === '*') return index === 0 ? 'Factor 1' : 'Factor 2';
+                if (node.value === '%') return index === 0 ? 'Value' : 'Modulo';
+                if (node.value === '^') return index === 0 ? 'Base' : 'Exponent';
+            }
+            if (node.kind === 'fn') {
+                if (node.value === 'pct') return index === 0 ? 'Part (Numerator)' : 'Total (Denominator)';
+                if (node.value === 'round') return index === 0 ? 'Number to round' : 'Decimal places';
+                if (node.value === 'min') return `Value #${index + 1}`;
+                if (node.value === 'max') return `Value #${index + 1}`;
+                if (node.value === 'abs') return 'Value';
+                if (node.value === 'if') return index === 0 ? 'Condition' : (index === 1 ? 'If True' : 'If False');
+                if (node.value === 'coalesce') return index === 0 ? 'Primary' : 'Fallback';
+                if (node.value === 'sum') return `Value #${index + 1}`;
+            }
+            return `Input #${index + 1}`;
+        },
+
+        // The canvas as a JSON string for the wire:model hidden inputs
         graphJson() {
             if (this.advanced) {
                 return null;
@@ -251,9 +473,6 @@ document.addEventListener('alpine:init', () => {
             });
         },
 
-        // Keep a wire:model hidden input in step with the canvas by
-        // writing the value and firing the input event wire:model listens
-        // to. A null value means "no change" — the last good value stays.
         syncHidden(el, value) {
             if (this.advanced || value === null) {
                 return;
@@ -305,6 +524,7 @@ document.addEventListener('alpine:init', () => {
 
             this.nodes.push({ id, kind, value: initialValue, inputs, x: spot.x, y: spot.y });
             this.selected = id;
+            this.activeTemplate = 'custom';
             this.commit();
         },
 
@@ -335,6 +555,7 @@ document.addEventListener('alpine:init', () => {
                 this.linkMouse = null;
             }
 
+            this.detectTemplate();
             this.commit();
         },
 
@@ -357,6 +578,7 @@ document.addEventListener('alpine:init', () => {
 
         onMove(event) {
             const canvas = this.$refs.canvas;
+            if (!canvas) return;
 
             if (this.linking) {
                 const rect = canvas.getBoundingClientRect();
@@ -388,15 +610,9 @@ document.addEventListener('alpine:init', () => {
         },
 
         onUp() {
-            // End a node drag. A pending connection is deliberately NOT
-            // cancelled here: connecting is click-based (click a right dot,
-            // then a left dot), so a mouse release between the two clicks
-            // must keep the link alive. Esc or re-clicking the same dot
-            // cancels it.
             this.drag = null;
         },
 
-        // Start (or toggle off) a pending connection from a block's output.
         toggleLink(node) {
             if (this.linking?.from === node.id) {
                 this.linking = null;
@@ -423,9 +639,9 @@ document.addEventListener('alpine:init', () => {
 
         handleInput(node, index) {
             if (! this.linking) {
-                // No pending link: clicking a filled slot unlinks it.
                 if (node.inputs[index] !== null) {
                     node.inputs[index] = null;
+                    this.detectTemplate();
                     this.commit();
                 }
 
@@ -444,12 +660,11 @@ document.addEventListener('alpine:init', () => {
             node.inputs[index] = from;
             this.linking = null;
             this.linkMouse = null;
+            this.detectTemplate();
             this.commit();
         },
 
         wouldCycle(fromId, targetId) {
-            // Connecting from → target creates a cycle when target already
-            // feeds into from somewhere downstream.
             const stack = [fromId];
             const seen = new Set();
 
@@ -502,10 +717,6 @@ document.addEventListener('alpine:init', () => {
             return out;
         },
 
-        // All connection curves joined into ONE path string. Alpine's
-        // x-for cannot render inside <svg> (the <template> element is not
-        // an HTMLTemplateElement there), so the SVG holds two static
-        // <path> elements and we rebuild their `d` on every change.
         get linksD() {
             return this.links.map((link) => link.d).join(' ');
         },
@@ -528,7 +739,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         get canvasSize() {
-            let width = 420;
+            let width = 440;
             let height = 240;
 
             for (const node of this.nodes) {
@@ -545,35 +756,27 @@ document.addEventListener('alpine:init', () => {
             this.advanced = false;
             this.nodes = [];
             this.selected = null;
-            // Explicit clear — the only case where an "empty" graph may
-            // touch the fields, because the user asked for it.
+            this.activeTemplate = 'single';
+            this.viewMode = 'guided';
             this.$wire.set(this.fieldKey, '');
             this.$wire.commitTreeGraph(this.graphKey, null);
         },
 
         commit() {
             if (this.advanced) {
-                return; // never clobber an advanced formula from the canvas
+                return;
             }
 
-            // THE source of truth for Apply: the in-memory registry holds
-            // the exact canvas — blocks, positions, connections, valid or
-            // mid-build — and Apply reads it synchronously at click time.
             window.__treeGraphs = window.__treeGraphs || {};
             window.__treeGraphs[this.graphKey] = JSON.parse(JSON.stringify({
                 nodes: this.nodes,
                 root: this.rootId,
             }));
 
-            // Best-effort live channels so the server also sees the graph
-            // between clicks (Apply itself never depends on these). Sent
-            // as an explicit action call with a JSON string param.
             this.$wire.commitTreeGraph(this.graphKey, JSON.stringify(window.__treeGraphs[this.graphKey]));
 
             const expression = this.expression;
 
-            // The expression string only updates when the graph is
-            // complete; mid-build, the last valid formula stays in place.
             if (expression !== null) {
                 this.$wire.set(this.fieldKey, expression);
             }
