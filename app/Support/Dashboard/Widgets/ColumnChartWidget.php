@@ -34,7 +34,7 @@ final class ColumnChartWidget implements DashboardWidget
                 ['key' => 'chart_type', 'label' => 'Chart type', 'type' => 'select', 'options' => ['bar', 'line']],
                 ['key' => 'orientation', 'label' => 'Bar orientation', 'type' => 'select', 'options' => ['vertical', 'horizontal']],
                 ['key' => 'sort', 'label' => 'Category order', 'type' => 'select', 'options' => ['category', 'value_desc']],
-                ['key' => 'limit', 'label' => 'Maximum categories (1–100)', 'type' => 'number'],
+                ['key' => 'limit', 'label' => 'Maximum categories (1–'.DashboardColumnService::MAX_CATEGORIES.')', 'type' => 'number'],
                 ['key' => 'show_values', 'label' => 'Data labels', 'type' => 'boolean'],
             ],
         ];
@@ -50,6 +50,7 @@ final class ColumnChartWidget implements DashboardWidget
             'label' => $props['label'], 'chartType' => $props['chart_type'] === 'line' ? 'line' : 'bar',
             'horizontal' => $props['orientation'] === 'horizontal', 'showValues' => (bool) $props['show_values'],
             'configured' => ! empty($props['column']),
+            'seriesLimit' => DashboardColumnService::MAX_SERIES,
             'contentHeight' => max(160, (int) ($props['_widget_height'] ?? 4) * 112 - 68),
         ]];
     }

@@ -9,8 +9,11 @@ use App\Models\HistoricalTsmsReport;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
+use App\Support\MergedColumnValue;
+use App\Support\MondayCoreTargets;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -28,6 +31,8 @@ class TableAggregationService
     public const CACHE_VERSION_KEY = 'table-agg-version';
 
     private const COMPLETED = ['completed', 'resolved', 'closed', 'done', 'complete'];
+
+    private array $columnBindings = [];
 
     /**
      * @param  array<string, mixed>  $filters  branch/status/date_from/date_to
@@ -54,6 +59,7 @@ class TableAggregationService
 
     private function compute(string $tableKey, ?string $region, array $filters = []): array
     {
+        $this->columnBindings = [];
         try {
             return $this->computeOrFail($tableKey, $region, $filters);
         } catch (\Throwable $exception) {
@@ -345,11 +351,19 @@ class TableAggregationService
      */
     private function countsBy(Builder $query, string $column, int $limit = 12): array
     {
+        $model = $query->getModel();
+        $table = $model->getTable();
+        $tableKey = collect(MondayCoreTargets::TARGETS)->search(fn ($target) => $target['model'] === $model::class);
+        $sources = $tableKey ? (($this->columnBindings[$tableKey] ??= MergedColumnValue::bindings($tableKey, $model::class))[$column] ?? []) : [];
+        $expression = MergedColumnValue::sql(['type' => 'text', 'source_columns' => $sources,
+            'canonical_key' => $column, 'table_key' => $tableKey ?: ''], $table.'.'.$column, $table.'.id');
+        $field = DB::raw($expression);
+
         return $query
-            ->selectRaw("{$column} as label, count(*) as total")
-            ->whereNotNull($column)
-            ->where($column, '!=', '')
-            ->groupBy($column)
+            ->selectRaw($expression.' as label, count(*) as total')
+            ->whereNotNull($field)
+            ->where($field, '!=', '')
+            ->groupBy('label')
             ->orderByDesc('total')
             ->limit($limit)
             ->get()

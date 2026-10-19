@@ -92,7 +92,7 @@ class ProductDatabaseIntegrityTest extends TestCase
         $this->assertSame(3, Installation::count());
     }
 
-    public function test_source_twins_are_hidden_by_default_and_can_be_shown_explicitly(): void
+    public function test_source_twins_merge_into_the_canonical_column(): void
     {
         $row = $this->product('product_database', 'Analyzer');
         $row->update(['brand' => 'Sysmex']);
@@ -100,18 +100,16 @@ class ProductDatabaseIntegrityTest extends TestCase
         MondaySyncSetting::create(['domain' => 'installed-products', 'field_map' => ['b' => $brand->id], 'core_field_map' => ['b' => 'brand']]);
         $component = Livewire::actingAs(User::factory()->superadmin()->create())->test(InstalledProductsTable::class);
         $columns = collect($component->instance()->orderedColumns())->keyBy('key');
-        $this->assertTrue($columns[$brand->columnKey()]['hidden']);
+        $this->assertArrayNotHasKey($brand->columnKey(), $columns);
         $this->assertFalse($columns['brand']['hidden']);
-        $component->call('toggleColumnFreeze', $brand->columnKey());
-        $this->assertTrue(collect($component->instance()->orderedColumns())->firstWhere('key', $brand->columnKey())['hidden']);
-        $component->call('moveColumnToEdge', $brand->columnKey(), 'start');
-        $this->assertTrue(collect($component->instance()->orderedColumns())->firstWhere('key', $brand->columnKey())['hidden']);
-        $component->call('toggleColumnVisibility', $brand->columnKey());
+        $component->call('toggleColumnFreeze', 'brand');
+        $component->call('moveColumnToEdge', 'brand', 'start');
         $columns = collect($component->instance()->orderedColumns())->keyBy('key');
-        $this->assertFalse($columns[$brand->columnKey()]['hidden']);
+        $this->assertArrayNotHasKey($brand->columnKey(), $columns);
+        $this->assertTrue($columns['brand']['frozen']);
     }
 
-    public function test_different_account_and_source_branches_remain_visible_for_review(): void
+    public function test_merging_account_columns_preserves_the_shared_account_value(): void
     {
         $row = $this->product('monday:installed-products', 'SN-123');
         $row->account->update(['branch' => 'Visayas']);
@@ -119,8 +117,8 @@ class ProductDatabaseIntegrityTest extends TestCase
         MondaySyncSetting::create(['domain' => 'installed-products', 'field_map' => ['b' => $branch->id], 'core_field_map' => []]);
         $component = Livewire::actingAs(User::factory()->superadmin()->create())->test(InstalledProductsTable::class);
         $columns = collect($component->instance()->orderedColumns())->keyBy('key');
-        $this->assertFalse($columns[$branch->columnKey()]['hidden']);
-        $this->assertSame('Branch (source)', $columns[$branch->columnKey()]['label']);
+        $this->assertArrayNotHasKey($branch->columnKey(), $columns);
+        $this->assertSame('Branch', $columns['account.branch']['label']);
         $this->assertSame('Visayas', $row->account->fresh()->branch);
     }
 

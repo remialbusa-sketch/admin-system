@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\UserRole;
 use App\Models\TechnicalReport;
 use App\Support\ChartPalette;
 use Illuminate\Support\Carbon;
@@ -20,28 +21,35 @@ class TechnicalServiceAnalysisService
 
     private const CACHE_TTL_MINUTES = 5;
 
-    public function summary(string $period = '30D'): array
+    public function summary(string $period = '30D', array $filters = []): array
     {
         $days = self::PERIODS[$period] ?? self::PERIODS['30D'];
+        if (! empty($filters['slicers']) || auth()->user()?->role === UserRole::RegionalManager) {
+            return $this->computeSummary($days, $filters);
+        }
         $key = 'tsa:summary:'.$days;
 
-        return Cache::remember($key, now()->addMinutes(self::CACHE_TTL_MINUTES), fn (): array => $this->computeSummary($days));
+        return Cache::remember($key, now()->addMinutes(self::CACHE_TTL_MINUTES), fn (): array => $this->computeSummary($days, $filters));
     }
 
-    private function computeSummary(int $days): array
+    private function computeSummary(int $days, array $filters): array
     {
-        $totalReports = (int) TechnicalReport::query()->count();
-        $completedAny = (int) TechnicalReport::query()->whereNotNull('service_completed_at')->count();
-        $assignedTsp = (int) TechnicalReport::query()->whereNotNull('tsp_name')->where('tsp_name', '<>', '')->count();
+        $base = TechnicalReport::query()->whereNull('archived_at');
+        if (! empty($filters['slicers']) || auth()->user()?->role === UserRole::RegionalManager) {
+            $base->whereIn('technical_reports.id', app(DashboardColumnService::class)->rows('technical-reports', [], $filters)->select('dashboard_rows.id'));
+        }
+        $totalReports = (int) (clone $base)->count();
+        $completedAny = (int) (clone $base)->whereNotNull('service_completed_at')->count();
+        $assignedTsp = (int) (clone $base)->whereNotNull('tsp_name')->where('tsp_name', '<>', '')->count();
         $unassigned = max(0, $totalReports - $assignedTsp);
-        $avgRepair = (float) TechnicalReport::query()->whereNotNull('repair_time_hours')->average('repair_time_hours');
-        $avgResponse = (float) TechnicalReport::query()->whereNotNull('response_time_hours')->average('response_time_hours');
+        $avgRepair = (float) (clone $base)->whereNotNull('repair_time_hours')->average('repair_time_hours');
+        $avgResponse = (float) (clone $base)->whereNotNull('response_time_hours')->average('response_time_hours');
 
         // Completion trend over the REAL business date (service_completed_at):
         // one grouped query, buckets summed in PHP (day buckets for ≤14 days,
         // weekly buckets beyond) — replaces the old per-day full scans.
         $trendFrom = Carbon::today()->subDays($days - 1)->startOfDay();
-        $perDay = TechnicalReport::query()
+        $perDay = (clone $base)
             ->whereNotNull('service_completed_at')
             ->where('service_completed_at', '>=', $trendFrom)
             ->selectRaw('date(service_completed_at) as d, COUNT(*) as total')
@@ -71,7 +79,7 @@ class TechnicalServiceAnalysisService
         $trendTotal = array_sum(array_column($trend, 'count'));
 
         // Status mix donut (top 4 + Other) + full breakdown, both drill via ?status=.
-        $statusRows = TechnicalReport::query()
+        $statusRows = (clone $base)
             ->selectRaw("COALESCE(NULLIF(service_status, ''), 'Unassigned') as label, COUNT(*) as total")
             ->groupBy('label')->orderByDesc('total')->get();
         $statusDonut = $statusRows->take(4)->map(fn ($row): array => [
@@ -86,7 +94,7 @@ class TechnicalServiceAnalysisService
         }
         // TSP workload (top 8) — rows deep-link via ?tsp= (the stable ID);
         // the LABEL is the real display name (workbook IDs like person-777… mean nothing to people).
-        $byTsp = TechnicalReport::query()
+        $byTsp = (clone $base)
             ->whereNotNull('tsp_name')->where('tsp_name', '<>', '')
             ->selectRaw("tsp_name, MAX(COALESCE(NULLIF(tsp_display_name, ''), tsp_name)) as label, COUNT(*) as total")
             ->groupBy('tsp_name')->orderByDesc('total')->limit(8)->get()
@@ -95,7 +103,7 @@ class TechnicalServiceAnalysisService
 
         // Brand mix donut (top 6 + Other) — segments deep-link via ?brand=.
         // Each segment gets its own categorical color (unique per slice).
-        $brandRows = TechnicalReport::query()
+        $brandRows = (clone $base)
             ->whereNotNull('brand')->where('brand', '<>', '')
             ->selectRaw('brand, COUNT(*) as total')
             ->groupBy('brand')->orderByDesc('total')->limit(6)->get();
@@ -106,14 +114,14 @@ class TechnicalServiceAnalysisService
             'color' => ChartPalette::color($i),
             'href' => route('technical-reports', ['brand' => $row->brand]),
         ])->all();
-        $brandOthers = (int) (TechnicalReport::query()->whereNotNull('brand')->where('brand', '<>', '')->count() - array_sum(array_column($brandDonut, 'value')));
+        $brandOthers = (int) ((clone $base)->whereNotNull('brand')->where('brand', '<>', '')->count() - array_sum(array_column($brandDonut, 'value')));
         if ($brandOthers > 0) {
             $brandDonut[] = ['label' => 'Others', 'value' => $brandOthers, 'tone' => 'neutral', 'color' => ChartPalette::neutral(), 'href' => null];
         }
 
         // Data freshness: latest report update timestamp.
         $freshness = Carbon::parse(
-            (string) (TechnicalReport::query()->max('updated_at') ?? ''),
+            (string) ((clone $base)->max('updated_at') ?? ''),
         )->format('M j, Y H:i');
 
         return [

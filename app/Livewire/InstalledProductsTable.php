@@ -3,9 +3,10 @@
 namespace App\Livewire;
 
 use App\Models\Installation;
-use Illuminate\Contracts\View\View;
-use Illuminate\Validation\Rule;
+use App\Support\MergedColumnValue;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Url;
 
 class InstalledProductsTable extends ManagedTable
@@ -83,6 +84,7 @@ class InstalledProductsTable extends ManagedTable
             'warranty_period_years' => ['nullable', 'integer', 'min:0', 'max:100'],
             'pms_frequency' => ['nullable', Rule::in(['Monthly', 'Bi-monthly', 'Quarterly', 'Semi-annual', 'Annual'])],
             'tsp_in_charge' => ['nullable', 'string', 'max:255'],
+            'service_contract_status' => ['nullable', 'string', 'max:100'],
         ];
     }
 
@@ -111,7 +113,7 @@ class InstalledProductsTable extends ManagedTable
                 ->whereDate('warranty_end_date', '<=', now()->addDays(90)->toDateString()))
             ->when($this->warranty === 'expired', fn ($query) => $query->whereNotNull('warranty_end_date')
                 ->whereDate('warranty_end_date', '<', now()->toDateString()))
-            ->when($this->pms === 'missing', fn ($query) => $query->whereNull('pms_frequency'))
+            ->when($this->pms === 'missing', fn ($query) => $query->whereNull(DB::raw(MergedColumnValue::fieldSql('installed-products', Installation::class, 'pms_frequency'))))
             ->when($this->contract !== null && $this->contract !== '', fn ($query) => $query->whereRaw("lower(trim(service_contract_status)) in ('yes', 'renewal')"))
             ->when($this->installed !== null && preg_match('/^\d{4}-\d{2}$/', $this->installed) === 1, function ($query): void {
                 [$year, $month] = explode('-', $this->installed);
@@ -177,6 +179,7 @@ class InstalledProductsTable extends ManagedTable
             ['key' => 'deal_type', 'label' => 'Deal Type', 'type' => 'select', 'options' => ['Purchased', 'RTU', 'RTO', 'Demo', 'Service unit']],
             ['key' => 'charge_to', 'label' => 'Charge To', 'type' => 'select', 'options' => ['IVD', 'EMEDS1', 'EMEDS2', 'TRACE', 'BACTEFAST', 'CUSTOMER']],
             ['key' => 'warranty_status', 'label' => 'Warranty Status', 'type' => 'select', 'options' => ['Yes', 'No']],
+            ['key' => 'service_contract_status', 'label' => 'Service Contract Status', 'type' => 'select', 'options' => []],
             ['key' => 'warranty_period_years', 'label' => 'Warranty Period', 'type' => 'number'],
             ['key' => 'pms_frequency', 'label' => 'PMS Frequency', 'type' => 'select', 'options' => ['Monthly', 'Bi-monthly', 'Quarterly', 'Semi-annual', 'Annual']],
             ['key' => 'tsp_in_charge', 'label' => 'TSP In-charge', 'type' => 'select', 'options' => ['Adonis Ybanez', 'Ador Panimdim', 'Anfernee Digamon', 'Brixxton Basuel', 'Christopher Auditor', 'Daniel Igano', 'Dexter Lim', 'Elthon Jay Navares', 'Fidel Carino', 'Gary Walter Vivas', 'Gerald Ricafranca', 'Gio Sam Aguinaldo', 'Harvyn Honorica', 'Jefferson Yaranon', 'Jhon Carlo Faustino', 'Joey Nichols Tumaroy', 'John Erick Hernandez', 'Joshua Bautista', 'Joven Padon', 'Kerwin Pardillo', 'Keryl Pardillo', 'Lance Nichol Canaveral', 'Leander Fajardo', 'Mark Niel Amper', 'Mart Russel Santos', 'Neil Darwin San Juan', 'Nolybert Nacpil', 'Paolo Enriquez', 'Paul Anthony Genovate', 'Ricardo Navarro, Jr.', 'Roberto De Pio, Jr.', 'Roel Bagasbas', 'Rogel De Lara', 'Ruffy Pineda', 'Ruselio Franco Dagondon, Jr.', 'Sherwin Montellin', 'Soteri Zamora', 'Voltaire Vallarta', 'Warren Suba']],

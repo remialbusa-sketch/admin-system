@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Account;
 use App\Models\Installation;
 use App\Support\ChartPalette;
+use App\Support\MergedColumnValue;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -59,7 +60,7 @@ class ProductDashboardService
         $pulledOut = (int) (clone $base)->whereRaw("lower(replace(trim(device_status), ' ', '')) = 'pulledout'")->count();
         $warrantyCovered = (int) (clone $base)->whereRaw("lower(trim(warranty_status)) = 'yes'")->count();
         $contracts = (int) (clone $base)->whereRaw("lower(trim(service_contract_status)) in ('yes', 'renewal')")->count();
-        $missingPms = (int) (clone $base)->whereNull('pms_frequency')->count();
+        $missingPms = (int) (clone $base)->whereNull(DB::raw(MergedColumnValue::fieldSql('installed-products', Installation::class, 'pms_frequency')))->count();
         $annualBuCharge = (float) (clone $base)->sum('annual_bu_charge');
         $accountCount = (int) Account::query()
             ->when($scopeRegion, fn ($q) => $q->where('region', $scopeRegion))

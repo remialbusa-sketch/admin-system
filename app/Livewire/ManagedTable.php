@@ -7,18 +7,18 @@ use App\Livewire\Concerns\ConnectsMondayBoard;
 use App\Livewire\Concerns\HasTableFilters;
 use App\Models\CustomTableColumn;
 use App\Models\CustomTableColumnValue;
-use App\Models\MondaySyncSetting;
 use App\Models\RecordEditLog;
 use App\Models\TableColumnOption;
 use App\Models\TableColumnPreference;
 use App\Services\ColumnTypeRegistry;
 use App\Support\AttachmentValue;
-use App\Support\CoreColumnMapping;
-use App\Support\MondayCoreTargets;
+use App\Support\MergedColumnValue;
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -1182,36 +1182,29 @@ abstract class ManagedTable extends Component
             return $this->allColumnsCache;
         }
 
-        $sourceBindings = [];
-        if ((MondayCoreTargets::resolve($this->tableKey())['model'] ?? null) === $this->model()) {
-            $setting = MondaySyncSetting::where('domain', $this->tableKey())->first();
-            foreach ($this->customColumnModels() as $sourceColumn) {
-                $destination = CoreColumnMapping::destination($this->tableKey(), $sourceColumn, $setting);
-                if ($destination !== null) {
-                    $sourceBindings[$sourceColumn->id] = $destination;
+        $sourceBindings = MergedColumnValue::bindings($this->tableKey(), $this->model());
+        $core = array_filter(
+            array_map(fn (array $column): array => $column + ['custom' => false, 'editable' => true], $this->columns()),
+            fn (array $column): bool => isset($sourceBindings[$column['key']]) || $this->coreColumnHasValues((string) $column['key']),
+        );
+        $mergedIds = [];
+        foreach ($core as &$column) {
+            $column['source_columns'] = $sourceBindings[$column['key']] ?? [];
+            $column['table_key'] = $this->tableKey();
+            $column['canonical_key'] = $column['key'];
+            foreach ($column['source_columns'] as $source) {
+                $mergedIds[] = $source['id'];
+                if (isset($column['options'])) {
+                    $column['options'] = array_values(array_unique([...$column['options'], ...$this->optionLabels($source['options'])]));
                 }
             }
         }
-        $core = array_filter(
-            array_map(fn (array $column): array => $column + ['custom' => false, 'editable' => true], $this->columns()),
-            fn (array $column): bool => in_array($column['key'], $sourceBindings, true) || $this->coreColumnHasValues((string) $column['key']),
-        );
-
-        $columns = array_merge(
-            array_values($core),
-            $this->customColumnDefinitions(),
-        );
-        $coreKeys = array_column($core, 'key');
-        foreach ($columns as &$column) {
-            $destination = $sourceBindings[$column['custom_id'] ?? 0] ?? null;
-            if ($destination !== null && in_array($destination, $coreKeys, true)) {
-                // Account records are shared across products and sources;
-                // retain source address/branch cells for conflict review.
-                $column['default_hidden'] = ! str_contains($destination, '.');
-                $column['label'] .= ' (source)';
-            }
-        }
         unset($column);
+        // A source twin is represented by its canonical field, including when
+        // an older user preference explicitly made the source column visible.
+        $columns = array_merge(array_values($core), array_values(array_filter(
+            $this->customColumnDefinitions(), fn ($column) => ! in_array($column['custom_id'], $mergedIds, true),
+        )));
 
         // Merge any user-added dropdown options (from the "+ New Label" button)
         // into select/status/dropdown columns.
@@ -1441,6 +1434,10 @@ abstract class ManagedTable extends Component
 
             $column = collect($columns)->firstWhere('key', $key);
 
+            if (! $column && preg_match('/^custom_(\d+)$/', $key, $match)) {
+                $column = collect($columns)->first(fn ($candidate) => in_array((int) $match[1], array_column($candidate['source_columns'] ?? [], 'id'), true));
+            }
+
             if (! $column) {
                 continue;
             }
@@ -1453,6 +1450,12 @@ abstract class ManagedTable extends Component
 
             $field = $column['key'];
             $type = $column['type'];
+
+            if (! empty($column['source_columns'])) {
+                $this->applyFieldFilter($query, DB::raw($this->mergedColumnSql($column)), $type, $value);
+
+                continue;
+            }
 
             if (str_contains($field, '.')) {
                 [$relationName, $relatedField] = explode('.', $field, 2);
@@ -1469,7 +1472,7 @@ abstract class ManagedTable extends Component
         return $query;
     }
 
-    protected function applyFieldFilter(Builder $query, string $field, string $type, string $value): void
+    protected function applyFieldFilter(Builder $query, string|Expression $field, string $type, string $value): void
     {
         match ($type) {
             'select' => $query->where($field, $value),
@@ -1499,6 +1502,23 @@ abstract class ManagedTable extends Component
         });
     }
 
+    private function mergedColumnSql(array $column): string
+    {
+        $model = new ($this->model());
+        $table = $model->getTable();
+        $field = $column['key'];
+        $native = $table.'.'.$field;
+        if (str_contains($field, '.')) {
+            [$relationName, $relatedField] = explode('.', $field, 2);
+            $relation = $model->{$relationName}();
+            $relatedTable = $relation->getRelated()->getTable();
+            $native = '(SELECT '.$relatedTable.'.'.$relatedField.' FROM '.$relatedTable
+                .' WHERE '.$relation->getQualifiedOwnerKeyName().' = '.$relation->getQualifiedForeignKeyName().' LIMIT 1)';
+        }
+
+        return MergedColumnValue::sql($column, $native, $table.'.id');
+    }
+
     protected function applySort(Builder $query, array $columns): Builder
     {
         $table = $query->getModel()->getTable();
@@ -1514,6 +1534,10 @@ abstract class ManagedTable extends Component
         }
 
         $direction = $this->sortDirection === 'desc' ? 'desc' : 'asc';
+
+        if (! empty($column['source_columns'])) {
+            return $query->orderByRaw($this->mergedColumnSql($column).' '.$direction);
+        }
 
         if ($column['custom'] ?? false) {
             $customId = $column['custom_id'];
@@ -1623,7 +1647,10 @@ abstract class ManagedTable extends Component
                         );
                     }
 
-                    $raw = $this->normalizeCoreValue(data_get($record, $column['key']), $column['type']);
+                    $raw = $this->mergedCoreValue(
+                        $this->normalizeCoreValue(data_get($record, $column['key']), $column['type']),
+                        $column, $customValues->get($record->id, collect()), $record->id,
+                    );
 
                     return $raw === null ? '' : $this->safeExportValue((string) $raw);
                 }, $columns);
@@ -1668,12 +1695,28 @@ abstract class ManagedTable extends Component
     /**
      * @return Collection<int, Collection<int, CustomTableColumnValue>> keyed by row id, then by custom_column_id
      */
+    private array $clearedMergedFields = [];
+
+    private function mergedCoreValue(mixed $native, array $column, Collection $cells, int $rowId): mixed
+    {
+        return isset($this->clearedMergedFields[$rowId][$column['key']]) ? $native : MergedColumnValue::value($native, $column, $cells);
+    }
+
     protected function loadCustomValues(Collection $records, array $columns): Collection
     {
-        $customColumnIds = collect($columns)
-            ->filter(fn (array $column): bool => $column['custom'] ?? false)
-            ->pluck('custom_id')
-            ->all();
+        $this->clearedMergedFields = [];
+        $fields = collect($columns)->filter(fn ($column) => ! empty($column['source_columns']))->pluck('key')->all();
+        if ($fields !== [] && $records->isNotEmpty()) {
+            foreach (RecordEditLog::where('table_key', $this->tableKey())->whereIn('row_id', $records->pluck('id'))
+                ->whereIn('field', $fields)->where('action', 'updated')
+                ->where(fn ($query) => $query->whereNull('new_value')->orWhere('new_value', ''))->get(['row_id', 'field']) as $edit) {
+                $this->clearedMergedFields[$edit->row_id][$edit->field] = true;
+            }
+        }
+        $customColumnIds = collect($columns)->flatMap(fn ($column) => array_merge(
+            isset($column['custom_id']) ? [$column['custom_id']] : [],
+            array_column($column['source_columns'] ?? [], 'id'),
+        ))->unique()->values()->all();
 
         if ($customColumnIds === [] || $records->isEmpty()) {
             return collect();
@@ -1709,7 +1752,10 @@ abstract class ManagedTable extends Component
                             ?? $this->customRawValueForEditing($column['type'], $value->value))
                         : null;
                 } else {
-                    $out[$column['key']] = $this->normalizeCoreValue(data_get($record, $column['key']), $column['type']);
+                    $out[$column['key']] = $this->mergedCoreValue(
+                        $this->normalizeCoreValue(data_get($record, $column['key']), $column['type']),
+                        $column, $customValues->get($record->id, collect()), $record->id,
+                    );
                 }
             }
 

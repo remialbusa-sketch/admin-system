@@ -10,6 +10,7 @@ use App\Models\Installation;
 use App\Models\ServiceRequest;
 use App\Models\TechnicalPersonnel;
 use App\Models\TechnicalReport;
+use App\Support\MergedColumnValue;
 use App\Support\TableCatalog;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
@@ -20,6 +21,10 @@ use Illuminate\Validation\ValidationException;
 /** SQL-backed column charts and slicers share the same row scope on every table. */
 class DashboardColumnService
 {
+    public const MAX_CATEGORIES = 500;
+
+    public const MAX_SERIES = 64;
+
     private const MODELS = [
         'installed-products' => Installation::class,
         'service-requests' => ServiceRequest::class,
@@ -52,15 +57,37 @@ class DashboardColumnService
             $columns[$key] = ['label' => Str::headline($key), 'kind' => $kind, 'sql' => 'r.'.$key];
         }
         if ($model instanceof Installation) {
-            foreach (['customer_name', 'region', 'branch'] as $key) {
+            foreach (['customer_name', 'customer_address', 'region', 'branch'] as $key) {
                 $columns[$key] = ['label' => Str::headline($key), 'kind' => 'text', 'sql' => 'a.'.$key];
             }
         }
+        $bindings = MergedColumnValue::bindings($tableKey, $model::class);
+        $merged = [];
+        foreach ($columns as $key => &$definition) {
+            $destination = $model instanceof Installation && in_array($key, ['customer_name', 'customer_address', 'branch'], true) ? 'account.'.$key : $key;
+            $sources = $bindings[$destination] ?? [];
+            if ($sources !== []) {
+                $definition['source_columns'] = $sources;
+                $definition['sql'] = MergedColumnValue::sql(['type' => $definition['kind'], 'source_columns' => $sources,
+                    'table_key' => $tableKey, 'canonical_key' => $destination], $definition['sql'], 'r.id');
+                foreach ($sources as $source) {
+                    $merged[$source['id']] = $key;
+                }
+            }
+        }
+        unset($definition);
         foreach (CustomTableColumn::query()->where('table_key', $tableKey)->orderBy('position')->get() as $column) {
             if (! in_array($column->type, ['text', 'long_text', 'number', 'date', 'status', 'dropdown', 'email', 'phone', 'link', 'checkbox'], true)) {
                 continue;
             }
             $key = 'custom_'.$column->id;
+            if (isset($merged[$column->id])) {
+                // Keep saved chart/filter references working while the picker
+                // offers the one canonical field for new configurations.
+                $columns[$key] = $columns[$merged[$column->id]] + ['merged_into' => $merged[$column->id]];
+
+                continue;
+            }
             $kind = in_array($column->type, ['number', 'date'], true) ? $column->type : 'text';
             $shadow = match ($kind) {
                 'number' => 'value_number', 'date' => 'value_date', default => 'value_text'
@@ -77,7 +104,7 @@ class DashboardColumnService
         $groups = [];
         foreach ($sources as $alias => $tableKey) {
             foreach ($this->columns($tableKey) as $key => $column) {
-                if (! $numeric || $column['kind'] === 'number') {
+                if (! isset($column['merged_into']) && (! $numeric || $column['kind'] === 'number')) {
                     $groups[$alias][$alias.'.'.$key] = $column['label'];
                 }
             }
@@ -111,7 +138,7 @@ class DashboardColumnService
             }
         }
         $limitKey = $type === 'slicer' ? 'columns' : 'limit';
-        $maximum = $type === 'slicer' ? 8 : 100;
+        $maximum = $type === 'slicer' ? 8 : self::MAX_CATEGORIES;
         if (isset($props[$limitKey]) && (filter_var($props[$limitKey], FILTER_VALIDATE_INT) === false || $props[$limitKey] < 1 || $props[$limitKey] > $maximum)) {
             throw ValidationException::withMessages(['column' => Str::headline($limitKey).' must be between 1 and '.$maximum.'.']);
         }
@@ -183,7 +210,7 @@ class DashboardColumnService
                 $query->leftJoin('table_custom_column_values as c'.$id, fn ($join) => $join
                     ->on('c'.$id.'.row_id', '=', 'r.id')->where('c'.$id.'.custom_column_id', $id));
             }
-            $query->addSelect($column['sql'].' as '.$key);
+            $query->addSelect(isset($column['source_columns']) ? DB::raw($column['sql'].' as '.$key) : $column['sql'].' as '.$key);
         }
         if ($model instanceof ServiceRequest) {
             $query->addSelect('r.source_updated_at as scope_date');
@@ -198,6 +225,9 @@ class DashboardColumnService
 
         $rows = DB::query()->fromSub($query, 'dashboard_rows');
         $region = auth()->user()?->role === UserRole::RegionalManager ? auth()->user()->region : ($filters['region'] ?? null);
+        if (auth()->user()?->role === UserRole::RegionalManager && (trim((string) $region) === '' || $region === 'All regions')) {
+            $rows->whereRaw('1 = 0');
+        }
         foreach (['region' => $region, 'branch' => $filters['branch'] ?? null, 'status' => $filters['status'] ?? null] as $dimension => $value) {
             if ($value === null || $value === '' || $value === 'All regions') {
                 continue;
@@ -244,7 +274,7 @@ class DashboardColumnService
         $value = $calculation === 'count' ? 'COUNT(*)' : strtoupper($calculation).'('.$this->wrap($valueKey).')';
         $grouped = $rows->selectRaw($category.' as category, '.$series.' as series, '.$value.' as amount')->groupBy('category', 'series');
         $sort = $props['sort'] ?? 'category';
-        $limit = min(100, max(1, (int) ($props['limit'] ?? 30)));
+        $limit = min(self::MAX_CATEGORIES, max(1, (int) ($props['limit'] ?? 30)));
         // Limit categories after aggregation, retaining every series in the chosen categories.
         $totals = DB::query()->fromSub(clone $grouped, 'groups')->selectRaw('category, SUM(amount) as total')->groupBy('category');
         if ($sort === 'value_desc') {
@@ -256,13 +286,17 @@ class DashboardColumnService
         $data = DB::query()->fromSub($grouped, 'groups')->whereIn('category', $categories)->orderBy('series')->get();
         $seriesNames = $data->pluck('series')->unique()->values()->all();
         // A visible warning accompanies caps; never silently drop categories or series.
-        $seriesTruncated = count($seriesNames) > 20;
-        $seriesNames = array_slice($seriesNames, 0, 20);
+        $seriesTruncated = count($seriesNames) > self::MAX_SERIES;
+        $seriesNames = array_slice($seriesNames, 0, self::MAX_SERIES);
+        $matrix = [];
+        foreach ($data as $row) {
+            $matrix[(string) $row->category][(string) $row->series] = $row->amount;
+        }
         $points = [];
         foreach ($categories as $category) {
             $values = [];
             foreach ($seriesNames as $name) {
-                $amount = $data->first(fn ($r) => (string) $r->category === (string) $category && (string) $r->series === (string) $name)?->amount;
+                $amount = $matrix[(string) $category][(string) $name] ?? null;
                 $values[] = $amount === null && $calculation !== 'count' ? null : (float) ($amount ?? 0);
             }
             $points[] = ['label' => $this->label((string) $category, $props['grouping'] ?? 'value'), 'values' => $values];

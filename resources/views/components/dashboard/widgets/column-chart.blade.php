@@ -31,7 +31,7 @@
             @endforeach
         </div>
         <div class="mt-2 min-h-0 flex-1 overflow-auto" tabindex="0" aria-label="Scrollable chart: {{ $label }}">
-            <svg viewBox="0 0 {{ $width }} {{ $height }}" role="img" aria-label="{{ $label }}" style="width: 100%; min-width: {{ $width > 800 ? $width : 0 }}px; {{ $isHorizontal ? 'height: '.$height.'px' : 'min-height: 250px' }}" class="text-base-content">
+            <svg viewBox="0 0 {{ $width }} {{ $height }}" role="img" aria-label="{{ $label }}" style="width: 100%; min-width: {{ $width > 800 ? $width : 0 }}px; height: {{ $height }}px" class="text-base-content">
                 <title>{{ $label }}</title>
                 @for ($tick = 0; $tick <= 4; $tick++)
                     @php $value = $low + $range * $tick / 4; @endphp
@@ -79,7 +79,7 @@
                 @endforeach
             </svg>
         </div>
-        @if ($truncated || $seriesTruncated)<p class="mt-1 text-[11px] text-warning">{{ $truncated ? 'Category limit reached. Increase the limit or narrow your filters. ' : '' }}{{ $seriesTruncated ? 'Showing the first 20 series. Narrow your filters to see more.' : '' }}</p>@endif
+        @if ($truncated || $seriesTruncated)<p class="mt-1 text-[11px] text-warning">{{ $truncated ? 'Category limit reached. Increase the limit or narrow your filters. ' : '' }}{{ $seriesTruncated ? 'Showing the first '.$seriesLimit.' series. Narrow your filters to see more.' : '' }}</p>@endif
         <details class="mt-2 text-xs text-base-content/60">
             <summary class="cursor-pointer">View chart data</summary>
             <div class="max-h-48 overflow-auto"><table class="mt-2 w-full text-left"><thead><tr><th class="p-1">Category</th>@foreach ($series as $name)<th class="p-1">{{ $name }}</th>@endforeach</tr></thead><tbody>

@@ -7,7 +7,7 @@
                     Technical Reports
                 </p>
                 <h1 class="font-display text-3xl font-semibold tracking-tight text-base-content sm:text-4xl">Technical Service Analysis</h1>
-                <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/55">Completion, TSP workload, and equipment patterns — computed live from the imported Technical Reports table.</p>
+                <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/55">Explore monthly calls, service types, and models from Technical Reports.</p>
             </div>
             <div class="flex shrink-0 flex-wrap items-center gap-2">
                 <button type="button" onclick="window.print()" class="admin-secondary-button no-print">Print report</button>
@@ -15,7 +15,7 @@
             </div>
         </div>
         <div class="mt-5 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-base-300 pt-4">
-            <div class="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-base-content/50">Window</div>
+            <div class="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-base-content/50">Completion trend window</div>
             <select wire:model.live="period" class="admin-control w-auto min-w-[130px]" aria-label="Reporting period">
                 @foreach ($periodOptions as $option)
                     <option value="{{ $option }}">Last {{ $option }}</option>
@@ -30,6 +30,48 @@
             </div>
         </div>
     </header>
+
+    <section aria-label="Service analysis dashboard" class="space-y-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <h2 class="font-display text-xl font-semibold text-base-content">Service analysis</h2>
+                <p class="mt-1 text-xs leading-5 text-base-content/55">Counts technical reports using the selected Call date, Model, and Service Type fields. Select one or more values to filter every chart and summary.</p>
+            </div>
+            @if ($analysisFilters)
+                <button type="button" wire:click="clearAnalysisFilters" class="admin-secondary-button no-print">Clear filters</button>
+            @endif
+        </div>
+        <details class="rounded-lg border border-base-300 px-4 py-3 no-print">
+            <summary class="cursor-pointer text-xs font-semibold text-base-content/65">Chart fields</summary>
+            <div class="mt-3 grid gap-3 sm:grid-cols-3">
+                @foreach (['date' => 'Call date', 'model' => 'Model', 'service' => 'Service Type'] as $field => $label)
+                    <label class="text-xs text-base-content/60">
+                        <span class="mb-1 block">{{ $label }}</span>
+                        <select wire:model.live="analysisColumns.{{ $field }}" class="admin-control w-full" aria-label="{{ $label }} chart field">
+                            <option value="">{{ $field === 'date' ? 'Service start date (default)' : ($field === 'model' ? 'Model (default)' : 'Match Service Type / Type of Request') }}</option>
+                            @foreach ($analysisColumnOptions as $key => $column)
+                                @if ($field !== 'date' || $column['kind'] === 'date')
+                                    <option value="{{ $key }}">{{ $column['label'] }}</option>
+                                @endif
+                            @endforeach
+                        </select>
+                    </label>
+                @endforeach
+            </div>
+        </details>
+        @if ($analysisFilters)
+            <div class="flex flex-wrap gap-2" aria-label="Active analysis filters">
+                @foreach ($analysisFilters as $id => $filter)
+                    <button type="button" wire:click="clearSlicer(@js($id))" class="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs text-primary" aria-label="Clear {{ str_replace('tsa-', '', $id) }} filter">
+                        {{ ucwords(str_replace('tsa-', '', $id)) }}: {{ implode(', ', $filter['values']) }} <span aria-hidden="true">×</span>
+                    </button>
+                @endforeach
+            </div>
+        @endif
+        <div wire:loading.class="opacity-50" class="transition-opacity" aria-live="polite">
+            <x-dashboard.grid :widgets="$referenceGrid['widgets']" :editing="false" grid-key="tsa-reference" />
+        </div>
+    </section>
 
     {{-- Headline + supporting cards as widgets: same cards, same numbers,
          fully customizable. --}}

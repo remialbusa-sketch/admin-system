@@ -50,7 +50,7 @@ timeline such as `2024-12`, `2025-01`.
 
 ## Display limits
 
-A chart can display up to 100 categories (default 30) and 20 series. A slicer
+A chart can display up to 500 categories (default 30) and 64 series. A slicer
 displays the first 500 values, searches those displayed values, and accepts up
 to 100 selections. Limit warnings are shown; narrow other filters to see more
 values. Category and series fields must belong to the same table. Custom
