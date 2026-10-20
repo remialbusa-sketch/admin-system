@@ -101,9 +101,11 @@ class DrillDownTest extends TestCase
 
     public function test_customer_query_param_scopes_to_the_account(): void
     {
+        // The Customer Name filter drawer lists every account as an option, so
+        // assert on the row payload rather than the whole page.
         $this->grid(['customer' => 'Beta Hospital'])
             ->assertSee('TERUMO')
-            ->assertDontSee('Alpha Hospital');
+            ->assertDontSee('"account.customer_name":"Alpha Hospital"');
     }
 
     public function test_warranty_expiring_query_param_filters_by_end_date(): void

@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\Account;
 use App\Models\Installation;
 use App\Support\MergedColumnValue;
 use Illuminate\Database\Eloquent\Builder;
@@ -164,7 +165,7 @@ class InstalledProductsTable extends ManagedTable
     public function columns(): array
     {
         return [
-            ['key' => 'account.customer_name', 'label' => 'Customer Name', 'type' => 'text'],
+            ['key' => 'account.customer_name', 'label' => 'Customer Name', 'type' => 'select', 'options' => $this->customerNameOptions()],
             ['key' => 'account.customer_address', 'label' => 'Customer Address', 'type' => 'text'],
             ['key' => 'account.branch', 'label' => 'Branch', 'type' => 'select', 'options' => ['North Luzon', 'NCR', 'South Luzon', 'Visayas', 'Mindanao']],
             ['key' => 'device_description', 'label' => 'Device Description', 'type' => 'text'],
@@ -184,6 +185,24 @@ class InstalledProductsTable extends ManagedTable
             ['key' => 'pms_frequency', 'label' => 'PMS Frequency', 'type' => 'select', 'options' => ['Monthly', 'Bi-monthly', 'Quarterly', 'Semi-annual', 'Annual']],
             ['key' => 'tsp_in_charge', 'label' => 'TSP In-charge', 'type' => 'select', 'options' => ['Adonis Ybanez', 'Ador Panimdim', 'Anfernee Digamon', 'Brixxton Basuel', 'Christopher Auditor', 'Daniel Igano', 'Dexter Lim', 'Elthon Jay Navares', 'Fidel Carino', 'Gary Walter Vivas', 'Gerald Ricafranca', 'Gio Sam Aguinaldo', 'Harvyn Honorica', 'Jefferson Yaranon', 'Jhon Carlo Faustino', 'Joey Nichols Tumaroy', 'John Erick Hernandez', 'Joshua Bautista', 'Joven Padon', 'Kerwin Pardillo', 'Keryl Pardillo', 'Lance Nichol Canaveral', 'Leander Fajardo', 'Mark Niel Amper', 'Mart Russel Santos', 'Neil Darwin San Juan', 'Nolybert Nacpil', 'Paolo Enriquez', 'Paul Anthony Genovate', 'Ricardo Navarro, Jr.', 'Roberto De Pio, Jr.', 'Roel Bagasbas', 'Rogel De Lara', 'Ruffy Pineda', 'Ruselio Franco Dagondon, Jr.', 'Sherwin Montellin', 'Soteri Zamora', 'Voltaire Vallarta', 'Warren Suba']],
         ];
+    }
+
+    /**
+     * Distinct account names for the Customer Name dropdown. The monday
+     * sync's placeholder account is not a customer, so it is left out.
+     *
+     * @return array<int, string>
+     */
+    protected function customerNameOptions(): array
+    {
+        return Account::query()
+            ->whereNotNull('customer_name')
+            ->where('customer_name', '<>', '')
+            ->where('customer_name', '<>', 'monday.com import')
+            ->distinct()
+            ->orderBy('customer_name')
+            ->pluck('customer_name')
+            ->all();
     }
 
     protected function statusOptions(): array
