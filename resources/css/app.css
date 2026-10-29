@@ -11,10 +11,10 @@
     default: true;
     color-scheme: light;
 
-    --color-base-100: oklch(98.5% 0.004 255);
-    --color-base-200: oklch(95.5% 0.008 255);
-    --color-base-300: oklch(88.5% 0.015 255);
-    --color-base-content: oklch(22% 0.022 255);
+    --color-base-100: oklch(99.7% 0.002 255);
+    --color-base-200: oklch(97% 0.005 255);
+    --color-base-300: oklch(89.5% 0.012 255);
+    --color-base-content: oklch(27% 0.025 255);
 
     --color-primary: oklch(50% 0.19 262);
     --color-primary-content: oklch(99% 0.004 255);
@@ -39,12 +39,12 @@
     prefersdark: true;
     color-scheme: dark;
 
-    --color-base-100: oklch(22% 0.025 255);
-    --color-base-200: oklch(18% 0.025 255);
-    --color-base-300: oklch(31% 0.03 255);
-    --color-base-content: oklch(92% 0.012 255);
+    --color-base-100: oklch(24% 0.021 255);
+    --color-base-200: oklch(19.5% 0.021 255);
+    --color-base-300: oklch(34% 0.025 255);
+    --color-base-content: oklch(94% 0.009 255);
 
-    --color-primary: oklch(70% 0.14 242);
+    --color-primary: oklch(74% 0.12 258);
     --color-primary-content: oklch(23% 0.03 255);
     --color-secondary: oklch(72% 0.035 255);
     --color-secondary-content: oklch(23% 0.03 255);
@@ -85,6 +85,7 @@
     :root {
         font-synthesis: none;
         text-rendering: optimizeLegibility;
+        --workspace-muted: color-mix(in oklab, var(--color-base-content) 70%, var(--color-base-100));
     }
 
     html {
@@ -107,11 +108,11 @@
 
 @layer components {
     .admin-surface {
-        @apply rounded-lg border border-base-300 bg-base-100 shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+        @apply rounded-lg border border-base-300 bg-base-100;
     }
 
     .admin-control {
-        @apply h-9 rounded-md border border-base-300 bg-base-100 px-3 text-sm text-base-content outline-none transition;
+        @apply h-9 min-w-0 max-w-full rounded-md border border-base-300 bg-base-100 px-3 text-sm text-base-content outline-none transition-colors;
     }
 
     .admin-control:focus {
@@ -133,6 +134,150 @@
     .admin-scrollbar {
         scrollbar-color: color-mix(in oklab, currentColor 20%, transparent) transparent;
         scrollbar-width: thin;
+    }
+
+    .admin-eyebrow {
+        @apply text-[11px] font-semibold uppercase tracking-[0.12em];
+        color: var(--workspace-muted);
+    }
+
+    .admin-page-header {
+        @apply flex flex-col gap-4 border-b border-base-300 pb-5 md:flex-row md:items-end md:justify-between;
+    }
+
+    .admin-page-title {
+        @apply font-display text-[30px] font-semibold leading-tight tracking-tight text-base-content sm:text-[34px];
+    }
+
+    .admin-page-description {
+        @apply mt-2 max-w-2xl text-sm leading-6;
+        color: var(--workspace-muted);
+    }
+
+    .admin-page-actions {
+        @apply flex shrink-0 flex-wrap items-center gap-2;
+    }
+
+    .admin-filter-bar {
+        @apply flex flex-wrap items-center gap-3 rounded-lg border border-base-300 bg-base-100 p-3;
+    }
+
+    .admin-filter-label {
+        @apply mb-1.5 block text-xs font-medium;
+        color: var(--workspace-muted);
+    }
+
+    .admin-filter-field {
+        @apply min-w-0;
+    }
+
+    .admin-filter-field .admin-control {
+        @apply w-full;
+    }
+
+    .admin-sidebar {
+        --color-base-100: oklch(23% 0.028 255);
+        --color-base-200: oklch(29% 0.03 255);
+        --color-base-300: oklch(34% 0.025 255);
+        --color-base-content: oklch(96% 0.006 255);
+        --color-primary: oklch(78% 0.105 258);
+        --color-primary-content: oklch(23% 0.028 255);
+    }
+
+    .admin-nav-active {
+        @apply bg-primary/15 text-primary;
+    }
+
+    .admin-nav-inactive {
+        @apply text-base-content/75 hover:bg-base-200 hover:text-base-content;
+    }
+
+    .admin-sidebar [data-sidebar-link] {
+        @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary;
+    }
+
+    .admin-skip-link {
+        @apply fixed left-4 top-4 z-[100] -translate-y-20 rounded-md bg-primary px-4 py-3 text-sm font-semibold text-primary-content focus:translate-y-0;
+    }
+
+    .admin-workspace {
+        @apply mx-auto w-full max-w-[1680px] p-4 sm:p-6 xl:px-8 xl:py-7;
+    }
+
+    .admin-dashboard-page {
+        @apply mx-auto w-full max-w-none space-y-6 pb-4;
+    }
+
+    .admin-dashboard-filters {
+        @apply grid grid-cols-2 gap-3 rounded-lg border border-base-300 bg-base-100 p-3 sm:grid-cols-4 xl:grid-cols-6;
+    }
+
+    .admin-freshness {
+        @apply flex items-center gap-2 text-xs;
+        color: var(--workspace-muted);
+    }
+
+    .admin-section-heading {
+        @apply font-display text-lg font-semibold tracking-tight;
+    }
+
+    .admin-directory {
+        @apply rounded-lg border border-base-300 bg-base-100;
+    }
+
+    .admin-directory-heading {
+        @apply hidden gap-5 rounded-t-lg border-b border-base-300 bg-base-200/60 px-5 py-3 text-xs font-semibold text-base-content/70 md:grid;
+        grid-template-columns: minmax(0, 1fr) 5rem minmax(0, 16rem) 8rem;
+    }
+
+    .admin-directory-row {
+        @apply relative grid items-center gap-x-5 gap-y-3 border-b border-base-300 px-4 py-4 transition-colors last:border-b-0 hover:bg-base-200/50 md:px-5;
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .admin-directory-source {
+        @apply hidden min-w-0 text-xs text-base-content/70 md:block;
+    }
+
+    .admin-directory-actions {
+        @apply col-span-2 flex items-center justify-end gap-1 md:col-span-1;
+    }
+
+}
+
+@media (min-width: 768px) {
+    .admin-directory-row {
+        grid-template-columns: minmax(0, 1fr) 5rem minmax(0, 16rem) 8rem;
+    }
+}
+
+@media (max-width: 639px) {
+    .admin-filter-bar > .admin-filter-field,
+    .admin-filter-bar > select,
+    .admin-filter-bar > input {
+        flex: 1 1 calc(50% - 0.75rem);
+        width: 0;
+    }
+
+    .admin-filter-bar > .admin-search-field {
+        flex-basis: 100%;
+        min-width: 0;
+    }
+
+    .admin-page-actions .admin-primary-button,
+    .admin-page-actions .admin-secondary-button {
+        min-height: 2.5rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
 }
 
@@ -214,9 +359,8 @@
 
 .spreadsheet-grid .tabulator-col-title {
     padding: 0.8rem 0.9rem;
-    font-size: 0.6875rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0;
 }
 
 .spreadsheet-grid .tabulator-tableholder {

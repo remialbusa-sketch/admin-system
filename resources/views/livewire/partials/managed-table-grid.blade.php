@@ -18,8 +18,12 @@
     </x-slot>
 </x-admin.page-header>
 
+@if (($alwaysShowSync ?? false) || $canImport || ! empty($monday['mondayBoardId']) || ! empty($monday['mondayEnabled']))
+    @include('livewire.partials.monday-sync')
+@endif
+
 <x-admin.filter-bar>
-    <div class="relative min-w-[240px] flex-1 sm:flex-none" x-data="{ focused: false }" x-on:keydown.window.slash.prevent="if (!focused && !$event.metaKey && !$event.ctrlKey) { $refs.searchInput.focus(); }">
+    <div class="admin-search-field relative min-w-[220px] flex-1 sm:max-w-sm" x-data="{ focused: false }" x-on:keydown.window.slash.prevent="if (!focused && !$event.metaKey && !$event.ctrlKey) { $refs.searchInput.focus(); }">
         <x-mary-icon name="o-magnifying-glass" class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-base-content/40" />
         <input
             x-ref="searchInput"
@@ -27,10 +31,9 @@
             x-on:blur="focused = false"
             wire:model.live.debounce.300ms="search"
             type="search"
-            class="admin-control w-full pl-9 placeholder:text-base-content/35"
+            class="admin-control w-full pl-9 placeholder:text-base-content/60"
             placeholder="Search records...  (/)"
             aria-label="Search records"
-            x-on:input="setSearchTerm($el.value)"
             x-on:keydown.escape.window="if (focused) $wire.clearAllFilters()"
         >
     </div>
@@ -79,7 +82,7 @@
         Reset layout
     </button>
 
-    <span class="hidden items-center gap-1 text-xs text-base-content/40 sm:inline-flex" title="Press / to focus search, Esc to clear filters">
+    <span class="hidden items-center gap-1 text-xs text-base-content/60 2xl:inline-flex" title="Press / to focus search, Esc to clear filters">
         <kbd class="rounded border border-base-300 bg-base-200 px-1.5 py-0.5 text-[10px]">/</kbd>
         <span>search</span>
         <span class="mx-1">·</span>
@@ -241,14 +244,21 @@
 
 <section
     class="spreadsheet-shell admin-surface overflow-hidden"
+    data-search-term="{{ $search }}"
     x-data="managedTableGrid({
         tableKey: @js($tableKey),
         editable: @js($editable),
     })"
     x-init="init()"
 >
-    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-5 py-3 text-sm text-base-content/60">
-        <span>{{ $rows->total() }} records &middot; drag headers to reorder, drag edges to resize, right-click a header to freeze/hide &middot; tick rows to select &mdash; quick actions appear in the bar below, or open a row's &hellip; menu</span>
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 px-4 py-3 text-sm text-base-content/70">
+        <div class="flex items-center gap-3">
+            <span class="whitespace-nowrap"><strong class="font-semibold tabular-nums text-base-content">{{ number_format($rows->total()) }}</strong> records</span>
+            <details class="relative text-xs">
+                <summary class="cursor-pointer rounded-sm text-base-content/65 underline decoration-base-300 underline-offset-4 focus-visible:outline-2 focus-visible:outline-primary">Grid guide</summary>
+                <p class="absolute left-0 top-6 z-10 w-56 rounded-lg border border-base-300 bg-base-100 p-3 text-xs leading-5 shadow-lg">Drag headers to reorder and edges to resize. Right-click a header to freeze or hide it. Select rows for quick actions, or open a row’s menu.</p>
+            </details>
+        </div>
         <div class="flex flex-wrap items-center gap-2">
             <label class="flex items-center gap-1.5 text-xs text-base-content/55">
                 Density

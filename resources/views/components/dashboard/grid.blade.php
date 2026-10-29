@@ -8,7 +8,7 @@
     data-* attributes are the client editor's source of truth for
     reordering/resizing; spans are safelisted in app.css. In edit mode the
     layout is a DRAFT — changes stay client-side/draft until Done. --}}
-<div class="dashboard-grid grid auto-rows-[minmax(92px,auto)] grid-cols-12 gap-5"
+<div class="dashboard-grid grid auto-rows-[minmax(92px,auto)] grid-cols-12 gap-4"
      data-dashboard-grid
      data-grid-key="{{ $gridKey }}"
      @if ($editing) data-editing="true" @endif>

@@ -1,35 +1,25 @@
-<div class="mx-auto w-full max-w-none space-y-8 pb-4">
-    <header class="border-b border-base-300 pb-6 pt-2">
-        <div class="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-            <div class="min-w-0">
-                <p class="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-                    <span class="inline-block h-px w-6 bg-primary/60"></span>
-                    Technical Reports
-                </p>
-                <h1 class="font-display text-3xl font-semibold tracking-tight text-base-content sm:text-4xl">Technical Service Analysis</h1>
-                <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/55">Explore monthly calls, service types, and models from Technical Reports.</p>
-            </div>
-            <div class="flex shrink-0 flex-wrap items-center gap-2">
-                <button type="button" onclick="window.print()" class="admin-secondary-button no-print">Print report</button>
-                <a href="{{ route('technical-reports') }}" wire:navigate class="admin-primary-button no-print">Open Technical Reports</a>
-            </div>
-        </div>
-        <div class="mt-5 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-base-300 pt-4">
-            <div class="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-base-content/50">Completion trend window</div>
-            <select wire:model.live="period" class="admin-control w-auto min-w-[130px]" aria-label="Reporting period">
+<div class="admin-dashboard-page">
+    <x-admin.page-header eyebrow="Technical Reports" title="Technical Service Analysis" description="Explore monthly calls, service types, and models from Technical Reports.">
+        <x-slot name="actions">
+            <button type="button" onclick="window.print()" class="admin-secondary-button no-print">Print report</button>
+            <a href="{{ route('technical-reports') }}" wire:navigate class="admin-primary-button no-print">Open Technical Reports</a>
+        </x-slot>
+    </x-admin.page-header>
+
+    <x-admin.filter-bar>
+        <label class="flex flex-wrap items-center gap-3 text-xs font-medium text-base-content/70">
+            Completion trend window
+            <select wire:model.live="period" class="admin-control" aria-label="Reporting period">
                 @foreach ($periodOptions as $option)
                     <option value="{{ $option }}">Last {{ $option }}</option>
                 @endforeach
             </select>
-            <div class="ml-auto flex items-center gap-2 text-xs text-base-content/45">
-                <span class="relative flex h-2 w-2">
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-success/50 opacity-60"></span>
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-success"></span>
-                </span>
-                <span>Report data as of <span class="font-semibold text-base-content/70">{{ $freshness }}</span></span>
-            </div>
+        </label>
+        <div class="admin-freshness sm:ml-auto">
+            <x-mary-icon name="o-clock" class="h-3.5 w-3.5" />
+            <span>Report data as of <span class="font-medium">{{ $freshness }}</span></span>
         </div>
-    </header>
+    </x-admin.filter-bar>
 
     @if ($analysisFilters)
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border border-base-300 bg-base-200/50 px-4 py-2.5 no-print" aria-label="Active analysis filters">
@@ -48,11 +38,8 @@
     <section aria-label="Technical reports widgets">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-                <p class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
-                    <span class="inline-block h-px w-6 bg-primary/60"></span>
-                    Technical reports grid
-                </p>
-                <p class="mt-1 text-xs text-base-content/50">Live widgets, not fixed cards — gear to configure, drag to reorder.</p>
+                <h2 class="admin-section-heading">Technical reports grid</h2>
+                <p class="mt-1 text-xs text-base-content/50">Charts and metrics update together as you filter.</p>
             </div>
             <div class="no-print flex flex-wrap items-center gap-2">
                 @if ($tsaCustomizing)

@@ -7,9 +7,9 @@
     ];
 @endphp
 
-<div class="space-y-5">
+<div class="admin-dashboard-page">
     <x-admin.page-header
-        eyebrow="Performance intelligence"
+        eyebrow="Personnel"
         title="TSP Analytics"
         description="Coverage and workload for company technical service personnel, sourced from the Personnel list and service records."
     >
@@ -21,43 +21,51 @@
         </x-slot>
     </x-admin.page-header>
 
-    <x-admin.filter-bar>
-        <span class="text-xs text-base-content/55">Filters</span>
-        <select wire:model.live="region" class="admin-control min-w-[150px]" aria-label="Filter by region">
-            <option>All regions</option>
-            @foreach (['NCR', 'North Luzon', 'Visayas', 'Mindanao'] as $regionOption)
-                <option>{{ $regionOption }}</option>
-            @endforeach
-        </select>
-        <select wire:model.live="tspName" class="admin-control min-w-[180px]" aria-label="Filter by TSP">
-            <option value="All TSPs">All TSPs</option>
-            @foreach ($tspOptions as $tspValue => $tspLabel)
-                <option value="{{ $tspValue }}">{{ $tspLabel }}</option>
-            @endforeach
-        </select>
-        <select wire:model.live="branch" class="admin-control min-w-[140px]" aria-label="Filter by branch">
-            <option>All branches</option>
-            @foreach ($branchOptions as $option)
-                <option>{{ $option }}</option>
-            @endforeach
-        </select>
-        <div class="flex items-center gap-1.5">
-            <input type="date" wire:model.live="dateFrom" class="admin-control w-[150px]" aria-label="Date from" placeholder="From" />
-            <span class="text-xs text-base-content/45">to</span>
-            <input type="date" wire:model.live="dateTo" class="admin-control w-[150px]" aria-label="Date to" placeholder="To" />
-        </div>
-        <button type="button" wire:click="applyPeriod" class="admin-secondary-button">Last 30 days</button>
-    </x-admin.filter-bar>
+    <div class="admin-dashboard-filters" aria-label="Personnel filters">
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">Region</span>
+            <select wire:model.live="region" class="admin-control" aria-label="Filter by region">
+                <option>All regions</option>
+                @foreach (['NCR', 'North Luzon', 'Visayas', 'Mindanao'] as $regionOption)
+                    <option>{{ $regionOption }}</option>
+                @endforeach
+            </select>
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">Personnel</span>
+            <select wire:model.live="tspName" class="admin-control" aria-label="Filter by TSP">
+                <option value="All TSPs">All TSPs</option>
+                @foreach ($tspOptions as $tspValue => $tspLabel)
+                    <option value="{{ $tspValue }}">{{ $tspLabel }}</option>
+                @endforeach
+            </select>
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">Branch</span>
+            <select wire:model.live="branch" class="admin-control" aria-label="Filter by branch">
+                <option>All branches</option>
+                @foreach ($branchOptions as $option)
+                    <option>{{ $option }}</option>
+                @endforeach
+            </select>
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">From</span>
+            <input type="date" wire:model.live="dateFrom" class="admin-control" aria-label="Date from" />
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">To</span>
+            <input type="date" wire:model.live="dateTo" class="admin-control" aria-label="Date to" />
+        </label>
+        <button type="button" wire:click="applyPeriod" class="admin-secondary-button self-end">Last 30 days</button>
+    </div>
 
     {{-- KPI cards as widgets: same cards, same numbers, fully customizable. --}}
     <section aria-label="TSP widgets">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-                <p class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
-                    <span class="inline-block h-px w-6 bg-primary/60"></span>
-                    TSP grid
-                </p>
-                <p class="mt-1 text-xs text-base-content/50">Live widgets, not fixed cards — gear to configure, drag to reorder.</p>
+                <h2 class="admin-section-heading">TSP grid</h2>
+                <p class="mt-1 text-xs text-base-content/50">Charts and metrics update together as you filter.</p>
             </div>
             <div class="no-print flex flex-wrap items-center gap-2">
                 @if ($tspCustomizing)

@@ -22,6 +22,7 @@
         </script>
     </head>
     <body>
+        <a href="#workspace-content" class="admin-skip-link">Skip to content</a>
         <div
             x-data="{
                 sidebarCollapsed: false,
@@ -37,10 +38,10 @@
             <livewire:sidebar />
 
             <div class="flex min-w-0 min-h-0 flex-1 flex-col">
-                <x-admin.topbar />
+                <x-admin.topbar :title="$title ?? 'Home'" />
 
-                <main class="admin-scrollbar min-h-0 flex-1 overflow-y-auto">
-                    <div class="mx-auto w-full max-w-[1680px] p-5 sm:p-6 xl:p-8">
+                <main id="workspace-content" tabindex="-1" class="admin-scrollbar min-h-0 min-w-0 flex-1 overflow-y-auto focus:outline-none">
+                    <div class="admin-workspace">
                         {{ $slot }}
                     </div>
                 </main>

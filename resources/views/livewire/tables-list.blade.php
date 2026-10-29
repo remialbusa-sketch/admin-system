@@ -1,5 +1,5 @@
 <div class="space-y-5">
-    <x-admin.page-header eyebrow="Workspace" title="Tables" description="The managed data tables that power dashboards and reporting. Import Excel or CSV files to refresh them.">
+    <x-admin.page-header eyebrow="Workspace" title="Tables" description="Browse the records behind your dashboards. Pin a table to keep it in your navigation.">
         <x-slot name="actions">
             <a href="{{ route('dashboard') }}" wire:navigate class="admin-secondary-button">View dashboard</a>
             @can('import', App\Models\Installation::class)
@@ -15,9 +15,9 @@
         </x-slot>
     </x-admin.page-header>
 
-    <div class="flex items-center justify-between gap-2">
-        <p class="text-xs text-base-content/50">
-            All tables live here — pin the ones you use often and they appear in the side navigation.
+    <div class="flex items-center justify-between gap-3">
+        <h2 class="admin-section-heading">All tables <span class="ml-1 font-sans text-sm font-medium text-base-content/60">{{ count($tables) }}</span></h2>
+        <p class="text-xs text-base-content/70">
             @if ($pinnedCount > 0)
                 <span class="font-semibold text-primary">{{ $pinnedCount }} pinned</span>
             @endif
@@ -31,59 +31,58 @@
         </div>
     @endif
 
-    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div class="admin-directory">
+        <div class="admin-directory-heading" aria-hidden="true">
+            <span>Table</span>
+            <span class="text-right">Records</span>
+            <span>Source</span>
+            <span class="text-right">Actions</span>
+        </div>
         @foreach ($tables as $table)
-            <article class="admin-surface flex min-h-[200px] flex-col p-5 transition hover:-translate-y-0.5 hover:border-primary/40">
-                <div class="flex items-start justify-between gap-4">
-                    <a href="{{ $table['url'] }}" wire:navigate class="min-w-0">
-                        <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/12 text-primary">
-                            <x-mary-icon name="{{ $table['icon'] }}" class="h-5 w-5" />
-                        </span>
-                        <h2 class="mt-4 truncate text-lg font-bold text-base-content">{{ $table['label'] }}</h2>
-                        <p class="mt-1 line-clamp-2 text-sm leading-5 text-base-content/55">{{ $table['description'] }}</p>
-                    </a>
-                    <button
-                        type="button"
-                        wire:click="togglePin('{{ $table['key'] }}')"
-                        class="admin-icon-button shrink-0"
-                        :class="$table['pinned'] ? 'text-primary' : 'text-base-content/30'"
-                        title="{{ $table['pinned'] ? 'Unpin from sidebar' : 'Pin to sidebar' }}"
-                        aria-label="{{ $table['pinned'] ? 'Unpin' : 'Pin' }}"
-                        aria-pressed="{{ $table['pinned'] ? 'true' : 'false' }}"
-                    >
+            <article class="admin-directory-row" wire:key="table-directory-{{ $table['key'] }}">
+                <a href="{{ $table['url'] }}" wire:navigate class="group flex min-w-0 items-start gap-3 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary">
+                    <x-mary-icon name="{{ $table['icon'] }}" class="mt-0.5 h-5 w-5 shrink-0 text-base-content/60 group-hover:text-primary" />
+                    <div class="min-w-0">
+                        <h3 class="text-sm font-semibold text-base-content group-hover:text-primary">{{ $table['label'] }}</h3>
+                        <p class="mt-1 text-xs leading-5 text-base-content/70">{{ $table['description'] }}</p>
+                        <p class="mt-1 truncate text-[11px] text-base-content/60 md:hidden" title="{{ $table['source'] }}">{{ $table['source'] }}</p>
+                    </div>
+                </a>
+                <div class="text-right">
+                    <p class="text-base font-semibold tabular-nums">{{ number_format($table['count']) }}</p>
+                    <p class="mt-0.5 text-[11px] text-base-content/60 md:hidden">Records</p>
+                </div>
+                <p class="admin-directory-source truncate" title="{{ $table['source'] }}">{{ $table['source'] }}</p>
+                <div class="admin-directory-actions">
+                    <button type="button" wire:click="togglePin('{{ $table['key'] }}')" class="admin-icon-button {{ $table['pinned'] ? 'text-primary' : '' }}" title="{{ $table['pinned'] ? 'Unpin from sidebar' : 'Pin to sidebar' }}" aria-label="{{ $table['pinned'] ? 'Unpin' : 'Pin' }}" aria-pressed="{{ $table['pinned'] ? 'true' : 'false' }}">
                         <x-mary-icon name="{{ $table['pinned'] ? 's-bookmark' : 'o-bookmark' }}" class="h-4 w-4" />
                     </button>
+                    <a href="{{ $table['url'] }}" wire:navigate class="admin-icon-button" aria-label="Open {{ $table['label'] }}" title="Open table">
+                        <x-mary-icon name="o-arrow-up-right" class="h-4 w-4" />
+                    </a>
+                    @if (($table['is_dynamic'] ?? false) && (($table['created_by'] ?? null) === auth()->id() || ($isSuperadmin ?? false)) || (! ($table['is_dynamic'] ?? false) && ($isSuperadmin ?? false)))
+                        <x-dropdown align="right" width="48">
+                            <x-slot name="trigger">
+                                <button type="button" class="admin-icon-button" aria-label="Actions for {{ $table['label'] }}" :aria-expanded="open">
+                                    <x-mary-icon name="o-ellipsis-horizontal" class="h-4 w-4" />
+                                </button>
+                            </x-slot>
+                            <x-slot name="content">
+                                @if ($table['is_dynamic'] ?? false)
+                                    <button type="button" wire:click="openShareModal('{{ $table['key'] }}')" class="flex w-full items-center gap-2 px-4 py-2 text-left text-xs hover:bg-base-200">
+                                        <x-mary-icon name="o-user-plus" class="h-4 w-4" /> Share table
+                                    </button>
+                                    <button type="button" wire:click="archiveTable('{{ $table['key'] }}')" wire:confirm="Archive this table? You can restore it from the Archived section." class="flex w-full items-center gap-2 px-4 py-2 text-left text-xs hover:bg-base-200">
+                                        <x-mary-icon name="o-archive-box" class="h-4 w-4" /> Archive table
+                                    </button>
+                                @endif
+                                <button type="button" wire:click="emptyTable('{{ $table['key'] }}')" wire:confirm="Remove every record from this table? Columns stay, records are gone. This cannot be undone." class="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-error hover:bg-error/10">
+                                    <x-mary-icon name="o-trash" class="h-4 w-4" /> Empty table
+                                </button>
+                            </x-slot>
+                        </x-dropdown>
+                    @endif
                 </div>
-                <div class="mt-auto grid grid-cols-2 gap-2 border-t border-base-300 pt-4 text-xs">
-                    <div>
-                        <p class="font-bold tabular-nums text-base-content">{{ number_format($table['count']) }}</p>
-                        <p class="mt-1 text-base-content/45">Records</p>
-                    </div>
-                    <div class="min-w-0">
-                        <p class="truncate font-semibold text-base-content/70" title="{{ $table['source'] }}">{{ $table['source'] }}</p>
-                        <p class="mt-1 text-base-content/45">Source</p>
-                    </div>
-                </div>
-                <a href="{{ $table['url'] }}" wire:navigate class="admin-secondary-button mt-4 w-full justify-center">Open table</a>
-                @if (($table['is_dynamic'] ?? false) && (($table['created_by'] ?? null) === auth()->id() || ($isSuperadmin ?? false)))
-                    <button type="button" wire:click="openShareModal('{{ $table['key'] }}')" class="admin-secondary-button mt-2 w-full justify-center text-xs">
-                        <x-mary-icon name="o-user-plus" class="h-4 w-4" />
-                        Share table
-                    </button>
-                    <button type="button" wire:click="archiveTable('{{ $table['key'] }}')" wire:confirm="Archive this table? You can restore it from the Archived section." class="admin-secondary-button mt-2 w-full justify-center text-xs">
-                        <x-mary-icon name="o-archive-box" class="h-4 w-4" />
-                        Archive table
-                    </button>
-                    <button type="button" wire:click="emptyTable('{{ $table['key'] }}')" wire:confirm="Remove every record from this table? Columns stay, records are gone. This cannot be undone." class="admin-secondary-button mt-2 w-full justify-center text-xs">
-                        <x-mary-icon name="o-trash" class="h-4 w-4" />
-                        Empty table
-                    </button>
-                @elseif (! ($table['is_dynamic'] ?? false) && ($isSuperadmin ?? false))
-                    <button type="button" wire:click="emptyTable('{{ $table['key'] }}')" wire:confirm="Remove every record from this core table? The table itself stays. This cannot be undone." class="admin-secondary-button mt-2 w-full justify-center text-xs">
-                        <x-mary-icon name="o-trash" class="h-4 w-4" />
-                        Empty table
-                    </button>
-                @endif
             </article>
         @endforeach
     </div>

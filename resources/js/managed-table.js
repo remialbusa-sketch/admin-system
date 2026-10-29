@@ -455,6 +455,10 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
 
+            // Search lives outside this Alpine scope. Read its server-rendered
+            // value after every morph, including clears and URL-loaded filters.
+            this.setSearchTerm(this.$root.dataset.searchTerm ?? '');
+
             // Sort state for the overflow menu's checked direction.
             this._sortMeta = payload.meta || null;
 
@@ -603,7 +607,9 @@ document.addEventListener('alpine:init', () => {
             this.table.on('columnResized', () => this.persistLayout());
             this.table.on('columnVisibilityChanged', () => this.persistLayout());
             this.table.on('rowSelectionChanged', () => this.updateSelectionUI());
-            this.table.on('dataProcessed', () => this.applySearchHighlight());
+            // Formatters replace cell contents during rendering, after data is
+            // processed. Mark text once the rendered cells are in place.
+            this.table.on('renderComplete', () => this.applySearchHighlight());
         },
 
         /**
@@ -997,11 +1003,10 @@ document.addEventListener('alpine:init', () => {
                     if (!el || this.isFormattedCell(cell)) {
                         return;
                     }
-                    if (!el.dataset.searchMarked) {
-                        el.dataset.searchMarked = '1';
-                    } else if (el.querySelector('mark.grid-search-hit')) {
-                        return;
-                    }
+                    el.querySelectorAll('mark.grid-search-hit').forEach((mark) => {
+                        mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
+                    });
+                    el.normalize();
                     if (!term || !el.textContent.toLowerCase().includes(term.toLowerCase())) {
                         return;
                     }

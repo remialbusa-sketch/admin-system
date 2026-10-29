@@ -9,16 +9,19 @@
         already connected (viewers of an unconnected table see no noise);
       - dynamic tables: always shown (existing behaviour).
 --}}
-<section class="admin-surface p-5">
+<details class="admin-surface group/sync" @if ($monday['mondayMessage'] !== '') open @endif>
+    <summary class="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 text-xs [&::-webkit-details-marker]:hidden focus-visible:outline-2 focus-visible:outline-primary">
+        <x-mary-icon name="o-link" class="h-4 w-4 shrink-0 text-base-content/65" />
+        <span class="font-semibold">monday.com live sync</span>
+        <span class="text-base-content/65">{{ $monday['mondayBoardId'] ? 'Board '.$monday['mondayBoardId'] : 'Not connected' }}</span>
+        <span class="rounded px-2 py-0.5 font-medium {{ $monday['mondayEnabled'] && $monday['mondayGlobalEnabled'] ? 'bg-success/10 text-success' : 'bg-base-200 text-base-content/70' }}">{{ $monday['mondayEnabled'] && $monday['mondayGlobalEnabled'] ? 'Pulling new items' : 'Off' }}</span>
+        <span class="ml-auto hidden text-base-content/65 sm:inline">Connection settings</span>
+        <x-mary-icon name="o-chevron-down" class="h-4 w-4 shrink-0 text-base-content/65 transition-transform group-open/sync:rotate-180" />
+    </summary>
+    <div class="border-t border-base-300 p-4">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div class="min-w-0">
-            <h2 class="flex items-center gap-2 text-sm font-bold text-base-content">
-                <span class="flex h-7 w-7 items-center justify-center rounded-md bg-primary/12 text-primary">
-                    <x-mary-icon name="o-at-symbol" class="h-4 w-4" />
-                </span>
-                monday.com live sync
-            </h2>
-            <p class="mt-1.5 text-xs leading-5 text-base-content/55">
+            <p class="max-w-2xl text-xs leading-5 text-base-content/70">
                 When ON, newly created items on the connected monday.com board are pulled
                 into this table and mapped column-by-column.
             </p>
@@ -89,7 +92,8 @@
             {{ $monday['mondayMessage'] }}
         </p>
     @endif
-</section>
+    </div>
+</details>
 
 <x-admin.modal
     name="connect-board"

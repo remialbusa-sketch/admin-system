@@ -32,7 +32,7 @@
         @endif
 
         @if (trim($context) !== '')
-            <p class="mt-1.5 truncate text-[11px] text-base-content/45">{{ $context }}</p>
+            <p class="mt-2 text-xs leading-5 text-base-content/70">{{ $context }}</p>
         @endif
 
         @if ($spark !== null && $spark['line'] !== '')

@@ -1,10 +1,10 @@
-<div class="mx-auto w-full max-w-none space-y-8 pb-4">
-    <header class="border-b border-base-300 pb-6 pt-2">
-        <div class="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+<div class="admin-dashboard-page">
+    <header class="border-b border-base-300 pb-5">
+        <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
             @if ($dashboard)
                 @if ($editingHeader)
                     <div class="min-w-0 flex-1 space-y-3">
-                        <input type="text" wire:model="editingName" @disabled($dashboard->is_system) class="admin-control w-full text-3xl font-semibold tracking-tight sm:text-4xl" placeholder="Dashboard title" autofocus>
+                        <input type="text" wire:model="editingName" @disabled($dashboard->is_system) class="admin-control w-full text-3xl font-semibold tracking-tight" placeholder="Dashboard title" autofocus>
                         <textarea wire:model="editingDescription" rows="2" class="admin-control w-full max-w-2xl text-sm leading-6" placeholder="Subtitle — what this dashboard is for (optional)"></textarea>
                         <x-input-error :messages="$errors->get('editingName')" />
                         <x-input-error :messages="$errors->get('editingDescription')" />
@@ -15,84 +15,89 @@
                     </div>
                 @else
                     <div class="min-w-0">
-                        <p class="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-                            <span class="inline-block h-px w-6 bg-primary/60"></span>
-                            {{ $canEditDashboard ? 'Dashboard' : 'Dashboard · view only' }}
-                        </p>
-                        <div class="flex items-center gap-3">
-                            <h1 class="font-display text-3xl font-semibold tracking-tight text-base-content sm:text-4xl">{{ $dashboard->name }}</h1>
+                        <p class="admin-eyebrow mb-2">{{ $canEditDashboard ? 'Dashboard' : 'Dashboard · view only' }}</p>
+                        <div class="flex items-center gap-2">
+                            <h1 class="admin-page-title">{{ $dashboard->name }}</h1>
                             @if ($canEditDashboard)
                                 <button type="button" wire:click="startHeaderEdit" class="admin-icon-button" aria-label="Edit title and subtitle">
                                     <x-mary-icon name="o-pencil" class="h-4 w-4" />
                                 </button>
                             @endif
                         </div>
-                        <p class="mt-2 max-w-2xl text-sm leading-6 {{ $dashboard->description !== null ? 'text-base-content/55' : 'text-base-content/35' }}">{{ $dashboard->description ?? 'No description — click the pencil to add one.' }}</p>
+                        @if ($dashboard->description !== null)
+                            <p class="admin-page-description">{{ $dashboard->description }}</p>
+                        @endif
                     </div>
                 @endif
             @else
                 <div class="min-w-0">
-                    <p class="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-                        <span class="inline-block h-px w-6 bg-primary/60"></span>
-                        Product Database
-                    </p>
-                    <h1 class="font-display text-3xl font-semibold tracking-tight text-base-content sm:text-4xl">Home</h1>
-                    <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/55">The installed base at a glance — equipment, warranty and contract posture, fleet state, and installation momentum, computed live from the imported Product Database.</p>
+                    <p class="admin-eyebrow mb-2">Product Database</p>
+                    <h1 class="admin-page-title">Home</h1>
+                    <p class="admin-page-description">Installed equipment, warranty coverage, contracts, and fleet activity from the Product Database.</p>
                 </div>
             @endif
-            <div class="flex shrink-0 flex-wrap items-center gap-2">
+            <div class="admin-page-actions">
                 <button type="button" onclick="window.print()" class="admin-secondary-button no-print">Print report</button>
                 <a href="{{ route('installed-products') }}" wire:navigate class="admin-primary-button no-print">Open Product Database</a>
             </div>
         </div>
-        <div class="mt-5 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-base-300 pt-4">
-            <div class="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-base-content/50">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 1 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75"/></svg>
-                Scope
-            </div>
-            <select wire:model.live="region" class="admin-control min-w-[170px]" aria-label="Filter by region" @if ($regionLocked) disabled title="Your role is scoped to {{ $region }}" @endif>
+        <div class="admin-freshness mt-3">
+            <x-mary-icon name="o-clock" class="h-3.5 w-3.5" />
+            <span>Product data as of <span class="font-medium">{{ $freshness }}</span></span>
+        </div>
+    </header>
+
+    <div class="admin-dashboard-filters" aria-label="Dashboard filters">
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">Region</span>
+            <select wire:model.live="region" class="admin-control" aria-label="Filter by region" @if ($regionLocked) disabled title="Your role is scoped to {{ $region }}" @endif>
                 @foreach ($regionOptions as $option)
                     <option @if ($regionLocked && $option !== $region) hidden @endif>{{ $option }}</option>
                 @endforeach
             </select>
             @if ($regionLocked)
-                <span class="rounded-full bg-info/10 px-3 py-1 text-[11px] font-bold text-info">Scoped to your region</span>
+                <span class="mt-1 block text-[11px] text-base-content/70">Scoped to your region</span>
             @endif
-            <select wire:model.live="period" class="admin-control w-auto min-w-[130px]" aria-label="Reporting period">
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">Period</span>
+            <select wire:model.live="period" class="admin-control" aria-label="Reporting period">
                 @foreach ($periodOptions as $option)
                     <option value="{{ $option }}">Last {{ $option }}</option>
                 @endforeach
             </select>
-            <div class="ml-auto flex items-center gap-2 text-xs text-base-content/45">
-                <span class="relative flex h-2 w-2">
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-success/50 opacity-60"></span>
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-success"></span>
-                </span>
-                <span>Product data as of <span class="font-semibold text-base-content/70">{{ $freshness }}</span></span>
-            </div>
-        </div>
-    </header>
-
-    <x-admin.filter-bar>
-        <select wire:model.live="branchFilter" class="admin-control" aria-label="Filter by branch">
-            @foreach ($branchOptions as $branch)
-                <option>{{ $branch }}</option>
-            @endforeach
-        </select>
-        <select wire:model.live="statusFilter" class="admin-control" aria-label="Filter by status">
-            @foreach ($statusOptions as $status)
-                <option>{{ $status }}</option>
-            @endforeach
-        </select>
-        <input type="date" wire:model.live="dateFrom" class="admin-control" aria-label="From date">
-        <input type="date" wire:model.live="dateTo" class="admin-control" aria-label="To date">
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">Branch</span>
+            <select wire:model.live="branchFilter" class="admin-control" aria-label="Filter by branch">
+                @foreach ($branchOptions as $branch)
+                    <option>{{ $branch }}</option>
+                @endforeach
+            </select>
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">Status</span>
+            <select wire:model.live="statusFilter" class="admin-control" aria-label="Filter by status">
+                @foreach ($statusOptions as $status)
+                    <option>{{ $status }}</option>
+                @endforeach
+            </select>
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">From</span>
+            <input type="date" wire:model.live="dateFrom" class="admin-control" aria-label="From date">
+        </label>
+        <label class="admin-filter-field">
+            <span class="admin-filter-label">To</span>
+            <input type="date" wire:model.live="dateTo" class="admin-control" aria-label="To date">
+        </label>
         @if ($hasActiveFilters)
-            <button type="button" wire:click="clearFilters" class="admin-secondary-button">
+            <button type="button" wire:click="clearFilters" class="admin-secondary-button col-span-full justify-self-start">
                 <x-mary-icon name="o-x-mark" class="h-4 w-4" />
                 Clear filters ({{ count($activeFilters) + count($activeSlicers) }})
             </button>
         @endif
-    </x-admin.filter-bar>
+    </div>
 
     @if ($hasActiveFilters)
         <div class="flex flex-wrap items-center gap-2" role="status" aria-label="Active filters">
@@ -122,15 +127,12 @@
     <section aria-label="Operations grid">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-                <p class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
-                    <span class="inline-block h-px w-6 bg-primary/60"></span>
+                <h2 class="admin-section-heading">
                     Operations grid
-                </p>
-                <p class="mt-1 text-xs text-base-content/50">
+                </h2>
+                <p class="mt-1 text-xs text-base-content/70">
                     @if ($dashboard)
-                        <span class="font-semibold text-base-content/70">{{ $dashboard->name }}</span>
-                        &middot; {{ $canEditDashboard ? 'you can edit' : 'view only' }}
-                        &middot;
+                        <span class="sr-only">{{ $dashboard->name }} · {{ $canEditDashboard ? 'you can edit' : 'view only' }} ·</span>
                     @endif
                     Charts and metrics update together as you filter.
                 </p>
